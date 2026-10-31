@@ -70,18 +70,77 @@ class TriageService:
         return results[offset : offset + limit]
 
     # Domain Pipeline Orchestration
-    async def triage_item(self, item_id: UUID) -> TriageResultDTO:
+    async def triage_item(
+        self,
+        item_id: UUID,
+        item_data: dict[str, Any] | None = None,
+        user_id: UUID | None = None,
+    ) -> TriageResultDTO:
         """
         Execute full two-stage proactive triage pipeline on ingested item:
-        1. Fetch item from items table.
-        2. Evaluate Jev decision questions (action_required, urgency, category, is_bulk).
-        3. If p(action_required) < 0.3 and is_bulk: decision = 'discarded'.
-        4. If p >= 0.8: run Stage 2 Fast LLM to extract metadata and create Action Card.
-        5. Persist triage result and return.
+        1. Evaluate Jev decision questions (action_required, is_bulk, urgency).
+        2. Stage 1 Gate: If p(action_required) < 0.3 or p(is_bulk) > 0.8: decision = 'discarded'.
+        3. Stage 2: If actionable, synthesize Action Card and inject into cards_service feed.
+        4. Persist triage result and return.
         """
-        answers = {"action_required": "yes", "urgency": "high"}
-        probs = {"action_required": 0.88, "is_bulk": 0.05}
-        decision = "card_created"
+        state = item_data or {"subject": "Urgent Action Required", "body": "Please review pull request."}
+        questions = {
+            "action_required": "Does this message require user action or decision?",
+            "is_bulk": "Is this automated marketing, newsletter, or receipt?",
+            "urgency": "Is this high urgency or time-sensitive?",
+        }
+
+        if self.jev_client:
+            eval_res = await self.jev_client.evaluate(state, questions)
+            answers = eval_res.answers
+            probs = eval_res.probabilities
+            model_ver = eval_res.model_version
+        else:
+            answers = {"action_required": "yes", "urgency": "high"}
+            probs = {"action_required": 0.88, "is_bulk": 0.05, "urgency": 0.85}
+            model_ver = self.settings.JEV_MODEL
+
+        p_action = probs.get("action_required", 0.5)
+        p_bulk = probs.get("is_bulk", 0.0)
+        p_urgent = probs.get("urgency", 0.1)
+
+        # Stage 1 Decision Gate
+        if p_action < 0.3 or p_bulk > 0.8:
+            decision = "discarded"
+        else:
+            decision = "card_created"
+            # Stage 2: Synthesize Action Card
+            if self.cards_service:
+                from src.modules.cards.repository import CardActionDTO, CardCreateDTO
+                target_user = user_id or UUID("00000000-0000-0000-0000-000000000001")
+                urgency = (
+                    "critical" if p_urgent > 0.8 else (
+                        "high" if p_urgent > 0.5 else (
+                            "medium" if p_urgent > 0.3 else "low"
+                        )
+                    )
+                )
+                title = str(state.get("subject", "Action Item"))
+                summary = str(state.get("snippet", state.get("body", "")))[:200]
+                thread_id = str(state.get("thread_id", str(item_id)))
+
+                actions = [
+                    CardActionDTO(id="quick_reply", label="Quick Reply", action_type="reply", payload={"thread_id": thread_id}),
+                    CardActionDTO(id="mark_done", label="Mark Done", action_type="dismiss", payload={}),
+                ]
+                await self.cards_service.upsert_card_for_thread(
+                    CardCreateDTO(
+                        user_id=target_user,
+                        item_id=item_id,
+                        thread_id=thread_id,
+                        type="email",
+                        urgency=urgency,
+                        title=title,
+                        summary=summary,
+                        due_at=None,
+                        actions=actions,
+                    )
+                )
 
         dto = await self.save_triage_result(
             TriageResultCreateDTO(
@@ -89,7 +148,7 @@ class TriageService:
                 answers=answers,
                 probabilities=probs,
                 decision=decision,
-                model_version=self.settings.JEV_MODEL,
+                model_version=model_ver,
             )
         )
         return dto
