@@ -63,6 +63,8 @@ def test_settings_env_override():
         "PORT": "9000",
         "DATABASE_URL": "postgresql+asyncpg://user:pass@db:5432/virgil_prod",
         "LOG_LEVEL": "WARNING",
+        # A production boot now requires a real key, not the public default.
+        "SECRET_KEY": "9f2c4e6a8b0d1f3a5c7e9b2d4f6a8c0e9f2c4e6a8b0d1f3a5c7e9b2d4f6a8c0e",
     }
     with patch.dict(os.environ, env_overrides, clear=False):
         settings = Settings()

@@ -37,11 +37,21 @@ class AuthService:
     def __init__(self, session: AsyncSession, settings: Settings) -> None:
         self.session = session
         self.settings = settings
-        if self.settings.APP_ENV in ("test", "development"):
-            self._seed_test_devices()
+        # Test devices are never seeded here. Only the test suite calls
+        # seed_test_devices(), and that method refuses to run outside APP_ENV=test.
 
-    def _seed_test_devices(self) -> None:
-        """Seed known test tokens in test or development environments."""
+    def seed_test_devices(self) -> None:
+        """Seed the deterministic test device tokens.
+
+        This method exists for the test suite only. It raises unless APP_ENV is
+        "test", so a development or production process can never obtain a device
+        that authenticates by well-known token.
+        """
+        if self.settings.APP_ENV != "test":
+            raise RuntimeError(
+                "seed_test_devices() requires APP_ENV='test' "
+                f"(got {self.settings.APP_ENV!r})"
+            )
         default_user_id = UUID("00000000-0000-0000-0000-000000000001")
         if default_user_id not in self._users:
             now = datetime.now(timezone.utc)
@@ -225,22 +235,6 @@ class AuthService:
 
         token_hash_val = hash_token(clean_token)
         device = await self.get_device_by_token_hash(token_hash_val)
-        if not device and self.settings.APP_ENV in ("test", "development") and clean_token.startswith("vgt_test"):
-            user = await self.get_or_create_default_user()
-            now = datetime.now(timezone.utc)
-            device = DeviceDTO(
-                id=uuid4(),
-                user_id=user.id,
-                name="Test Device",
-                token_hash=token_hash_val,
-                push_token=None,
-                last_seen_at=now,
-                revoked_at=None,
-                created_at=now,
-            )
-            self._devices[token_hash_val] = device
-            self._devices_by_id[device.id] = device
-
         if not device or device.revoked_at is not None:
             raise UnauthorizedError("Invalid or revoked device token", code="INVALID_TOKEN")
 
