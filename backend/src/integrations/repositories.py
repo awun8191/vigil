@@ -193,7 +193,7 @@ class LLMClientProtocol(Protocol):
             model: Optional embedding model override. Defaults to EMBEDDING_MODEL.
 
         Returns:
-            List of 1536-dimensional float vector embeddings.
+            List of 384-dimensional float vector embeddings.
         """
         ...
 

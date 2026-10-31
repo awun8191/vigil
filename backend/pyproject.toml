@@ -20,6 +20,9 @@ dependencies = [
     "structlog>=24.2.0",
     "cryptography>=43.0.0",
     "qrcode>=7.4.2",
+    "numpy>=1.26.0",
+    "onnxruntime>=1.19.0",
+    "tokenizers>=0.20.0",
     "pytest>=8.2.0",
     "pytest-asyncio>=0.23.0",
 ]

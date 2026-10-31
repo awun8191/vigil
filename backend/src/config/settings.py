@@ -71,11 +71,25 @@ class Settings(BaseSettings):
     REASONING_LLM_API_KEY: str = ""
     REASONING_LLM_MODEL: str = "gpt-4o"
 
-    # Embedding Model (pgvector long-term memory chunks)
-    EMBEDDING_BASE_URL: str = "https://api.openai.com/v1"
+    # --- Local Embedding Model (bge-small-en-v1.5, int8 ONNX) ---
+    # The embedding path is local and offline. No embedding API is called.
+    EMBEDDING_BASE_URL: str = ""
     EMBEDDING_API_KEY: str = ""
-    EMBEDDING_MODEL: str = "text-embedding-3-small"
-    EMBEDDING_DIMENSIONS: int = 1536
+    EMBEDDING_MODEL: str = "bge-small-en-v1.5"
+    EMBEDDING_DIMENSIONS: int = 384
+    EMBEDDING_ARTIFACT_REPO: str = "Xenova/bge-small-en-v1.5"
+    EMBEDDING_ARTIFACT_REVISION: str = "ea104dacec62c0de699686887e3f920caeb4f3e3"
+    EMBEDDING_ARTIFACT_FILE: str = "onnx/model_int8.onnx"
+    EMBEDDING_ARTIFACT_SHA256: str = (
+        "bf64d05457cb391fa88d045faf5927a15ea36d96228ddf23ea970087afdc1197"
+    )
+    EMBEDDING_TOKENIZER_FILE: str = "tokenizer.json"
+    EMBEDDING_MODEL_DIR: str = "~/.cache/virgil/embedding"
+    EMBEDDING_MAX_TOKENS: int = 512
+    EMBEDDING_DOCUMENT_PREFIX: str = ""
+    EMBEDDING_QUERY_PREFIX: str = "Represent this sentence for searching relevant passages: "
+    EMBEDDING_IDLE_UNLOAD_SECONDS: int = 300
+    EMBEDDING_INTRA_OP_THREADS: int = 2
 
     # --- Docker Sandbox Runner ---
     DOCKER_HOST: str = "unix:///var/run/docker.sock"
