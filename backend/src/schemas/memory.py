@@ -1,4 +1,4 @@
-"""Memory schemas: pgvector 1536-dimensional semantic memory chunks with HNSW index."""
+"""Memory schemas: pgvector 384-dimensional semantic memory chunks with HNSW index."""
 from __future__ import annotations
 
 from datetime import datetime, timezone
@@ -7,7 +7,17 @@ import uuid
 
 from pgvector.sqlalchemy import Vector
 import sqlalchemy as sa
-from sqlalchemy import Boolean, DateTime, ForeignKey, Index, String, Text, func
+from sqlalchemy import (
+    Boolean,
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    func,
+)
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from src.schemas.base import Base
@@ -39,8 +49,23 @@ class MemoryChunkModel(Base):
         default=list,
         server_default=sa.text("'[]'::jsonb"),
     )
-    embedding: Mapped[list[float]] = mapped_column(Vector(1536), nullable=False)
+    embedding: Mapped[list[float]] = mapped_column(Vector(384), nullable=False)
     embedding_model: Mapped[str] = mapped_column(String(64), nullable=False)
+    embedding_dim: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=384,
+        server_default=sa.text("384"),
+    )
+    card_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("cards.id", ondelete="CASCADE"),
+        nullable=True,
+        index=True,
+    )
+    agent_config_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), nullable=True
+    )
     excluded: Mapped[bool] = mapped_column(
         Boolean,
         nullable=False,
@@ -56,6 +81,12 @@ class MemoryChunkModel(Base):
     )
 
     __table_args__ = (
+        # The "ck" naming convention adds the ck_memory_chunks_ prefix.
+        CheckConstraint(
+            "(scope <> 'card' OR card_id IS NOT NULL) "
+            "AND (scope <> 'agent' OR agent_config_id IS NOT NULL)",
+            name="scope_parent",
+        ),
         Index(
             "ix_memory_chunks_embedding_hnsw",
             "embedding",

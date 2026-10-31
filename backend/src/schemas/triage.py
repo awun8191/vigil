@@ -6,7 +6,16 @@ from typing import TYPE_CHECKING, Any
 import uuid
 
 import sqlalchemy as sa
-from sqlalchemy import DateTime, ForeignKey, Index, Integer, String, Text, func
+from sqlalchemy import (
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+    func,
+)
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from src.schemas.base import Base
@@ -29,8 +38,6 @@ class TriageDecisionModel(Base):
         UUID(as_uuid=True),
         ForeignKey("connector_items.id", ondelete="CASCADE"),
         nullable=False,
-        unique=True,
-        index=True,
     )
     answers: Mapped[dict[str, str]] = mapped_column(
         JSONB,
@@ -51,6 +58,12 @@ class TriageDecisionModel(Base):
         nullable=False,
         default=lambda: datetime.now(timezone.utc),
         server_default=func.now(),
+    )
+
+    __table_args__ = (
+        # A re-triage stores a second verdict for a new model version.
+        UniqueConstraint("item_id", "model_version", name="uq_triage_decisions_item_model"),
+        Index("ix_triage_decisions_item_id", "item_id"),
     )
 
     item: Mapped[ConnectorItemModel] = relationship(
@@ -163,6 +176,10 @@ class CardActionModel(Base):
         nullable=False,
         default=lambda: datetime.now(timezone.utc),
         server_default=func.now(),
+    )
+
+    __table_args__ = (
+        UniqueConstraint("card_id", "action_key", name="uq_card_actions_card_key"),
     )
 
     card: Mapped[CardModel] = relationship("CardModel", back_populates="actions")
