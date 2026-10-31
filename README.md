@@ -213,7 +213,7 @@ virgil-agent/
 
 ## 5. Centralized Database Schemas & Table Definitions
 
-All 16 tables carry UUID primary keys, user identification, and timezone-aware UTC timestamps.
+All 21 tables carry UUID primary keys, user identification, and timezone-aware UTC timestamps. Section 5.8 lists the four tables added after the first draft.
 
 ### 5.1 Base Mixins (`src/schemas/base.py`)
 ```python
@@ -224,9 +224,14 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, declared_attr, mapped_column
 
 class Base(DeclarativeBase):
-    @declared_attr.directive
-    def __tablename__(cls) -> str:
-        return f"{cls.__name__.lower()}s"
+    """Every model declares __tablename__ explicitly.
+
+    A derived name cannot produce snake_case. MemoryChunk becomes
+    'memorychunks' and Cards becomes 'cardss'. Set __tablename__ on
+    each model and assert the set of names in a test.
+    """
+
+    pass
 
 class UUIDPrimaryKeyMixin:
     id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4, index=True)
@@ -287,12 +292,13 @@ JSONBType = JSONB()
 ### 5.4 Triage & Action Cards (`src/schemas/triage.py`)
 - **`triage_results`**:
   - `id: UUID` (PK)
-  - `item_id: UUID` (FK -> items.id, unique)
+  - `item_id: UUID` (FK -> items.id)
   - `answers: dict` (JSONB)
   - `probabilities: dict` (JSONB: calibrated Jev probabilities for `action_required`, `has_deadline`, etc.)
   - `decision: str` ("card_created", "discarded", "review_required")
   - `model_version: str`
   - `created_at: datetime`
+  - *Constraints*: `UNIQUE(item_id, model_version)` so a re-triage can store a new verdict
 - **`cards`**:
   - `id: UUID` (PK)
   - `user_id: UUID` (FK -> users.id, indexed)
@@ -318,7 +324,7 @@ JSONBType = JSONB()
   - `skills: list[str]` (JSONB)
   - `memory_scopes: list[str]` (JSONB: ["global", "card"])
   - `approval_policy: dict` (JSONB: `{"read": "auto", "local": "auto", "external": "ask"}`)
-  - `limits: dict` (JSONB: `{"max_steps": 40, "max_cost_usd": 0.50, "timeout_seconds": 900}`)
+  - `limits: dict` (JSONB: `{"max_steps": 40, "max_cost_micros": 500000, "timeout_seconds": 900}`)
 - **`runs`**:
   - `id: UUID` (PK)
   - `config_id: UUID` (FK -> agent_configs.id)
@@ -326,10 +332,12 @@ JSONBType = JSONB()
   - `parent_run_id: UUID | None` (FK -> runs.id, self-referential for sub-agents)
   - `depth: int` (Default 0)
   - `status: str` ("queued", "running", "awaiting_approval", "awaiting_background_job", "stale_thread_paused", "completed", "failed")
+  - *Open question*: `stale_thread_paused` has no defined trigger and no resume condition. Define both or remove the state before Phase 4
   - `started_at: datetime`
   - `ended_at: datetime | None`
   - `token_usage: dict` (JSONB: prompt, completion, total)
-  - `cost_usd: float`
+  - `cost_micros: int` (BigInt. Money is integer micro-USD. Never a float)
+  - `workspace_ref: str | None` (Snapshot archive used to re-hydrate the sandbox)
 - **`messages`**:
   - `id: UUID` (PK)
   - `run_id: UUID` (FK -> runs.id, indexed)
@@ -342,6 +350,7 @@ JSONBType = JSONB()
   - `tool_arguments: dict | None` (JSONB)
   - `tool_result_reference: str | None` (Artifact pointer if truncated)
   - `created_at: datetime` (Indexed)
+  - `indexed_at: datetime | None` (Set when the message is folded into a memory chunk)
 - **`approvals`**:
   - `id: UUID` (PK)
   - `run_id: UUID` (FK -> runs.id, indexed)
@@ -376,8 +385,11 @@ JSONBType = JSONB()
   - `content: str` (Text representation of the conversational window)
   - `summary: str | None`
   - `source_message_ids: list[UUID]` (JSONB)
-  - `embedding: Vector(1536)` (pgvector type)
-  - `embedding_model: str`
+  - `embedding: Vector(384)` (pgvector type. 384 dimensions for bge-small-en-v1.5)
+  - `embedding_model: str` (Retrieval filters on it. One active model per deployment)
+  - `embedding_dim: int` (Guards against a mixed vector space after a model change)
+  - `card_id: UUID | None` (Required when scope is 'card')
+  - `agent_config_id: UUID | None` (Required when scope is 'agent')
   - `excluded: bool` (Default False)
   - `created_at: datetime` (Indexed)
   - *Index*: HNSW index on `embedding` (`vector_cosine_ops`, $m=16, \text{ef\_construction}=64$)
@@ -403,7 +415,9 @@ JSONBType = JSONB()
   - `locked_by: str | None`
   - `locked_at: datetime | None`
   - `last_error: str | None`
-  - *Index*: `(status, run_at ASC)`
+  - `priority: int` (Higher runs first. `resume_run` 100, `execute_run` 90, `poll_connector` 20)
+  - `heartbeat_at: datetime | None` (The worker extends it every 30 seconds)
+  - *Index*: `(priority DESC, run_at ASC) WHERE status = 'pending'`
 - **`audit_log`**:
   - `id: UUID` (PK)
   - `actor: str` ("user", "system", "worker")
@@ -411,6 +425,21 @@ JSONBType = JSONB()
   - `subject: str`
   - `details: dict` (JSONB)
   - `created_at: datetime`
+
+### 5.8 Tables added after the first draft
+
+Four tables were missing from the first draft. The system cannot run without them.
+
+- **`chat_sessions`**: `id`, `user_id` (FK), `title`, `created_at`, `updated_at`.
+  `messages.session_id` points at this table. Without it, a chat turn has no parent.
+- **`idempotency_keys`**: `key` (PK), `endpoint`, `request_hash`, `response_status`, `response_body`,
+  `created_at`. The idempotency middleware has no durable store without it. A second API replica
+  replays the request otherwise.
+- **`run_workspaces`**: `run_id` (PK, FK -> runs.id), `archive_path`, `size_bytes`, `checksum`,
+  `created_at`. Resume reads the tarball path from here instead of guessing a filename.
+- **`connector_tools`**: `id`, `connector_account_id` (FK), `tool_name`, `level`
+  (`read` | `local` | `external`), `enabled`. Replaces `connector_accounts.enabled_tools`, which
+  stores tool names with no approval level.
 
 ---
 
@@ -531,7 +560,11 @@ Instead, memory is written and embedded through an asynchronous, batched backgro
      ```
 
 4. **Embedding Generation & Vector Storage**:
-   - The batch of text chunks is embedded via the configured embedding client (e.g. OpenAI `text-embedding-3-small`, 1536 dimensions).
+   - The batch of text chunks is embedded by a local model: `bge-small-en-v1.5`, int8 ONNX, 384 dimensions. No provider call, no per-token cost.
+   - The worker loads the model on demand and unloads it after 5 idle minutes. Peak process memory is about 270 MB during a batch, and about 90 MB when idle.
+   - The artifact is pinned by revision and checksum, and verified at startup.
+   - BGE requires CLS pooling and a query-only instruction prefix. Mean pooling degrades quality with no error.
+   - A chunk is capped at 512 tokens, which is the model limit.
    - Chunks are inserted into `memory_chunks` with `user_id`, `scope` (`global`, `card`, `agent`), source message UUID references, and the pgvector embedding vector.
    - The indexed messages are marked with an `indexed_at` timestamp to prevent duplicate chunking.
 
@@ -549,14 +582,15 @@ $$\text{decay} = 0.5^{\left(\frac{\text{age\_days}}{\text{half\_life\_days}}\rig
 $$\text{recency\_multiplier} = \text{floor} + (1.0 - \text{floor}) \times \text{decay} \quad (\text{Default: } \text{floor} = 0.35)$$
 
 $$\text{final\_score} = \begin{cases} 
-\text{similarity} & \text{if } \text{similarity} \ge \text{override\_threshold } (0.85) \\
+\text{similarity} & \text{if } \text{similarity} \ge \text{override\_threshold } (0.65) \\
 \text{similarity} \times \text{recency\_multiplier} & \text{otherwise}
 \end{cases}$$
 
 ### Mathematical Properties:
 - **Halving Property**: Every 30 days, the recency bonus drops by 50%.
 - **Non-Zero Floor ($0.35$)**: Even an item from 2 years ago retains at least 35% of its semantic weight. Important past events never disappear completely.
-- **High-Confidence Override ($\ge 0.85$)**: If the user asks a specific question ("What was the registration key for Server X?") and an old chunk matches with $\ge 0.85$ cosine similarity, the time penalty is completely bypassed ($\text{multiplier} = 1.0$).
+- **High-Confidence Override ($\ge 0.65$)**: If the user asks a specific question ("What was the registration key for Server X?") and an old chunk matches with $\ge 0.65$ cosine similarity, the time penalty is bypassed ($\text{multiplier} = 1.0$).
+- **Calibration**: 0.85 was the first draft value. Measured on bge-small-en-v1.5, correct answers score 0.679 to 0.801 and the best wrong answers score 0.561 to 0.615. A threshold of 0.85 never fires. Start at 0.65 and recalibrate on real data. Set the value per model, because each model has its own score range.
 
 ### 7.3 Executable SQL Query
 ```sql
@@ -600,9 +634,10 @@ Virgil runs multiple concurrent workers against a single Postgres instance using
 ```sql
 WITH claimable AS (
     SELECT id FROM jobs
-    WHERE status = 'pending' 
+    WHERE status = 'pending'
       AND run_at <= NOW()
-    ORDER BY run_at ASC
+    ORDER BY priority DESC,
+             (run_at + LEAST(3600, EXTRACT(EPOCH FROM (NOW() - run_at))) * INTERVAL '1 second') ASC
     FOR UPDATE SKIP LOCKED
     LIMIT 1
 )
@@ -610,6 +645,7 @@ UPDATE jobs
 SET status = 'locked',
     locked_by = :worker_id,
     locked_at = NOW(),
+    heartbeat_at = NOW(),
     attempts = attempts + 1
 FROM claimable
 WHERE jobs.id = claimable.id
@@ -617,14 +653,15 @@ RETURNING jobs.*;
 ```
 
 ### 8.2 Crash Resilience & Worker Heartbeats
-- **Heartbeat & Reaper**: The worker process runs a lightweight asyncio background loop every 60 seconds executing:
+- **Heartbeat & Reaper**: The worker extends `heartbeat_at` every 30 seconds while a job runs. A separate loop reaps on `heartbeat_at`, not on `locked_at`:
   ```sql
   UPDATE jobs
-  SET status = 'pending', locked_by = NULL, locked_at = NULL
-  WHERE status = 'locked' 
-    AND locked_at < NOW() - INTERVAL '5 minutes';
+  SET status = 'pending', locked_by = NULL, locked_at = NULL, heartbeat_at = NULL
+  WHERE status = 'locked'
+    AND COALESCE(heartbeat_at, locked_at) < NOW() - INTERVAL '90 seconds';
   ```
-  If a worker container crashes or is abruptly killed, abandoned jobs are safely recovered.
+  The limit is 3 times the heartbeat interval. A container that dies without a clean shutdown recovers in 90 seconds.
+  Reaping on a fixed `locked_at` steals any job that runs longer than 5 minutes. Two workers then run the same job, and two sandboxes write to one workspace.
 - **Exponential Retry with Jitter**:
   When a job raises an unhandled exception:
   $$\text{delay\_seconds} = \min(3600, \ 2^{\text{attempts}} \times 5) \pm \text{jitter}$$
@@ -727,10 +764,27 @@ flowchart LR
    - Runs as unprivileged UID `1000`.
    - Read-only root filesystem (`--read-only`), writable `/tmp` (tmpfs) and `/workspace`.
    - All Linux capabilities dropped (`--cap-drop=ALL`).
-   - Default seccomp profile applied.
+   - Default seccomp profile applied. The profile hash is written to `audit_log` on each run.
    - Network disabled by default (`--network=none`). Configurable domain allowlist via HTTP proxy sidecar.
+   - Resource caps: `--memory 1g --memory-swap 1g --cpus 1.0 --pids-limit 256`.
+   - `--security-opt no-new-privileges` and a `noexec` tmpfs at `/tmp`.
+   - Workspace quota of 2 GB per run. Archives older than 7 days are deleted.
 2. **Docker Socket Protection**:
-   The worker never mounts `/var/run/docker.sock` directly. It communicates through a restricted socket proxy (`tecnativa/docker-socket-proxy`) allowing only `POST /containers/create`, `POST /containers/{id}/start`, `POST /containers/{id}/stop`, `POST /containers/{id}/wait`.
+   The worker never mounts `/var/run/docker.sock` directly, and it does not use a socket proxy either.
+   A route-filtering proxy still forwards the full container payload. The agent can express `Privileged: true`, a bind mount of `/`, or `PidMode: host` inside an allowed `POST /containers/create`. That converts a sandbox escape into host root.
+   The worker calls a small runner service with a fixed request schema instead:
+
+   ```python
+   class SandboxSpec(BaseModel):
+       image: str                  # must match the image allowlist
+       command: list[str]          # argv, never a shell string
+       timeout_seconds: int = 300
+       memory_mb: int = 1024
+       cpu_quota: float = 1.0
+       network: Literal["none"] = "none"
+   ```
+
+   The runner builds the Docker config on the server side. The caller cannot express a bind mount, a capability, or a host namespace.
 3. **Workspace Snapshot on Pause**:
    When a run transitions to `awaiting_approval`:
    - The container tar-archives `/workspace` to a host volume directory: `/var/vigil/workspaces/{run_id}.tar.gz`.
@@ -795,7 +849,9 @@ flowchart LR
   4. Scaffold all modules with `repository.py` (Protocols only), `service.py`, `router.py` (factory pattern), `dependencies.py`, and `data.py`.
   5. Implement working `health` probe (`GET /api/v1/health`) and `auth` pairing module (`POST /api/v1/auth/pair`) with first-boot ASCII QR / pairing code generation in server logs.
   6. Create `deploy/docker-compose.yml` (`postgres` with `pgvector/pgvector:pg16`, `api`, `worker`).
-- **Exit Criteria**: `uv run pytest` passes 100%; server boots and pairing endpoint generates device token.
+- **Exit Criteria**: `uv run pytest` passes 100%; server boots and pairing endpoint generates a device token that survives a restart.
+- **Durability requirement**: The device, user, and pairing records must live in PostgreSQL. A class level dictionary in the service loses every token on deploy and breaks a second API replica.
+- **Security requirement**: No hardcoded or prefix-matched token is accepted outside `APP_ENV=test`. No production boot with the default `SECRET_KEY`.
 
 ### Phase 2: Centralized Database Schemas, Migrations & Postgres Job Queue
 - **Objective**: Deploy the full relational and vector database schema via Alembic and build the atomic `SKIP LOCKED` job queue.
@@ -804,7 +860,7 @@ flowchart LR
      - `identity.py`, `connectors.py`, `triage.py`, `runtime.py`, `memory.py`, `system.py`.
   2. Create Alembic migration:
      - Enable extension `vector`.
-     - Create all 16 tables, foreign keys, unique constraints, and indexes (including HNSW vector index).
+     - Create all 21 tables, foreign keys, unique constraints, and indexes (including the HNSW vector index at 384 dimensions).
   3. Implement `src/modules/jobs/`:
      - `service.py`: `enqueue_job`, `claim_next_job` using `SELECT ... FOR UPDATE SKIP LOCKED`, `complete_job`, `fail_job`.
      - `reaper`: Periodic recovery of stale locked jobs ($> 5$ minutes).
@@ -854,7 +910,7 @@ flowchart LR
   1. Implement `src/modules/memory/`:
      - Background chunking of completed runs and idle chat sessions.
      - Embedding generation and storage in `memory_chunks`.
-     - Two-stage time-decay retrieval query ($K=50$ candidates, half-life 30 days, floor 0.35, override 0.85).
+     - Two-stage time-decay retrieval query ($K=50$ candidates, half-life 30 days, floor 0.35, override 0.65).
      - Memory search and deletion endpoints (`GET /memory/search`, `DELETE /memory/chunks/{id}`).
   2. Implement `src/modules/compaction/`:
      - Context size monitor ($> 70\%$ limit).
@@ -891,3 +947,30 @@ flowchart LR
      - Pre-recorded, deterministic SSE branching trajectories.
      - Interactive simulation of Jev probability gates and user approvals at zero runtime compute cost.
 - **Exit Criteria**: Complete end-to-end user journey: mobile app pairs with server, receives email triage cards, triggers runs, approves actions, and downloads compiled documents.
+
+---
+
+## Appendix A. Corrections applied after the Draft 0.1 review
+
+This revision corrects defects found in a review of the first draft. Two companion documents hold the full argument and the evidence.
+
+- `docs/SPEC-REVIEW.md` covers the architecture, data model, queue, security, and retrieval defects, with the acceptance test for each fix.
+- `docs/PHASE1-REVIEW.md` covers the Phase 1 scaffold as built, and the authentication bypass found in it.
+
+| Correction | Section |
+|---|---|
+| Table count 16 to 17, then 21 with the four added tables | 5, 5.8 |
+| Explicit `__tablename__` on every model | 5.1 |
+| `cost_usd: float` to `cost_micros: bigint` | 5.5 |
+| `Vector(1536)` to `Vector(384)` and the local embedding model | 5.6, 7.1 |
+| `messages.indexed_at` added | 5.5 |
+| `runs.workspace_ref` added | 5.5 |
+| `triage_results` unique on `(item_id, model_version)` | 5.4 |
+| `jobs.priority` and `jobs.heartbeat_at` added | 5.7 |
+| Claim query orders by priority with aging | 8.1 |
+| Reaper runs on `heartbeat_at` at 90 seconds | 8.2 |
+| Decay override threshold 0.85 to 0.65, measured | 7.2 |
+| Socket proxy replaced by a fixed-schema runner | 11.2 |
+| Sandbox resource caps and workspace quota | 11.1 |
+| Phase 1 durability and security requirements | 13 |
+| Four tables that were missing entirely | 5.8 |
