@@ -1,0 +1,122 @@
+# ==========================================
+# Virgil Monorepo Root .gitignore
+# ==========================================
+
+# ------------------------------------------
+# Python & Bytecode Caches
+# ------------------------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.dylib
+
+# ------------------------------------------
+# Virtual Environments & Package Managers
+# NOTE: uv.lock is NOT ignored (must be committed)
+# ------------------------------------------
+.venv/
+venv/
+ENV/
+env/
+.uv/
+
+# ------------------------------------------
+# Testing & Code Quality Tools
+# ------------------------------------------
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+.hypothesis/
+.mypy_cache/
+.ruff_cache/
+
+# ------------------------------------------
+# Python Packaging & Builds
+# ------------------------------------------
+build/
+dist/
+*.egg-info/
+*.egg
+eggs/
+wheels/
+parts/
+var/
+sdist/
+
+# ------------------------------------------
+# Environment Configurations & Secrets
+# RULE: Commit .env.example templates; ignore real secrets
+# ------------------------------------------
+.env
+.env.*
+!.env.example
+deploy/.env
+deploy/.env.*
+!deploy/.env.example
+*.pem
+*.key
+*.crt
+*.pfx
+*.p12
+
+# ------------------------------------------
+# Virgil Runtime, Sandbox & Docker Volumes
+# ------------------------------------------
+sandboxes/
+workspace/
+volumes/
+*.sock
+*.pid
+
+# ------------------------------------------
+# Mobile: Flutter / Dart Artifacts
+# ------------------------------------------
+mobile/.dart_tool/
+mobile/.flutter-plugins
+mobile/.flutter-plugins-dependencies
+mobile/.packages
+mobile/.pub/
+mobile/.pub-cache/
+mobile/build/
+mobile/ios/Flutter/Flutter.podspec
+mobile/ios/.symlinks/
+mobile/android/.gradle/
+mobile/android/local.properties
+
+# ------------------------------------------
+# Web: Node.js / Next.js / Frontend
+# ------------------------------------------
+web/node_modules/
+web/.next/
+web/dist/
+web/build/
+web/.turbo/
+web/.npm/
+web/npm-debug.log*
+web/yarn-debug.log*
+web/yarn-error.log*
+web/pnpm-debug.log*
+
+# ------------------------------------------
+# Operating System & IDE Artifacts
+# ------------------------------------------
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# ------------------------------------------
+# Agent Runtime & Scratch Ephemeral Data
+# ------------------------------------------
+.agents/

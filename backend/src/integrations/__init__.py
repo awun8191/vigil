@@ -1,0 +1,36 @@
+"""External infrastructure adapter protocols and client abstractions."""
+from src.integrations.repositories import (
+    JevClientProtocol,
+    JevEvaluationResultDTO,
+    LLMClientProtocol,
+    LLMResponseDTO,
+    LLMStreamChunkDTO,
+    LLMToolCallDTO,
+    MCPHostProtocol,
+    MCPToolDefinitionDTO,
+    MCPToolResultDTO,
+    NotificationDispatcherProtocol,
+    NotificationPayloadDTO,
+    NotificationResultDTO,
+    SandboxContainerDTO,
+    SandboxExecResultDTO,
+    SandboxRunnerProtocol,
+)
+
+__all__ = [
+    "JevClientProtocol",
+    "JevEvaluationResultDTO",
+    "LLMClientProtocol",
+    "LLMResponseDTO",
+    "LLMStreamChunkDTO",
+    "LLMToolCallDTO",
+    "MCPHostProtocol",
+    "MCPToolDefinitionDTO",
+    "MCPToolResultDTO",
+    "NotificationDispatcherProtocol",
+    "NotificationPayloadDTO",
+    "NotificationResultDTO",
+    "SandboxContainerDTO",
+    "SandboxExecResultDTO",
+    "SandboxRunnerProtocol",
+]
