@@ -213,233 +213,269 @@ virgil-agent/
 
 ## 5. Centralized Database Schemas & Table Definitions
 
-All 21 tables carry UUID primary keys, user identification, and timezone-aware UTC timestamps. Section 5.8 lists the four tables added after the first draft.
+The schema needs 21 tables. Sixteen tables exist in the code today. Two tables come from the corrections in Section 5.8, which gives 18. Three tables are still missing, and Section 5.9 names them.
 
-### 5.1 Base Mixins (`src/schemas/base.py`)
+Section 5.8 lists the corrections. Each correction overrides the code. The text of Sections 5.2 to 5.7 already includes the corrections.
+
+### 5.1 Base (`src/schemas/base.py`)
+
+`base.py` defines one class. It defines no mixins.
+
 ```python
-import uuid
-from datetime import datetime
-from sqlalchemy import DateTime, Uuid, func
-from sqlalchemy.dialects.postgresql import JSONB
-from sqlalchemy.orm import DeclarativeBase, Mapped, declared_attr, mapped_column
+convention = {
+    "ix": "ix_%(column_0_label)s",
+    "uq": "uq_%(table_name)s_%(column_0_name)s",
+    "ck": "ck_%(table_name)s_%(constraint_name)s",
+    "fk": "fk_%(table_name)s_%(column_0_name)s_%(referred_table_name)s",
+    "pk": "pk_%(table_name)s",
+}
+
 
 class Base(DeclarativeBase):
-    """Every model declares __tablename__ explicitly.
-
-    A derived name cannot produce snake_case. MemoryChunk becomes
-    'memorychunks' and Cards becomes 'cardss'. Set __tablename__ on
-    each model and assert the set of names in a test.
-    """
-
-    pass
-
-class UUIDPrimaryKeyMixin:
-    id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4, index=True)
-
-class CreatedAtMixin:
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
-
-class TimestampMixin(CreatedAtMixin):
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
-
-JSONBType = JSONB()
+    metadata = MetaData(naming_convention=convention)
 ```
 
+- `Base` extends `DeclarativeBase`. It adds one attribute.
+- `metadata` carries a naming convention. Every constraint name is deterministic.
+- There is no `UUIDPrimaryKeyMixin`. There is no `CreatedAtMixin`. There is no `TimestampMixin`.
+- Each model declares `__tablename__` and its own `created_at` column.
+- Every primary key is a UUID. The application sets the value with `uuid4`.
+
 ### 5.2 Identity Tables (`src/schemas/identity.py`)
-- **`users`**:
-  - `id: UUID` (PK)
-  - `display_name: str`
-  - `settings: dict` (JSONB: spending caps, polling intervals, approval defaults)
-  - `created_at`, `updated_at`
-- **`devices`**:
-  - `id: UUID` (PK)
-  - `user_id: UUID` (FK -> users.id)
-  - `name: str` (e.g. "Nas's Pixel 8")
-  - `token_hash: str` (SHA-256 hash of device bearer token, indexed)
-  - `push_token: str | None` (ntfy topic or FCM device token)
-  - `last_seen_at: datetime`
-  - `revoked_at: datetime | None`
+
+- **`users`**
+  - `id`: uuid, primary key, app default `uuid4`
+  - `display_name`: varchar(255), not null
+  - `settings`: jsonb, not null, default `'{}'::jsonb`
+  - `created_at`: timestamptz, not null, default `now()`
+  - `updated_at`: timestamptz, not null, default `now()`, on update `now()`
+- **`devices`**
+  - `id`: uuid, primary key, app default `uuid4`
+  - `user_id`: uuid, not null, FK `users.id`, on delete cascade, indexed
+  - `name`: varchar(100), not null
+  - `token_hash`: varchar(64), not null, unique index `ix_devices_token_hash`
+  - `push_token`: varchar(500), null
+  - `last_seen_at`: timestamptz, not null, default `now()`
+  - `revoked_at`: timestamptz, null
+  - `created_at`: timestamptz, not null, default `now()`
+  - *Index*: `ix_devices_user_id` on `(user_id)`
 
 ### 5.3 Connectors Tables (`src/schemas/connectors.py`)
-- **`connector_accounts`**:
-  - `id: UUID` (PK)
-  - `user_id: UUID` (FK -> users.id)
-  - `connector_id: str` (e.g., "gmail", "gcalendar")
-  - `account_label: str` (e.g., "work@example.com")
-  - `encrypted_credentials: str` (AES-256-GCM encrypted OAuth token / refresh token)
-  - `scopes: list[str]` (JSONB)
-  - `status: str` ("active", "needs_reauth", "error", "disabled")
-  - `enabled_tools: list[str]` (JSONB)
-- **`sync_state`**:
-  - `connector_account_id: UUID` (PK, FK -> connector_accounts.id)
-  - `cursor: str` (e.g. Gmail `history_id`)
-  - `last_success_at: datetime`
-  - `last_error: str | None`
-- **`items`**:
-  - `id: UUID` (PK)
-  - `connector_account_id: UUID` (FK -> connector_accounts.id)
-  - `external_id: str` (Unique message ID from provider)
-  - `thread_id: str` (Indexed for conversation bundling)
-  - `sender: str`
-  - `recipients: list[str]` (JSONB)
-  - `subject: str`
-  - `body_text: str`
-  - `received_at: datetime` (Indexed)
-  - `labels: list[str]` (JSONB)
-  - `raw_reference: str | None` (Pointer to cold storage artifact if bulky)
-  - *Constraints*: `UNIQUE(connector_account_id, external_id)`
+
+- **`connected_accounts`**
+  - `id`: uuid, primary key, app default `uuid4`
+  - `user_id`: uuid, not null, FK `users.id`, on delete cascade, indexed
+  - `connector_id`: varchar(64), not null, indexed
+  - `account_label`: varchar(255), not null
+  - `encrypted_credentials`: text, not null
+  - `scopes`: jsonb, not null, default `'[]'::jsonb`
+  - `status`: varchar(32), not null, default `'active'`, indexed
+  - `created_at`: timestamptz, not null, default `now()`
+  - `updated_at`: timestamptz, not null, default `now()`, on update `now()`
+  - *Constraint*: `UNIQUE(user_id, connector_id, account_label)` named `uq_connected_accounts_user_conn_label`
+  - *Removed*: `enabled_tools` (jsonb). The `connector_tools` table replaces it. A tool name alone carries no approval level.
+- **`connector_tools`**
+  - `id`: uuid, primary key, app default `uuid4`
+  - `connector_account_id`: uuid, not null, FK `connected_accounts.id`, on delete cascade
+  - `tool_name`: text, not null
+  - `level`: varchar(16), not null, allowed values `read`, `local`, `external`
+  - `enabled`: boolean, not null, default `true`
+  - *Constraint*: `UNIQUE(connector_account_id, tool_name)` named `uq_connector_tools_account_tool`. The unique index serves the lookup by account.
+  - *Check*: `level IN ('read', 'local', 'external')` named `ck_connector_tools_level`
+- **`connector_items`**
+  - `id`: uuid, primary key, app default `uuid4`
+  - `connector_account_id`: uuid, not null, FK `connected_accounts.id`, on delete cascade, indexed
+  - `external_id`: varchar(255), not null
+  - `thread_id`: varchar(255), not null, indexed
+  - `sender`: varchar(255), not null
+  - `recipients`: jsonb, not null, default `'[]'::jsonb`
+  - `subject`: text, not null
+  - `body_text`: text, not null
+  - `received_at`: timestamptz, not null, indexed
+  - `labels`: jsonb, not null, default `'[]'::jsonb`
+  - `raw_reference`: text, null
+  - `created_at`: timestamptz, not null, default `now()`
+  - *Constraint*: `UNIQUE(connector_account_id, external_id)` named `uq_connector_items_account_external_id`
+  - *Index*: `ix_connector_items_account_received` on `(connector_account_id, received_at)`
+- **`connector_sync_state`**
+  - `connector_account_id`: uuid, primary key, FK `connected_accounts.id`, on delete cascade
+  - `cursor`: varchar(255), not null
+  - `last_success_at`: timestamptz, not null, default `now()`
+  - `last_error`: text, null
+  - `updated_at`: timestamptz, not null, default `now()`, on update `now()`
 
 ### 5.4 Triage & Action Cards (`src/schemas/triage.py`)
-- **`triage_results`**:
-  - `id: UUID` (PK)
-  - `item_id: UUID` (FK -> items.id)
-  - `answers: dict` (JSONB)
-  - `probabilities: dict` (JSONB: calibrated Jev probabilities for `action_required`, `has_deadline`, etc.)
-  - `decision: str` ("card_created", "discarded", "review_required")
-  - `model_version: str`
-  - `created_at: datetime`
-  - *Constraints*: `UNIQUE(item_id, model_version)` so a re-triage can store a new verdict
-- **`cards`**:
-  - `id: UUID` (PK)
-  - `user_id: UUID` (FK -> users.id, indexed)
-  - `item_id: UUID | None` (FK -> items.id)
-  - `thread_id: str | None` (Indexed)
-  - `type: str` ("inquiry", "billing", "deadline", "subscription", "meeting", "security", "general")
-  - `urgency: str` ("low", "medium", "high", "critical")
-  - `title: str`
-  - `summary: str | None`
-  - `due_at: datetime | None` (Indexed)
-  - `status: str` ("new", "seen", "in_progress", "awaiting_approval", "done", "dismissed", "expired")
-  - `actions: list[dict]` (JSONB: action labels, configs, templates)
-  - `feedback: str | None` ("useful", "not_useful", "dismissed")
-  - *Indexes*: `(user_id, status, urgency)`, `(thread_id, type)`
+
+- **`triage_decisions`**
+  - `id`: uuid, primary key, app default `uuid4`
+  - `item_id`: uuid, not null, FK `connector_items.id`, on delete cascade, indexed
+  - `answers`: jsonb, not null, default `'{}'::jsonb`
+  - `probabilities`: jsonb, not null, default `'{}'::jsonb`
+  - `decision`: varchar(64), not null, indexed
+  - `model_version`: varchar(64), not null
+  - `created_at`: timestamptz, not null, default `now()`
+  - *Constraint*: `UNIQUE(item_id, model_version)` named `uq_triage_decisions_item_model`. A re-triage stores a new verdict. The code declares `UNIQUE(item_id)`, which blocks a second verdict.
+  - *Index*: `ix_triage_decisions_item_id` on `(item_id)`, not unique. `ix_triage_decisions_decision` on `(decision)`.
+- **`cards`**
+  - `id`: uuid, primary key, app default `uuid4`
+  - `user_id`: uuid, not null, FK `users.id`, on delete cascade, indexed
+  - `item_id`: uuid, null, FK `connector_items.id`, on delete set null, indexed
+  - `thread_id`: varchar(255), null, indexed
+  - `type`: varchar(64), not null, indexed
+  - `urgency`: varchar(32), not null, indexed
+  - `title`: varchar(500), not null
+  - `summary`: text, null
+  - `due_at`: timestamptz, null, indexed
+  - `status`: varchar(32), not null, default `'new'`, indexed
+  - `feedback`: varchar(32), null
+  - `created_at`: timestamptz, not null, default `now()`
+  - `updated_at`: timestamptz, not null, default `now()`, on update `now()`
+  - *Indexes*: `ix_cards_user_status_urgency` on `(user_id, status, urgency)`. `ix_cards_user_due_at` on `(user_id, due_at)`.
+- **`card_actions`**
+  - `id`: uuid, primary key, app default `uuid4`
+  - `card_id`: uuid, not null, FK `cards.id`, on delete cascade, indexed
+  - `action_key`: varchar(64), not null
+  - `label`: varchar(255), not null
+  - `action_type`: varchar(64), not null
+  - `payload`: jsonb, not null, default `'{}'::jsonb`
+  - `sequence`: integer, not null, default `0`
+  - `created_at`: timestamptz, not null, default `now()`
+  - *Note*: the parent loads these rows in `sequence` order with `lazy="selectin"`.
 
 ### 5.5 Runtime Execution & Steps (`src/schemas/runtime.py`)
-- **`agent_configs`**:
-  - `id: UUID` (PK)
-  - `name: str` (Unique, e.g. "card-reply-drafter")
-  - `system_prompt: str`
-  - `model: str`
-  - `tools: list[str]` (JSONB)
-  - `skills: list[str]` (JSONB)
-  - `memory_scopes: list[str]` (JSONB: ["global", "card"])
-  - `approval_policy: dict` (JSONB: `{"read": "auto", "local": "auto", "external": "ask"}`)
-  - `limits: dict` (JSONB: `{"max_steps": 40, "max_cost_micros": 500000, "timeout_seconds": 900}`)
-- **`runs`**:
-  - `id: UUID` (PK)
-  - `config_id: UUID` (FK -> agent_configs.id)
-  - `card_id: UUID | None` (FK -> cards.id)
-  - `parent_run_id: UUID | None` (FK -> runs.id, self-referential for sub-agents)
-  - `depth: int` (Default 0)
-  - `status: str` ("queued", "running", "awaiting_approval", "awaiting_background_job", "stale_thread_paused", "completed", "failed")
-  - *Open question*: `stale_thread_paused` has no defined trigger and no resume condition. Define both or remove the state before Phase 4
-  - `started_at: datetime`
-  - `ended_at: datetime | None`
-  - `token_usage: dict` (JSONB: prompt, completion, total)
-  - `cost_micros: int` (BigInt. Money is integer micro-USD. Never a float)
-  - `workspace_ref: str | None` (Snapshot archive used to re-hydrate the sandbox)
-- **`messages`**:
-  - `id: UUID` (PK)
-  - `run_id: UUID` (FK -> runs.id, indexed)
-  - `session_id: UUID | None` (Indexed, for chat sessions)
-  - `role: str` ("user", "assistant", "system", "tool")
-  - `content: str | None`
-  - `tool_calls: list[dict] | None` (JSONB: tool call definitions emitted by assistant)
-  - `tool_call_id: str | None` (Indexed, linking tool results to assistant calls)
-  - `tool_name: str | None`
-  - `tool_arguments: dict | None` (JSONB)
-  - `tool_result_reference: str | None` (Artifact pointer if truncated)
-  - `created_at: datetime` (Indexed)
-  - `indexed_at: datetime | None` (Set when the message is folded into a memory chunk)
-- **`approvals`**:
-  - `id: UUID` (PK)
-  - `run_id: UUID` (FK -> runs.id, indexed)
-  - `tool_call_id: str` (Unique per run)
-  - `tool_name: str`
-  - `arguments: dict` (JSONB)
-  - `status: str` ("pending", "approved", "rejected", "stale")
-  - `decided_at: datetime | None`
-  - `decision_note: str | None`
-- **`artifacts`**:
-  - `id: UUID` (PK)
-  - `run_id: UUID` (FK -> runs.id)
-  - `kind: str` ("document", "diff", "log", "export")
-  - `path: str` (Storage path or host volume location)
-  - `size_bytes: int`
-  - `preview: str | None` (First 200 characters)
-  - `created_at: datetime`
-- **`run_steps`**:
-  - `id: UUID` (PK)
-  - `run_id: UUID` (FK -> runs.id, indexed)
-  - `step_number: int` (Sequential counter per run)
-  - `event_type: str` ("thought", "tool_call", "tool_result", "approval_required", "run_completed", "run_failed")
-  - `payload: dict` (JSONB)
-  - `created_at: datetime`
-  - *Indexes*: `(run_id, step_number ASC)` for SSE resume
 
-### 5.6 Memory & Skills (`src/schemas/memory.py`)
-- **`memory_chunks`**:
-  - `id: UUID` (PK)
-  - `user_id: UUID` (FK -> users.id, indexed)
-  - `scope: str` ("global", "card", "agent", indexed)
-  - `content: str` (Text representation of the conversational window)
-  - `summary: str | None`
-  - `source_message_ids: list[UUID]` (JSONB)
-  - `embedding: Vector(384)` (pgvector type. 384 dimensions for bge-small-en-v1.5)
-  - `embedding_model: str` (Retrieval filters on it. One active model per deployment)
-  - `embedding_dim: int` (Guards against a mixed vector space after a model change)
-  - `card_id: UUID | None` (Required when scope is 'card')
-  - `agent_config_id: UUID | None` (Required when scope is 'agent')
-  - `excluded: bool` (Default False)
-  - `created_at: datetime` (Indexed)
-  - *Index*: HNSW index on `embedding` (`vector_cosine_ops`, $m=16, \text{ef\_construction}=64$)
-- **`skills`**:
-  - `id: UUID` (PK)
-  - `name: str` (Unique)
-  - `description: str`
-  - `version: int`
-  - `source: str` ("builtin", "git", "upload")
-  - `commit: str | None`
-  - `enabled: bool`
-  - `storage_path: str`
+- **`threads`**
+  - `id`: uuid, primary key, app default `uuid4`
+  - `user_id`: uuid, not null, FK `users.id`, on delete cascade, indexed
+  - `title`: varchar(255), null
+  - `created_at`: timestamptz, not null, default `now()`
+  - `updated_at`: timestamptz, not null, default `now()`, on update `now()`
+- **`runs`**
+  - `id`: uuid, primary key, app default `uuid4`
+  - `config_id`: uuid, null, indexed. It points at `agent_configs.id`. The table does not exist yet. See Section 5.9.
+  - `card_id`: uuid, null, FK `cards.id`, on delete set null, indexed
+  - `parent_run_id`: uuid, null, FK `runs.id`, on delete set null, indexed
+  - `depth`: integer, not null, default `0`
+  - `status`: varchar(64), not null, default `'queued'`, indexed
+  - `started_at`: timestamptz, not null, default `now()`
+  - `ended_at`: timestamptz, null
+  - `token_usage`: jsonb, not null, default `'{}'::jsonb`
+  - `cost_micros`: bigint, not null, default `0`. The value is micro-USD. Money is an integer.
+  - `workspace_ref`: text, null. The value is the snapshot archive path.
+  - *Removed*: the float money column. `cost_micros` replaces it.
+- **`run_workspaces`**
+  - `run_id`: uuid, primary key, FK `runs.id`, on delete cascade
+  - `archive_path`: text, not null
+  - `size_bytes`: bigint, not null
+  - `checksum`: text, not null
+  - `created_at`: timestamptz, not null, default `now()`
+  - *Note*: resume reads the archive path from this row. It never guesses a filename.
+- **`messages`**
+  - `id`: uuid, primary key, app default `uuid4`
+  - `session_id`: uuid, null, FK `threads.id`, on delete cascade, indexed
+  - `run_id`: uuid, null, FK `runs.id`, on delete cascade, indexed
+  - `role`: varchar(32), not null
+  - `content`: text, null
+  - `tool_calls`: jsonb, null
+  - `tool_call_id`: varchar(255), null, indexed
+  - `tool_name`: varchar(255), null
+  - `tool_arguments`: jsonb, null
+  - `tool_result_reference`: text, null
+  - `created_at`: timestamptz, not null, default `now()`
+  - `indexed_at`: timestamptz, null. The chunking job sets it. A null value marks a message as not yet folded into a memory chunk.
+  - *Indexes*: `ix_messages_session_created` on `(session_id, created_at)`. `ix_messages_run_created` on `(run_id, created_at)`. `ix_messages_unindexed` on `(indexed_at)` with predicate `WHERE indexed_at IS NULL`.
+- **`approvals`**
+  - `id`: uuid, primary key, app default `uuid4`
+  - `run_id`: uuid, not null, FK `runs.id`, on delete cascade, indexed
+  - `tool_call_id`: varchar(255), not null, indexed
+  - `tool_name`: varchar(255), not null
+  - `arguments`: jsonb, not null, default `'{}'::jsonb`
+  - `status`: varchar(32), not null, default `'pending'`, indexed
+  - `decided_at`: timestamptz, null
+  - `decision_note`: text, null
+  - `created_at`: timestamptz, not null, default `now()`
+- **`artifacts`**
+  - `id`: uuid, primary key, app default `uuid4`
+  - `run_id`: uuid, not null, FK `runs.id`, on delete cascade, indexed
+  - `kind`: varchar(64), not null, indexed
+  - `path`: text, not null
+  - `size_bytes`: bigint, not null
+  - `preview`: text, null
+  - `created_at`: timestamptz, not null, default `now()`
+
+### 5.6 Memory (`src/schemas/memory.py`)
+
+- **`memory_chunks`**
+  - `id`: uuid, primary key, app default `uuid4`
+  - `user_id`: uuid, not null, FK `users.id`, on delete cascade, indexed
+  - `scope`: varchar(64), not null, indexed
+  - `content`: text, not null
+  - `summary`: text, null
+  - `source_message_ids`: jsonb, not null, default `'[]'::jsonb`
+  - `embedding`: vector(384), not null. The model is bge-small-en-v1.5 with int8 ONNX.
+  - `embedding_model`: varchar(64), not null
+  - `embedding_dim`: integer, not null. The writer stores 384 here.
+  - `card_id`: uuid, null, FK `cards.id`, on delete cascade, indexed. Required when `scope` is `card`.
+  - `agent_config_id`: uuid, null, FK `agent_configs.id`. Required when `scope` is `agent`. See Section 5.9.
+  - `excluded`: boolean, not null, default `false`, indexed
+  - `created_at`: timestamptz, not null, default `now()`
+  - *Check*: `ck_memory_chunks_scope_parent`. A `card` row needs `card_id`. An `agent` row needs `agent_config_id`.
+  - *Indexes*: `ix_memory_chunks_embedding_hnsw` on `(embedding)`, method `hnsw`, operator class `vector_cosine_ops`, `m = 16`, `ef_construction = 64`. `ix_memory_chunks_user_scope_excluded` on `(user_id, scope, excluded)`.
+  - *Correction*: the code declares a wider vector and no `embedding_dim` column. Both are wrong for the deployment model.
 
 ### 5.7 System & Queue (`src/schemas/system.py`)
-- **`jobs`**:
-  - `id: UUID` (PK)
-  - `type: str` ("poll_connector", "triage_item", "execute_run", "resume_run", "index_memory", "cleanup_sandbox")
-  - `payload: dict` (JSONB)
-  - `run_at: datetime` (Indexed)
-  - `attempts: int`
-  - `max_attempts: int`
-  - `status: str` ("pending", "locked", "completed", "failed", indexed)
-  - `locked_by: str | None`
-  - `locked_at: datetime | None`
-  - `last_error: str | None`
-  - `priority: int` (Higher runs first. `resume_run` 100, `execute_run` 90, `poll_connector` 20)
-  - `heartbeat_at: datetime | None` (The worker extends it every 30 seconds)
-  - *Index*: `(priority DESC, run_at ASC) WHERE status = 'pending'`
-- **`audit_log`**:
-  - `id: UUID` (PK)
-  - `actor: str` ("user", "system", "worker")
-  - `action: str` ("approval_decision", "connector_connect", "settings_change")
-  - `subject: str`
-  - `details: dict` (JSONB)
-  - `created_at: datetime`
 
-### 5.8 Tables added after the first draft
+- **`jobs`**
+  - `id`: uuid, primary key, app default `uuid4`
+  - `type`: varchar(64), not null, indexed
+  - `payload`: jsonb, not null, default `'{}'::jsonb`
+  - `run_at`: timestamptz, not null, default `now()`, indexed
+  - `attempts`: integer, not null, default `0`
+  - `max_attempts`: integer, not null, default `5`
+  - `status`: varchar(32), not null, default `'pending'`, indexed
+  - `locked_by`: varchar(128), null, indexed
+  - `locked_at`: timestamptz, null, indexed
+  - `last_error`: text, null
+  - `created_at`: timestamptz, not null, default `now()`
+  - `updated_at`: timestamptz, not null, default `now()`, on update `now()`
+  - `priority`: integer, not null, default `0`. A higher value runs first.
+  - `heartbeat_at`: timestamptz, null. The worker extends it every 30 seconds.
+  - *Claim index*: `ix_jobs_claim_pending` on `(priority DESC, run_at ASC)` with predicate `WHERE status = 'pending'`
+  - *Reaper index*: `ix_jobs_stale_heartbeat` on `(status, heartbeat_at)`
+  - *Reaper rule*: reclaim a `locked` job when `heartbeat_at` is older than 90 seconds. The code reads `locked_at` at 300 seconds. That rule kills a slow but healthy job.
+- **`idempotency_records`**
+  - `key`: varchar(256), primary key
+  - `status`: varchar(32), not null, indexed
+  - `response_code`: integer, null
+  - `response_headers`: jsonb, null
+  - `response_body`: bytea, null
+  - `created_at`: timestamptz, not null, default `now()`
+  - `expires_at`: timestamptz, not null, indexed
 
-Four tables were missing from the first draft. The system cannot run without them.
+### 5.8 Corrections applied to the code
 
-- **`chat_sessions`**: `id`, `user_id` (FK), `title`, `created_at`, `updated_at`.
-  `messages.session_id` points at this table. Without it, a chat turn has no parent.
-- **`idempotency_keys`**: `key` (PK), `endpoint`, `request_hash`, `response_status`, `response_body`,
-  `created_at`. The idempotency middleware has no durable store without it. A second API replica
-  replays the request otherwise.
-- **`run_workspaces`**: `run_id` (PK, FK -> runs.id), `archive_path`, `size_bytes`, `checksum`,
-  `created_at`. Resume reads the tarball path from here instead of guessing a filename.
-- **`connector_tools`**: `id`, `connector_account_id` (FK), `tool_name`, `level`
-  (`read` | `local` | `external`), `enabled`. Replaces `connector_accounts.enabled_tools`, which
-  stores tool names with no approval level.
+Seven rules override the code. The code is wrong in each case.
+
+1. **Embeddings are 384 dimensions.** The model is bge-small-en-v1.5 with int8 ONNX. The column is `vector(384)`. The code declares a wider vector. Add `embedding_dim` so a model change cannot mix vector spaces. Add `card_id` and `agent_config_id` so the `card` and `agent` scopes have a parent row.
+2. **Money is an integer.** Replace the float money column on `runs` with `runs.cost_micros`, a bigint of micro-USD. Apply the same rule to `agent_configs.limits`. The key is `max_cost_micros`.
+3. **The queue orders by priority.** Add `jobs.priority` as an integer. A higher value runs first. Add `jobs.heartbeat_at` as a timestamptz. The claim index becomes `(priority DESC, run_at ASC) WHERE status = 'pending'`. The reaper uses `heartbeat_at` at 90 seconds. It does not use `locked_at` at 5 minutes.
+4. **A run owns a snapshot.** Add `runs.workspace_ref` as a nullable text path. Add the `run_workspaces` table. It holds the archive path, the size, and the checksum.
+5. **The chunking job needs a marker.** Add `messages.indexed_at` as a nullable timestamptz. The job reads only rows where the column is null. This step stops double indexing.
+6. **A connector tool carries an approval level.** Add the `connector_tools` table. Drop `connected_accounts.enabled_tools`. A tool name alone carries no level.
+7. **A re-triage needs a second row.** Use `UNIQUE(item_id, model_version)` on `triage_decisions`. The code declares `UNIQUE(item_id)`. That rule rejects a new verdict for a new model version.
+
+### 5.9 Tables still missing
+
+Three tables are missing. They are not part of the 18.
+
+- **`agent_configs`**: `memory_chunks.agent_config_id` and `runs.config_id` point at this table. The code has no such table. `runs.config_id` has no foreign key. Phase 4 must add the table and both foreign keys. The `limits` jsonb holds `max_cost_micros`, not a float.
+- **`skills`**: the skills service keeps its state in a class variable. A restart loses every installed skill. Phase 6 must add the table.
+- **`audit_log`**: no table records approval decisions, connector changes, or settings changes.
+
+Two constraints are also missing.
+
+- **`approvals`**: add `UNIQUE(run_id, tool_call_id)` so a retry cannot create a second approval row.
+- **`card_actions`**: add `UNIQUE(card_id, action_key)` so a card cannot repeat an action.
 
 ---
 
@@ -959,7 +995,7 @@ This revision corrects defects found in a review of the first draft. Two compani
 
 | Correction | Section |
 |---|---|
-| Table count 16 to 17, then 21 with the four added tables | 5, 5.8 |
+| Table count 16 in code to 21 required. 18 exist after the corrections | 5, 5.8, 5.9 |
 | Explicit `__tablename__` on every model | 5.1 |
 | `cost_usd: float` to `cost_micros: bigint` | 5.5 |
 | `Vector(1536)` to `Vector(384)` and the local embedding model | 5.6, 7.1 |
