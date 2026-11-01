@@ -34,12 +34,11 @@ AUTH_HEADERS = {"Authorization": "Bearer vgt_testtoken"}
 
 
 def _fresh_runs_service() -> RunsService:
-    """Return an empty in-memory runs service."""
-    RunsService._runs.clear()
-    RunsService._messages.clear()
-    RunsService._steps.clear()
-    RunsService._configs.clear()
-    RunsService._configs_by_name.clear()
+    """Return an empty in-memory runs service.
+
+    A service built without a session owns a new journal, so every call gives
+    an empty store. The old class level dictionaries are gone.
+    """
     return RunsService(session=None, settings=Settings(APP_ENV="test"))  # type: ignore[arg-type]
 
 
@@ -52,9 +51,14 @@ def runs_service() -> RunsService:
 async def _seed_run(
     runs_service: RunsService,
     step_count: int,
-    status: str = "awaiting_approval",
+    status: str = "running",
 ) -> UUID:
-    """Create one run with steps numbered 1..step_count."""
+    """Create one run with steps numbered 1..step_count.
+
+    The run starts in ``running`` because the state machine has no edge from
+    ``awaiting_approval`` to ``completed``. A paused run resumes through
+    ``running`` first.
+    """
     run = await runs_service.create_run(
         RunCreateDTO(config_id=uuid4(), status=status)
     )

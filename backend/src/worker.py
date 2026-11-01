@@ -14,18 +14,19 @@ import signal
 import sys
 import time
 from typing import Any, Awaitable, Callable, Mapping
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from src.config.logging import configure_logging, get_logger
 from src.config.settings import Settings, get_settings
-from src.dependencies import get_db_session
-from src.modules.jobs.repository import JobDTO
+from src.dependencies import build_runs_service, build_tool_executor, get_db_session
+from src.modules.jobs.repository import JobCreateDTO, JobDTO
 from src.modules.jobs.service import (
     HEARTBEAT_INTERVAL_SECONDS,
     REAP_INTERVAL_SECONDS,
     STALE_LOCK_THRESHOLD_SECONDS,
     JobsService,
 )
+from src.modules.runs.state import SqlRunJournal
 
 
 JOB_RETRY_DELAY_SECONDS = 30
@@ -50,10 +51,19 @@ class JobHandlerUnavailableError(RuntimeError):
 
 @dataclass(frozen=True)
 class JobContext:
-    """Dependencies that a job handler receives."""
+    """Dependencies that a job handler receives.
+
+    ``llm``, ``sandbox`` and ``mcp_host`` are optional. The worker leaves them
+    empty and takes the real adapters from the composition root. A test passes
+    a fake model or a fake connector here.
+    """
 
     settings: Settings
     session: Any | None = None
+    llm: Any | None = None
+    sandbox: Any | None = None
+    mcp_host: Any | None = None
+    observer: Any | None = None
 
 
 JobHandler = Callable[[JobDTO, JobContext], Awaitable[None]]
@@ -62,24 +72,103 @@ JobHandler = Callable[[JobDTO, JobContext], Awaitable[None]]
 # ---------------------------------------------------------------------------
 # Job handlers, one per known type.
 #
-# A handler runs the real work of its job type or it raises. A subsystem that
-# is not built yet has no executor, so its handler raises
-# JobHandlerUnavailableError and the failure path records the job as failed.
-# Phase 4 and Phase 5 replace these entries when their subsystems land.
+# A handler runs the real work of its job type or it raises. The Phase 4 run
+# handlers drive the stateless loop. A subsystem that is not built yet has no
+# executor, so its handler raises JobHandlerUnavailableError and the failure
+# path records the job as failed. Phase 5 replaces the remaining entries when
+# its subsystems land.
 # ---------------------------------------------------------------------------
+
+def _payload(job: JobDTO) -> dict[str, Any]:
+    """Return the job payload as a dictionary."""
+    payload = job.payload
+    return dict(payload) if isinstance(payload, Mapping) else {}
+
+
+def _payload_run_id(job: JobDTO) -> UUID:
+    """Return the run id of a job payload.
+
+    Raises:
+        JobHandlerUnavailableError: The payload has no run id.
+    """
+    raw = _payload(job).get("run_id")
+    if not raw:
+        raise JobHandlerUnavailableError(job.type, "the job payload has no run_id")
+    return UUID(str(raw))
+
+
+async def _drive_run(job: JobDTO, context: JobContext, run_id: UUID) -> None:
+    """Drive one run through the loop with the real tools of that run."""
+    executor = build_tool_executor(
+        context.session,
+        context.settings,
+        run_id,
+        sandbox=context.sandbox,
+        mcp_host=context.mcp_host,
+    )
+    service = build_runs_service(
+        context.session,
+        context.settings,
+        run_id=run_id,
+        llm=context.llm,
+        sandbox=context.sandbox,
+        mcp_host=context.mcp_host,
+        tools=executor,
+    )
+    try:
+        await service.process(run_id, observer=context.observer)
+    finally:
+        await executor.close()
+
+
+async def _run_background_tool(
+    job: JobDTO, context: JobContext, run_id: UUID
+) -> None:
+    """Run one background tool call, store its result, and wake the run."""
+    payload = _payload(job)
+    tool_name = str(payload.get("tool_name") or "")
+    tool_call_id = str(payload.get("tool_call_id") or "")
+    arguments = payload.get("arguments")
+    if not tool_name or not tool_call_id:
+        raise JobHandlerUnavailableError(
+            job.type, "the tool_call payload has no tool_name or tool_call_id"
+        )
+    executor = build_tool_executor(
+        context.session,
+        context.settings,
+        run_id,
+        sandbox=context.sandbox,
+        mcp_host=context.mcp_host,
+    )
+    try:
+        result = await executor.execute(
+            tool_name, arguments if isinstance(arguments, Mapping) else {}
+        )
+    finally:
+        await executor.close()
+    await SqlRunJournal(context.session).complete_job(job.id, result)
+    # The resume payload holds the run id only. A tool_call_id here would
+    # collide with the completed tool job in the loop job index.
+    await JobsService(session=context.session, settings=context.settings).enqueue(
+        JobCreateDTO(
+            type="resume_run",
+            payload={"run_id": str(run_id), "kind": "run"},
+        )
+    )
+
 
 async def handle_resume_run(job: JobDTO, context: JobContext) -> None:
     """Resume a run that waited for an approval or a background tool."""
-    raise JobHandlerUnavailableError(
-        job.type, "the stateless event loop is not wired to the worker"
-    )
+    await _drive_run(job, context, _payload_run_id(job))
 
 
 async def handle_execute_run(job: JobDTO, context: JobContext) -> None:
-    """Execute a queued run through the stateless event loop."""
-    raise JobHandlerUnavailableError(
-        job.type, "the stateless event loop is not wired to the worker"
-    )
+    """Execute a queued run, or run one background tool call of a run."""
+    run_id = _payload_run_id(job)
+    if _payload(job).get("kind") == "tool_call":
+        await _run_background_tool(job, context, run_id)
+        return
+    await _drive_run(job, context, run_id)
 
 
 async def handle_triage_item(job: JobDTO, context: JobContext) -> None:

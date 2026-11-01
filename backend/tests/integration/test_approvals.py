@@ -183,14 +183,13 @@ class ApprovalHarness:
 
 
 def _clear_stores() -> None:
-    """Empty every in-memory store so one test never reads another test row."""
+    """Empty every in-memory store so one test never reads another test row.
+
+    A runs service built without a session owns a new journal, so it needs no
+    clear. The approvals and jobs services still share class level stores.
+    """
     ApprovalsService._approvals.clear()
     JobsService._jobs.clear()
-    RunsService._runs.clear()
-    RunsService._messages.clear()
-    RunsService._steps.clear()
-    RunsService._configs.clear()
-    RunsService._configs_by_name.clear()
 
 
 @pytest_asyncio.fixture(params=["memory", "postgres"])

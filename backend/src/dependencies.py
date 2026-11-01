@@ -13,6 +13,8 @@ from __future__ import annotations
 from datetime import datetime, timezone
 import importlib
 import inspect
+from collections.abc import Mapping
+from pathlib import Path
 from typing import Any, AsyncGenerator, Callable
 from uuid import UUID
 
@@ -196,7 +198,6 @@ get_health_service = _resolve_service_dependency("health", "get_health_service")
 get_auth_service = _resolve_service_dependency("auth", "get_auth_service")
 get_cards_service = _resolve_service_dependency("cards", "get_cards_service")
 get_triage_service = _resolve_service_dependency("triage", "get_triage_service")
-get_runs_service = _resolve_service_dependency("runs", "get_runs_service")
 get_approvals_service = _resolve_service_dependency("approvals", "get_approvals_service")
 get_chat_service = _resolve_service_dependency("chat", "get_chat_service")
 get_artifacts_service = _resolve_service_dependency("artifacts", "get_artifacts_service")
@@ -296,7 +297,7 @@ class _StubLLMClient:
 def get_llm_client(settings: Settings = Depends(get_settings)) -> LLMClientProtocol:
     """Dependency provider yielding multi-tier LLM client adapter."""
     try:
-        mod = importlib.import_module("src.integrations.llm.llm")
+        mod = importlib.import_module("src.integrations.llm.client")
         cls = getattr(mod, "LLMClient", None)
         if cls:
             return cls(settings=settings)
@@ -354,7 +355,7 @@ def get_sandbox_runner(settings: Settings = Depends(get_settings)) -> SandboxRun
     """Dependency provider yielding Docker sandbox runner adapter."""
     try:
         mod = importlib.import_module("src.integrations.sandbox.sandbox")
-        cls = getattr(mod, "DockerSandboxRunner", None)
+        cls = getattr(mod, "SandboxRunner", None)
         if cls:
             return cls(settings=settings)
     except (ImportError, AttributeError):
@@ -434,6 +435,226 @@ def get_notification_dispatcher(
         pass
 
     return _StubNotificationDispatcher()
+
+
+# =============================================================================
+# Run wiring: the composition root chooses the loop dependencies.
+#
+# The loop takes a model client and a tool executor as protocols. This section
+# is the only place that maps those protocols onto real adapters: the Docker
+# sandbox runner, the eight tool adapters, the connector host and the artifact
+# table. A test injects a fake model and a fake connector here.
+# =============================================================================
+
+DELIVERY_ARTIFACT_KINDS: dict[str, str] = {
+    "deliver_file": "document",
+    "generate_document": "document",
+}
+"""Artifact kind for each tool that delivers a file to the user."""
+
+SANDBOX_IDLE_SECONDS = 900
+"""Lifetime of the idle command that keeps a run container alive."""
+
+
+class RunToolExecutor:
+    """Run the tools of one run.
+
+    A local tool runs inside one sandbox container per run. The container is
+    created on the first local call and removed by ``close``. An external tool
+    runs through the connector host, because the user approved it.
+
+    The class satisfies :class:`src.modules.runs.loop.ToolExecutor`.
+    """
+
+    def __init__(
+        self,
+        *,
+        session: AsyncSession | None,
+        settings: Settings,
+        run_id: UUID,
+        sandbox: SandboxRunnerProtocol,
+        mcp_host: MCPHostProtocol,
+        delivery_dir: Any | None = None,
+        connector_id: str = "default",
+    ) -> None:
+        self.session = session
+        self.settings = settings
+        self.run_id = run_id
+        self.sandbox = sandbox
+        self.mcp_host = mcp_host
+        self.connector_id = connector_id
+        self.delivery_dir = (
+            delivery_dir
+            if delivery_dir is not None
+            else Path(settings.WORKSPACE_BASE_PATH) / "delivery" / str(run_id)
+        )
+        self._container_id: str | None = None
+
+    @property
+    def container_id(self) -> str | None:
+        """Return the container id of this run, or None before the first call."""
+        return self._container_id
+
+    async def start(self) -> str:
+        """Create the run container once and return its id."""
+        if self._container_id is None:
+            self._container_id = await self._create_container()
+        return self._container_id
+
+    async def _create_container(self) -> str:
+        """Create a live container through the runner spec path when it exists."""
+        create: Any = getattr(self.sandbox, "create", None)
+        validate: Any = getattr(self.sandbox, "validate_spec", None)
+        if callable(create) and callable(validate):
+            from src.integrations.sandbox.contract import resolve_image_allowlist
+
+            image = resolve_image_allowlist(self.settings)[0]
+            spec = validate(
+                {
+                    "image": image,
+                    "command": ["sleep", str(SANDBOX_IDLE_SECONDS)],
+                    "timeout_seconds": SANDBOX_IDLE_SECONDS,
+                }
+            )
+            created = await create(spec, str(self.run_id))
+            return str(created.container_id)
+
+        created = await self.sandbox.create_container(
+            run_id=str(self.run_id), timeout_seconds=SANDBOX_IDLE_SECONDS
+        )
+        return str(created.container_id)
+
+    async def execute(
+        self, name: str, arguments: Mapping[str, Any]
+    ) -> Mapping[str, Any]:
+        """Run one local tool in the sandbox and return its result."""
+        from src.modules.runs.tools import ToolContext, invoke_tool
+
+        container_id = await self.start()
+        context = ToolContext(
+            runner=self.sandbox,
+            container_id=container_id,
+            delivery_dir=Path(self.delivery_dir),
+        )
+        result = await invoke_tool(name, dict(arguments), context)
+        if result.ok and result.artifact_ref:
+            await self._register_artifact(name, result)
+        return result.model_dump()
+
+    async def execute_external(
+        self, name: str, arguments: Mapping[str, Any]
+    ) -> Mapping[str, Any]:
+        """Run one approved external tool through the connector host."""
+        result = await self.mcp_host.execute_tool(
+            self.connector_id, name, dict(arguments)
+        )
+        return {
+            "ok": not result.is_error,
+            "content": result.output,
+            "artifact_ref": None,
+            "error": result.output if result.is_error else None,
+        }
+
+    async def _register_artifact(self, tool_name: str, result: Any) -> None:
+        """Write one artifact row for a file that a tool delivered."""
+        if self.session is None or not result.artifact_ref:
+            return
+        from src.schemas.runtime import ArtifactModel
+
+        path = Path(str(result.artifact_ref))
+        self.session.add(
+            ArtifactModel(
+                run_id=self.run_id,
+                kind=DELIVERY_ARTIFACT_KINDS.get(tool_name, "file"),
+                path=str(path),
+                size_bytes=path.stat().st_size if path.is_file() else 0,
+                preview=None,
+            )
+        )
+        await self.session.commit()
+
+    async def close(self) -> None:
+        """Remove the run container. A missing container is not an error."""
+        container_id = self._container_id
+        self._container_id = None
+        if container_id is None:
+            return
+        try:
+            await self.sandbox.stop_and_remove(container_id)
+        except Exception:  # noqa: BLE001 - cleanup must not mask the run outcome
+            pass
+
+
+def build_tool_executor(
+    session: AsyncSession | None,
+    settings: Settings,
+    run_id: UUID,
+    *,
+    sandbox: SandboxRunnerProtocol | None = None,
+    mcp_host: MCPHostProtocol | None = None,
+    delivery_dir: Any | None = None,
+) -> RunToolExecutor:
+    """Build the tool executor of one run from the real adapters."""
+    return RunToolExecutor(
+        session=session,
+        settings=settings,
+        run_id=run_id,
+        sandbox=sandbox if sandbox is not None else get_sandbox_runner(settings),
+        mcp_host=mcp_host if mcp_host is not None else get_mcp_host(settings),
+        delivery_dir=delivery_dir,
+    )
+
+
+def build_runs_service(
+    session: AsyncSession | None,
+    settings: Settings,
+    *,
+    run_id: UUID | None = None,
+    llm: LLMClientProtocol | None = None,
+    sandbox: SandboxRunnerProtocol | None = None,
+    mcp_host: MCPHostProtocol | None = None,
+    tools: Any | None = None,
+) -> Any:
+    """Build the runs service with the model client and the tools of one run.
+
+    Args:
+        session: Database session, or None in a test.
+        settings: Application settings.
+        run_id: Run UUID. When it is set, the service can run tools.
+        llm: Optional model client. It defaults to the real client.
+        sandbox: Optional sandbox runner. It defaults to the real runner.
+        mcp_host: Optional connector host. It defaults to the real host.
+        tools: Optional tool executor. It overrides the built executor.
+
+    Returns:
+        The runs service.
+    """
+    from src.modules.runs.service import RunsService
+
+    executor = tools
+    if executor is None and run_id is not None:
+        executor = build_tool_executor(
+            session, settings, run_id, sandbox=sandbox, mcp_host=mcp_host
+        )
+    return RunsService(
+        session=session,
+        settings=settings,
+        sandbox=sandbox,
+        llm=llm if llm is not None else get_llm_client(settings),
+        tools=executor,
+    )
+
+
+def get_runs_service(
+    session: AsyncSession = Depends(get_db_session),
+    settings: Settings = Depends(get_settings),
+) -> Any:
+    """Dependency provider for the runs service.
+
+    The request path reads and writes run rows. It never runs a tool, so the
+    provider does not build a sandbox executor.
+    """
+    return build_runs_service(session, settings)
 
 
 # =============================================================================
