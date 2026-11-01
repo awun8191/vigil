@@ -12,6 +12,7 @@ loses quality with no error, so the test suite pins the expected vector.
 from __future__ import annotations
 
 import hashlib
+import logging
 import threading
 import time
 import urllib.error
@@ -26,6 +27,8 @@ from src.integrations.embedding.contract import (
     EmbeddingArtifactError,
     EmbeddingError,
 )
+
+logger = logging.getLogger("virgil.embedding")
 
 _ARTIFACT_URL = "https://huggingface.co/{repo}/resolve/{revision}/{file}"
 _HASH_BLOCK_BYTES = 1 << 20
@@ -81,6 +84,9 @@ class LocalEmbeddingModel:
         self._session: Any | None = None
         self._tokenizer: Any | None = None
         self._last_used = 0.0
+        self._verified_sha256: str | None = None
+        self.max_batch = max(1, int(settings.EMBEDDING_MAX_BATCH))
+        self.max_batch_tokens = max(1, int(settings.EMBEDDING_MAX_BATCH_TOKENS))
         self._idle_seconds = float(settings.EMBEDDING_IDLE_UNLOAD_SECONDS)
         self._sweep_interval = max(0.05, min(self._idle_seconds / 10.0, 30.0))
         self._stop_sweeper = threading.Event()
@@ -122,15 +128,16 @@ class LocalEmbeddingModel:
         path = self.artifact_path
         if not path.is_file():
             self._downloader(self._remote_url(self.settings.EMBEDDING_ARTIFACT_FILE), path)
-        verified = self._verify_artifact(path)
+        self._verified_sha256 = self._verify_artifact(path)
         if not self.tokenizer_path.is_file():
             self._downloader(
                 self._remote_url(self.settings.EMBEDDING_TOKENIZER_FILE),
                 self.tokenizer_path,
             )
-        return verified
+        return path
 
-    def _verify_artifact(self, path: Path) -> Path:
+    def _verify_artifact(self, path: Path) -> str:
+        """Return the SHA-256 of the artifact, or raise when it does not match."""
         expected = self.settings.EMBEDDING_ARTIFACT_SHA256.lower()
         if not path.is_file():
             raise EmbeddingArtifactError(f"Embedding artifact not found at {path}")
@@ -139,7 +146,7 @@ class LocalEmbeddingModel:
             raise EmbeddingArtifactError(
                 f"Checksum mismatch for {path}: expected {expected}, got {digest}"
             )
-        return path
+        return digest
 
     def _create_session(self, path: Path) -> Any:
         """Build a CPU-only ONNX session with the pinned thread budget."""
@@ -152,6 +159,9 @@ class LocalEmbeddingModel:
         options.intra_op_num_threads = self.settings.EMBEDDING_INTRA_OP_THREADS
         options.inter_op_num_threads = 1
         options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+        # Release the buffers of a finished run. The arena holds the peak of
+        # the largest run, which the index job cannot afford.
+        options.enable_cpu_mem_arena = False
         return ort.InferenceSession(
             str(path),
             sess_options=options,
@@ -169,6 +179,12 @@ class LocalEmbeddingModel:
             self._session = self._session_factory(path)
             self._last_used = self._clock()
             self._start_sweeper()
+            logger.info(
+                "Embedding artifact verified and loaded: path=%s sha256=%s dimensions=%d",
+                path,
+                self._verified_sha256,
+                self.dimensions,
+            )
 
     def _ensure_tokenizer(self) -> Any:
         if self._tokenizer is not None:
@@ -264,23 +280,51 @@ class LocalEmbeddingModel:
         return [float(value) for value in vector]
 
     def _encode_batch(self, texts: Sequence[str]) -> list[list[float]]:
+        """Encode the texts in bounded batches and return one vector for each.
+
+        ONNX Runtime keeps the attention buffers of one run, so the batch cap
+        keeps the peak resident set bounded when a session makes many windows.
+        The tokenizer pads a batch to its longest row, and this int8 model is
+        not invariant to that padding. A run therefore holds only texts of one
+        token length, so every vector stays the vector of its own text.
+        """
         if self._session is None:
             raise EmbeddingError("Embedding session is not loaded")
         tokenizer = self._ensure_tokenizer()
         prepared = [self.truncate(text, self.max_tokens) for text in texts]
-        encodings = tokenizer.encode_batch(prepared)
-        input_ids = np.array([encoding.ids for encoding in encodings], dtype=np.int64)
-        attention_mask = np.array(
-            [encoding.attention_mask for encoding in encodings], dtype=np.int64
-        )
-        feeds = {
-            "input_ids": input_ids,
-            "attention_mask": attention_mask,
-            "token_type_ids": np.zeros_like(input_ids),
-        }
-        outputs = self._session.run(None, feeds)
-        hidden = np.asarray(outputs[0])
-        return [self._pool(hidden[index]) for index in range(len(prepared))]
+
+        groups: dict[int, list[tuple[int, list[int], list[int]]]] = {}
+        for index, text in enumerate(prepared):
+            encoding = tokenizer.encode(text)
+            groups.setdefault(len(encoding.ids), []).append(
+                (index, encoding.ids, encoding.attention_mask)
+            )
+
+        vectors: list[list[float] | None] = [None] * len(prepared)
+        for length in sorted(groups):
+            entries = groups[length]
+            # A run holds at most the window cap and at most the token budget.
+            per_run = max(1, min(self.max_batch, self.max_batch_tokens // length))
+            for start in range(0, len(entries), per_run):
+                window = entries[start : start + per_run]
+                input_ids = np.array([entry[1] for entry in window], dtype=np.int64)
+                attention_mask = np.array(
+                    [entry[2] for entry in window], dtype=np.int64
+                )
+                feeds = {
+                    "input_ids": input_ids,
+                    "attention_mask": attention_mask,
+                    "token_type_ids": np.zeros_like(input_ids),
+                }
+                outputs = self._session.run(None, feeds)
+                hidden = np.asarray(outputs[0])
+                for offset, entry in enumerate(window):
+                    vectors[entry[0]] = self._pool(hidden[offset])
+                del input_ids, attention_mask, feeds, outputs, hidden
+
+        if any(vector is None for vector in vectors):
+            raise EmbeddingError("The encoder returned fewer vectors than texts")
+        return [vector for vector in vectors if vector is not None]
 
     def _encode(self, texts: Sequence[str]) -> list[list[float]]:
         if not texts:

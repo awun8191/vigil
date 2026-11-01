@@ -14,8 +14,10 @@ from uuid import UUID
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.config.exceptions import NotFoundError
+from src.config.logging import get_logger
 from src.config.settings import Settings
 from src.integrations.repositories import LLMClientProtocol, SandboxRunnerProtocol
+from src.modules.jobs.repository import JobDTO, JobsRepository
 from src.modules.runs.barrier import InvariantViolation
 from src.modules.runs.loop import (
     LoopDependencyMissing,
@@ -65,6 +67,7 @@ class RunsService:
         journal: RunJournal | None = None,
         tools: ToolExecutor | None = None,
         policy: PartitionPolicy | None = None,
+        jobs: JobsRepository | None = None,
     ) -> None:
         self.session = session
         self.settings = settings
@@ -73,6 +76,7 @@ class RunsService:
         self.tools = tools
         self.policy = policy
         self.journal: RunJournal = journal or self._default_journal(session)
+        self.jobs = jobs
 
     @staticmethod
     def _default_journal(session: AsyncSession | None) -> RunJournal:
@@ -190,6 +194,7 @@ class RunsService:
         config_id: UUID,
         card_id: UUID | None = None,
         initial_prompt: str | None = None,
+        session_id: UUID | None = None,
     ) -> RunDTO:
         """
         Create a run, store the opening prompt, and queue its execution.
@@ -201,6 +206,8 @@ class RunsService:
             config_id: Agent configuration UUID.
             card_id: Optional card UUID.
             initial_prompt: Optional opening user message.
+            session_id: Optional chat session that owns the run. The session
+                receives an index job when the run completes.
 
         Returns:
             The queued run.
@@ -216,7 +223,12 @@ class RunsService:
         )
         if initial_prompt:
             await self.journal.append_message(
-                MessageCreateDTO(run_id=run.id, role="user", content=initial_prompt)
+                MessageCreateDTO(
+                    run_id=run.id,
+                    session_id=session_id,
+                    role="user",
+                    content=initial_prompt,
+                )
             )
         await self.journal.enqueue_job(
             job_type="execute_run",
@@ -254,10 +266,52 @@ class RunsService:
             raise NotFoundError(f"Run {run_id} not found")
         loop = self.build_loop(observer=observer)
         try:
-            return await loop.run(run_id)
+            result = await loop.run(run_id)
         except (InvariantViolation, LoopDependencyMissing) as exc:
             await self._fail_run(run_id, exc)
             raise
+        if result.status == "completed":
+            await self.enqueue_index_for_completed_run(result)
+        return result
+
+    async def enqueue_index_for_completed_run(self, run: RunDTO) -> list[JobDTO]:
+        """Enqueue one memory index job for each session of a completed run.
+
+        This is the run completion producer. It writes queue rows and embeds
+        nothing, so the request path never loads the model.
+
+        Args:
+            run: The run that just reached ``completed``.
+
+        Returns:
+            The jobs that this call enqueued.
+        """
+        if self.jobs is None and self.session is None:
+            return []
+        session_ids: list[UUID] = []
+        for message in await self.journal.list_messages(run.id):
+            if message.session_id is not None and message.session_id not in session_ids:
+                session_ids.append(message.session_id)
+        if not session_ids:
+            return []
+
+        from src.modules.memory.service import MemoryService
+
+        memory = MemoryService(session=self.session, settings=self.settings)
+        enqueued: list[JobDTO] = []
+        for session_id in session_ids:
+            try:
+                enqueued.append(
+                    await memory.enqueue_index_job(session_id, jobs=self.jobs)
+                )
+            except Exception as exc:  # the run is done, so a queue error is not a run error
+                get_logger("virgil.runs.service").error(
+                    "Cannot enqueue the index job of a completed run",
+                    run_id=str(run.id),
+                    session_id=str(session_id),
+                    error=str(exc),
+                )
+        return enqueued
 
     async def resume_run(
         self,

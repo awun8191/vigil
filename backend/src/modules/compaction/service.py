@@ -15,6 +15,7 @@ from dataclasses import dataclass, replace
 from typing import Any, ClassVar, Mapping, Protocol, Sequence
 from uuid import UUID
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.config.settings import Settings
@@ -50,6 +51,7 @@ from src.modules.compaction.verify import (
     verify_compacted_history,
 )
 from src.modules.runs.repository import RunStepCreateDTO, RunStepDTO
+from src.schemas.runtime import MessageModel
 
 # A run compacts when its history passes this share of the token window.
 COMPACTION_TRIGGER_RATIO = 0.7
@@ -238,7 +240,36 @@ class CompactionService:
         return self._summarizer
 
     async def load_run_history_for_compaction(self, run_id: UUID) -> list[CompactionUnitDTO]:
-        return []
+        """Load the messages of a run as compaction units, in row order.
+
+        The lock flags come from Tier 0, so the HTTP endpoint and the pipeline
+        read the same rules. A service without a session holds no history.
+        """
+        if self.session is None:
+            return []
+        statement = (
+            select(MessageModel)
+            .where(MessageModel.run_id == run_id)
+            .order_by(MessageModel.created_at.asc(), MessageModel.id.asc())
+        )
+        rows = (await self.session.execute(statement)).scalars().all()
+        if not rows:
+            return []
+        messages = [
+            {"id": str(row.id), "role": row.role, "content": row.content or ""}
+            for row in rows
+        ]
+        locked = lock_tier0_units(units_from_messages(messages)).locked_ids
+        return [
+            CompactionUnitDTO(
+                message_id=row.id,
+                role=row.role,
+                content=row.content or "",
+                token_count=self.token_counter.count(row.content or ""),
+                is_locked=str(row.id) in locked,
+            )
+            for row in rows
+        ]
 
     async def save_compacted_history(
         self,

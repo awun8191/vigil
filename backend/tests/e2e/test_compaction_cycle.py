@@ -211,6 +211,10 @@ async def test_approval_survives_compaction() -> None:
     assert compaction.fast_llm is not None
     assert compaction.run_steps is not None
 
+    # One journal holds both the run steps and the compaction trace. Without a
+    # session each service builds its own in-memory journal, so share this one.
+    compaction.run_steps = run_service
+
     scripted = ScriptedFastLLM()
     compaction.fast_llm = scripted
     compaction.jev_client = ScriptedJev()

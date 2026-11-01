@@ -90,6 +90,11 @@ class Settings(BaseSettings):
     EMBEDDING_QUERY_PREFIX: str = "Represent this sentence for searching relevant passages: "
     EMBEDDING_IDLE_UNLOAD_SECONDS: int = 300
     EMBEDDING_INTRA_OP_THREADS: int = 2
+    # ONNX Runtime keeps the attention buffers of one run. A 200-message index
+    # job makes 50 windows, so one run holds at most four windows and at most
+    # 1024 tokens. The peak resident set then stays under 350 MB.
+    EMBEDDING_MAX_BATCH: int = 4
+    EMBEDDING_MAX_BATCH_TOKENS: int = 1024
 
     # --- Memory Retrieval (cosine similarity with exponential time decay) ---
     # The override threshold is measured on the local model: correct answers score

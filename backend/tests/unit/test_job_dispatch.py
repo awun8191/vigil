@@ -207,12 +207,41 @@ async def test_handler_error_propagates() -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("job_type", sorted(JOB_TYPE_PRIORITIES))
+@pytest.mark.parametrize(
+    "job_type",
+    sorted({"triage_item", "poll_connector", "cleanup_sandbox", "reindex_memory"}),
+)
 async def test_default_handlers_never_report_success(job_type: str) -> None:
     """Verify no default handler returns without doing its work."""
     with pytest.raises(JobHandlerUnavailableError) as exc_info:
         await JOB_HANDLERS[job_type](make_job(job_type), make_context())
     assert exc_info.value.job_type == job_type
+
+
+@pytest.mark.asyncio
+async def test_index_memory_handler_runs_the_memory_service(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Verify index_memory hands the job payload to the memory service."""
+    seen: list[dict[str, Any]] = []
+
+    class RecordingMemoryService:
+        """Memory service double that records the payload it receives."""
+
+        async def run_index_job(self, payload: dict[str, Any]) -> None:
+            seen.append(dict(payload))
+
+    monkeypatch.setattr(
+        "src.worker.get_memory_service", lambda **kwargs: RecordingMemoryService()
+    )
+    session_id = str(uuid4())
+    job = make_job(
+        "index_memory", payload={"session_id": session_id, "scope": "global"}
+    )
+
+    await JOB_HANDLERS["index_memory"](job, make_context())
+
+    assert seen == [{"session_id": session_id, "scope": "global"}]
 
 
 # ---------------------------------------------------------------------------

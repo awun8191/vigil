@@ -258,3 +258,149 @@ def test_similar_texts_are_closer_than_unrelated_texts(embedder: LocalEmbeddingM
     unrelated = np.asarray(unrelated)
 
     assert float(np.dot(anchor, related)) > float(np.dot(anchor, unrelated))
+
+
+# ------------------------------------------------------------- batch and log
+
+
+class _FakeEncoding:
+    """One tokenized text with a fixed number of tokens."""
+
+    def __init__(self, ids: list[int]) -> None:
+        self.ids = ids
+        self.attention_mask = [1] * len(ids)
+
+
+class _FakeTokenizer:
+    """Tokenizer double that marks each text with its own first token id."""
+
+    def __init__(self, width: int = 1) -> None:
+        self.width = width
+
+    def encode(self, text: str) -> _FakeEncoding:
+        marker = int(text.split("-")[-1])
+        return _FakeEncoding([marker] + [0] * (self.width - 1))
+
+
+class _FakeSession:
+    """ONNX session double that records the batch size of every run."""
+
+    def __init__(self) -> None:
+        self.batch_sizes: list[int] = []
+
+    def run(self, output_names: object, feeds: dict[str, np.ndarray]) -> list[np.ndarray]:
+        size = int(feeds["input_ids"].shape[0])
+        self.batch_sizes.append(size)
+        hidden = np.zeros((size, 1, 384), dtype=np.float32)
+        for index in range(size):
+            marker = int(feeds["input_ids"][index][0])
+            hidden[index, 0, marker] = 1.0
+        return [hidden]
+
+
+def _fake_encoder(
+    max_batch: int, width: int = 1
+) -> tuple[LocalEmbeddingModel, _FakeSession]:
+    """Build a model with a fake tokenizer and session. No artifact is needed."""
+    model = LocalEmbeddingModel(_settings(EMBEDDING_MAX_BATCH=max_batch))
+    session = _FakeSession()
+    model._session = session
+    model._tokenizer = _FakeTokenizer(width)
+    model.truncate = lambda text, max_tokens=None: text  # type: ignore[method-assign]
+    return model, session
+
+
+def test_encode_sends_at_most_the_batch_cap() -> None:
+    """A long chunk set goes to the encoder in bounded batches, in order."""
+    model, session = _fake_encoder(max_batch=4)
+    texts = [f"text-{index}" for index in range(10)]
+
+    vectors = model._encode_batch(texts)
+
+    assert model.max_batch == 4
+    assert session.batch_sizes == [4, 4, 2], "one run must hold at most four windows"
+    assert len(vectors) == len(texts)
+    for index, vector in enumerate(vectors):
+        peak = int(np.argmax(np.asarray(vector)))
+        assert peak == index, "the vectors must keep the order of the input"
+
+
+def test_encode_respects_the_token_budget() -> None:
+    """A run of 512 token windows holds two windows, not four."""
+    model, session = _fake_encoder(max_batch=4, width=512)
+    texts = [f"text-{index}" for index in range(10)]
+
+    vectors = model._encode_batch(texts)
+
+    assert model.max_batch_tokens == 1024
+    assert session.batch_sizes == [2, 2, 2, 2, 2], (
+        "1024 tokens must cap a run of 512 token windows"
+    )
+    assert len(vectors) == len(texts)
+
+
+def test_batch_cap_keeps_the_same_vectors(embedder: LocalEmbeddingModel) -> None:
+    """A split batch returns the vectors that one text per run returns."""
+    texts = [
+        "The spare key for the flat is in the blue pot on the balcony.",
+        "The dentist appointment is on 14 March at 9 am.",
+        "The wifi password for the guest network is cedar-42.",
+        "The car service is booked for Friday morning.",
+        "The dog vaccination is due next month.",
+    ]
+    capped = np.asarray(embedder.embed_documents(texts), dtype=np.float32)
+
+    alone = LocalEmbeddingModel(_settings(EMBEDDING_MAX_BATCH=1))
+    alone._session = embedder.session
+    alone._tokenizer = embedder._ensure_tokenizer()
+    single = np.asarray(alone.embed_documents(texts), dtype=np.float32)
+
+    assert capped.shape == single.shape
+    assert np.allclose(capped, single, atol=1e-6), (
+        "the batch cap must not change a vector"
+    )
+    for index in range(len(texts)):
+        assert abs(float(np.linalg.norm(capped[index])) - 1.0) < 1e-4
+
+
+def test_load_logs_the_checksum_and_the_dimensions(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The load writes one line with the artifact path, the digest and the size."""
+    import logging
+
+    payload = b"pretend onnx bytes"
+    digest = hashlib.sha256(payload).hexdigest()
+    (tmp_path / "model_int8.onnx").write_bytes(payload)
+    settings = _settings(
+        EMBEDDING_MODEL_DIR=str(tmp_path),
+        EMBEDDING_ARTIFACT_SHA256=digest,
+        EMBEDDING_API_KEY="secret-key-that-must-not-print",
+    )
+    model = LocalEmbeddingModel(
+        settings, session_factory=lambda path: object()
+    )
+    monkeypatch.setattr(model, "_ensure_tokenizer", lambda: object())
+
+    with caplog.at_level(logging.INFO, logger="virgil.embedding"):
+        model.load()
+
+    lines = [
+        record.getMessage()
+        for record in caplog.records
+        if record.name == "virgil.embedding"
+    ]
+    assert len(lines) == 1, "the load must log exactly once"
+    line = lines[0]
+    assert str(tmp_path / "model_int8.onnx") in line
+    assert digest in line
+    assert "dimensions=384" in line
+    assert "secret-key-that-must-not-print" not in line
+    assert "api_key" not in line.lower()
+
+    # A second load reuses the session and logs nothing.
+    caplog.clear()
+    with caplog.at_level(logging.INFO, logger="virgil.embedding"):
+        model.load()
+    assert [record for record in caplog.records if record.name == "virgil.embedding"] == []
+    model.close()

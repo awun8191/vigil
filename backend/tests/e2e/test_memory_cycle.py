@@ -33,7 +33,7 @@ from src.config.settings import Settings, get_settings
 from src.dependencies import get_memory_service
 from src.modules.jobs.service import JobsService
 from src.schemas.base import Base
-from src.worker import dispatch_job
+from src.worker import JobContext, dispatch_job
 
 DIMENSIONS = 384
 ACTIVE_MODEL = "bge-small-en-v1.5"
@@ -249,8 +249,13 @@ async def test_fact_recalled_next_session() -> None:
                 claimed = await jobs.claim_next_job(worker_id="e2e-memory")
                 assert claimed is not None
                 assert claimed.type == "index_memory"
-                handled = await dispatch_job(claimed, session, settings)
-                assert handled is True
+                context = JobContext(settings=settings, session=session)
+                try:
+                    await dispatch_job(claimed, context)
+                except Exception as exc:
+                    raise AssertionError(
+                        f"the index_memory handler failed: {exc}"
+                    ) from exc
                 await jobs.mark_completed(claimed.id)
 
         assert await _count_chunks(scratch.dsn, user_id) == len(all_sessions)

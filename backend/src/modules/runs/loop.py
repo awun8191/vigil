@@ -348,6 +348,9 @@ class RunLoop:
         self.max_iterations = max_iterations
         self.context_token_limit = context_token_limit
         self.compact_ratio = compact_ratio
+        # The chat session of the run under work. Every row that the loop
+        # writes carries it, so the memory indexer sees the whole session.
+        self._session_id: UUID | None = None
 
     # -- public API -------------------------------------------------------
 
@@ -399,6 +402,9 @@ class RunLoop:
         run = await self._enter_running(run)
 
         messages = await self.journal.list_messages(run_id)
+        self._session_id = next(
+            (row.session_id for row in messages if row.session_id is not None), None
+        )
 
         # Stage 1: assemble.
         assembled = self._assemble(config, messages)
@@ -687,6 +693,7 @@ class RunLoop:
             MessageCreateDTO(
                 role="tool",
                 run_id=run.id,
+                session_id=self._session_id,
                 content=json.dumps(dict(result), default=str, sort_keys=True),
                 tool_call_id=call.id,
                 tool_name=call.name,
@@ -712,6 +719,7 @@ class RunLoop:
             MessageCreateDTO(
                 role="assistant",
                 run_id=run.id,
+                session_id=self._session_id,
                 content=response.content,
                 tool_calls=calls or None,
             )

@@ -4,11 +4,11 @@ from __future__ import annotations
 import asyncio
 import math
 from dataclasses import dataclass, replace
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, ClassVar, Protocol, Sequence, runtime_checkable
 from uuid import UUID, uuid4
 
-from sqlalchemy import delete, select, update
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.config.settings import Settings
@@ -32,10 +32,16 @@ from src.modules.memory.retrieval import (
 )
 from src.schemas.memory import MemoryChunkModel
 from src.schemas.runtime import MessageModel, ThreadModel
+from src.schemas.system import JobModel
 
 INDEX_JOB_TYPE = "index_memory"
 INDEX_BATCH_LIMIT = 200
 DEFAULT_SCOPE = "global"
+
+# Idle timeout producer. A session with no new turn for this window gets one
+# index job, so a chat that goes quiet still reaches memory.
+IDLE_INDEX_SECONDS = 900
+IDLE_SWEEP_LIMIT = 50
 
 
 @dataclass(frozen=True)
@@ -85,6 +91,15 @@ class MemoryIndexStore(Protocol):
 
     async def commit(self) -> None:
         """Persist chunks and markers together."""
+        ...
+
+
+@runtime_checkable
+class IdleSessionStore(Protocol):
+    """Store that finds the sessions that the idle timeout producer must index."""
+
+    async def list_idle_sessions(self, idle_seconds: int, limit: int) -> list[UUID]:
+        """Return sessions with unindexed turns and no turn inside the window."""
         ...
 
 
@@ -173,6 +188,32 @@ class SqlMemoryIndexStore:
         await self.session.commit()
 
 
+class SqlIdleSessionStore:
+    """Postgres reader that finds the sessions of the idle timeout producer."""
+
+    def __init__(self, session: AsyncSession) -> None:
+        self.session = session
+
+    async def list_idle_sessions(self, idle_seconds: int, limit: int) -> list[UUID]:
+        """Return sessions with unindexed turns and no turn inside the window."""
+        cutoff = datetime.now(timezone.utc) - timedelta(seconds=max(1, idle_seconds))
+        statement = (
+            select(MessageModel.session_id)
+            .join(ThreadModel, ThreadModel.id == MessageModel.session_id)
+            .where(
+                MessageModel.indexed_at.is_(None),
+                MessageModel.role.in_(("user", "assistant")),
+                MessageModel.content.is_not(None),
+            )
+            .group_by(MessageModel.session_id)
+            .having(func.max(MessageModel.created_at) <= cutoff)
+            .order_by(MessageModel.session_id)
+            .limit(limit)
+        )
+        rows = (await self.session.execute(statement)).all()
+        return [row[0] for row in rows]
+
+
 class MemoryService:
     """
     Long-term conversational memory service satisfying MemoryRepository via duck typing.
@@ -239,6 +280,49 @@ class MemoryService:
             UUID(str(raw_session_id)),
             scope=str(payload.get("scope") or DEFAULT_SCOPE),
         )
+
+    async def enqueue_idle_session_index_jobs(
+        self,
+        *,
+        idle_seconds: int = IDLE_INDEX_SECONDS,
+        limit: int = IDLE_SWEEP_LIMIT,
+        store: IdleSessionStore | None = None,
+        jobs: JobsRepository | None = None,
+    ) -> list[JobDTO]:
+        """Enqueue one index job for each session that went idle.
+
+        This is the idle timeout producer. It writes queue rows and embeds
+        nothing. A session that already holds an open index job is skipped, so
+        the sweep can run again without a second job.
+        """
+        selected = store
+        if selected is None:
+            if self.session is None:
+                return []
+            selected = SqlIdleSessionStore(self.session)
+        enqueued: list[JobDTO] = []
+        for session_id in await selected.list_idle_sessions(idle_seconds, limit):
+            if await self._has_open_index_job(session_id, jobs=jobs):
+                continue
+            enqueued.append(await self.enqueue_index_job(session_id, jobs=jobs))
+        return enqueued
+
+    async def _has_open_index_job(
+        self, session_id: UUID, jobs: JobsRepository | None = None
+    ) -> bool:
+        """True when the queue already holds an unfinished index job for a session."""
+        if jobs is not None or self.session is None:
+            return False
+        statement = (
+            select(JobModel.id)
+            .where(
+                JobModel.type == INDEX_JOB_TYPE,
+                JobModel.status.in_(("pending", "locked")),
+                JobModel.payload.op("->>")("session_id") == str(session_id),
+            )
+            .limit(1)
+        )
+        return (await self.session.execute(statement)).first() is not None
 
     async def index_session(
         self,
@@ -372,8 +456,9 @@ class MemoryService:
     ) -> list[MemorySearchResultDTO]:
         """Search with the time decay rules.
 
-        The argument defaults come from settings, not from constants in this file,
-        so the deployed threshold is the measured 0.65 and not the provisional 0.85.
+        The argument defaults come from settings, not from constants in this file.
+        The deployed override threshold is the measured value in settings, and
+        this module holds no provisional copy of it.
         """
         explicit: dict[str, Any] = {}
         if candidate_k is not None:

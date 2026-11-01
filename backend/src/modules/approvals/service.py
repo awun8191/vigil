@@ -26,7 +26,6 @@ from src.modules.approvals.repository import (
 from src.modules.jobs.repository import JobCreateDTO, JobsRepository
 from src.modules.jobs.service import JobsService
 from src.modules.runs.repository import MessageCreateDTO, RunsRepository
-from src.modules.runs.service import RunsService
 from src.schemas.runtime import ApprovalModel, MessageModel
 
 
@@ -73,6 +72,10 @@ class ApprovalsService:
         self.jobs_service = jobs_service or JobsService(
             session=session, settings=settings
         )
+        # Imported here, not at module level. The runs service imports this
+        # module through its journal, so a module level import is a cycle.
+        from src.modules.runs.service import RunsService
+
         self.runs_service = runs_service or RunsService(
             session=session, settings=settings
         )

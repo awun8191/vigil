@@ -66,11 +66,11 @@ class MemoryRepository(Protocol):
         user_id: UUID,
         query_embedding: list[float],
         scopes: list[str],
-        candidate_k: int = 50,
-        top_n: int = 8,
-        half_life_days: float = 30.0,
-        floor: float = 0.35,
-        override_threshold: float = 0.85,
+        candidate_k: int | None = None,
+        top_n: int | None = None,
+        half_life_days: float | None = None,
+        floor: float | None = None,
+        override_threshold: float | None = None,
     ) -> list[MemorySearchResultDTO]:
         """
         Execute vector similarity search with exponential time-decay scoring.
@@ -79,11 +79,12 @@ class MemoryRepository(Protocol):
             user_id: Owner user UUID.
             query_embedding: Vector embedding of search query (384-dim).
             scopes: Allowed scopes to filter (e.g. ['global', 'card']).
-            candidate_k: Initial cosine similarity candidate set size.
-            top_n: Final ranked results to return.
-            half_life_days: Exponential decay half-life in days (default 30.0).
-            floor: Minimum recency multiplier floor (default 0.35).
-            override_threshold: Similarity score bypassing decay (default 0.85).
+            candidate_k: Initial cosine similarity candidate set size. None uses settings.
+            top_n: Final ranked results to return. None uses settings.
+            half_life_days: Exponential decay half-life in days. None uses settings.
+            floor: Minimum recency multiplier floor. None uses settings.
+            override_threshold: Similarity score that bypasses decay. None uses the
+                value from settings. This protocol holds no threshold constant.
 
         Returns:
             List of ranked MemorySearchResultDTOs.

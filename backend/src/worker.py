@@ -37,6 +37,9 @@ from src.modules.runs.state import SqlRunJournal
 JOB_RETRY_DELAY_SECONDS = 30
 """Delay before the queue retries a job that raised a transient error."""
 
+IDLE_SWEEP_INTERVAL_SECONDS = 300
+"""The worker runs the idle session index sweep on this fixed interval."""
+
 
 class UnknownJobTypeError(RuntimeError):
     """Raised when the queue holds a job type with no registered handler."""
@@ -401,6 +404,7 @@ async def run_worker() -> None:
     signal.signal(signal.SIGTERM, handle_signal)
 
     last_reap = 0.0
+    last_idle_sweep = 0.0
 
     # Main worker poll loop
     while not stop_event.is_set():
@@ -408,6 +412,11 @@ async def run_worker() -> None:
         should_reap = reap_is_due(now_monotonic, last_reap)
         if should_reap:
             last_reap = now_monotonic
+        should_sweep_idle = reap_is_due(
+            now_monotonic, last_idle_sweep, IDLE_SWEEP_INTERVAL_SECONDS
+        )
+        if should_sweep_idle:
+            last_idle_sweep = now_monotonic
 
         try:
             async for session in get_db_session(settings):
@@ -422,7 +431,18 @@ async def run_worker() -> None:
                     if reaped > 0:
                         logger.info("Reaped stale job locks", count=reaped)
 
-                # 2. Claim the next job.
+                # 2. Enqueue the index job of every session that went idle.
+                if should_sweep_idle:
+                    memory_service = get_memory_service(
+                        session=session, settings=settings
+                    )
+                    idle_jobs = await memory_service.enqueue_idle_session_index_jobs()
+                    if idle_jobs:
+                        logger.info(
+                            "Enqueued idle session index jobs", count=len(idle_jobs)
+                        )
+
+                # 3. Claim the next job.
                 job = await jobs_service.claim_next_job(worker_id=worker_id)
                 if job is None:
                     break
@@ -443,7 +463,7 @@ async def run_worker() -> None:
                         ).heartbeat(job.id, worker_id=worker_id)
                         break
 
-                # 3. Dispatch the job and record the outcome.
+                # 4. Dispatch the job and record the outcome.
                 await process_job(
                     job,
                     jobs_service,
