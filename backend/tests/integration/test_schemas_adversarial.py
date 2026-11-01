@@ -5,7 +5,7 @@ Empirically challenges:
    - uq_connected_accounts_user_conn_label (duplicate rejection, tenant isolation, concurrent contention)
    - uq_connector_items_account_external_id (duplicate rejection, account isolation, concurrent contention)
    - devices.token_hash (global uniqueness enforcement)
-   - triage_decisions.item_id (1-to-1 uniqueness enforcement)
+   - triage_decisions uniqueness per (item_id, model_version), re-triage allowed
 2. Referential Integrity & Cascades:
    - Rejection of invalid/orphan foreign keys
    - CASCADE on user deletion across full deep hierarchy
@@ -13,8 +13,8 @@ Empirically challenges:
    - SET NULL on card deletion (preserving runs and execution audit history)
    - SET NULL on parent run deletion (preserving child runs)
 3. Vector Properties & HNSW Index:
-   - Vector(1536) dimension mismatch rejection (0, 1, 512, 1535, 1537, 3072)
-   - Vector exact 1536-dim acceptance and cosine distance calculations
+   - Vector(384) dimension mismatch rejection (0, 1, 512, 383, 385, 3072)
+   - Vector exact 384-dim acceptance and cosine distance calculations
    - PostgreSQL catalog inspection of HNSW index (hnsw access method, vector_cosine_ops, m=16, ef_construction=64)
    - Query plan EXPLAIN verification for Index Scan on ix_memory_chunks_embedding_hnsw
    - Session-level hnsw.ef_search tuning
@@ -48,6 +48,7 @@ from src.schemas import (
     ConnectedAccountModel,
     ConnectorItemModel,
     ConnectorSyncStateModel,
+    ConnectorToolModel,
     DeviceModel,
     IdempotencyRecordModel,
     JobModel,
@@ -427,7 +428,7 @@ class TestUniqueConstraintsAdversarial:
     async def test_triage_decision_item_id_unique(
         self, session_factory: sessionmaker
     ) -> None:
-        """Verify triage_decisions enforces strict 1-to-1 relationship with connector_items."""
+        """Verify triage_decisions is unique per item and model version, and a re-triage is legal."""
         async with session_factory() as session:
             user_id = uuid.uuid4()
             acc_id = uuid.uuid4()
@@ -479,6 +480,24 @@ class TestUniqueConstraintsAdversarial:
                     await session.commit()
                 assert "triage_decisions" in str(exc_info.value).lower()
                 await session.rollback()
+
+                # A re-triage stores a second verdict for a new model version.
+                retriage = TriageDecisionModel(
+                    id=uuid.uuid4(),
+                    item_id=item_id,
+                    decision="TRIAGE",
+                    model_version="jev-v2",
+                )
+                session.add(retriage)
+                await session.commit()
+
+                count_res = await session.execute(
+                    sa.text(
+                        "SELECT count(*) FROM triage_decisions WHERE item_id = :iid;"
+                    ),
+                    {"iid": item_id},
+                )
+                assert count_res.scalar() == 2
 
             finally:
                 await session.execute(
@@ -563,7 +582,7 @@ class TestReferentialIntegrityAdversarial:
                     user_id=fake_id,
                     scope="user",
                     content="Orphan chunk",
-                    embedding=[0.0] * 1536,
+                    embedding=[0.0] * 384,
                     embedding_model="text-embedding-3-small",
                 )
             )
@@ -618,7 +637,7 @@ class TestReferentialIntegrityAdversarial:
                     user_id=user_id,
                     scope="user",
                     content="Tree memory",
-                    embedding=[0.0] * 1536,
+                    embedding=[0.0] * 384,
                     embedding_model="test-model",
                 ),
             ])
@@ -866,16 +885,16 @@ class TestReferentialIntegrityAdversarial:
 
 @pytest.mark.asyncio
 class TestVectorPropertiesAdversarial:
-    """Stress-test pgvector Vector(1536) dimensional enforcement, operators, and HNSW index."""
+    """Stress-test pgvector Vector(384) dimensional enforcement, operators, and HNSW index."""
 
     @pytest.mark.parametrize(
         "bad_dim",
         [
             0,      # empty vector
             1,      # single dimension
-            512,    # common embedding size, incompatible with 1536
-            1535,   # off-by-one under
-            1537,   # off-by-one over
+            512,    # common embedding size, incompatible with 384
+            383,    # off-by-one under
+            385,    # off-by-one over
             3072,   # large embedding size (e.g. text-embedding-3-large)
         ],
     )
@@ -906,7 +925,7 @@ class TestVectorPropertiesAdversarial:
                 await session.rollback()
                 err_text = str(exc_info.value).lower()
                 assert (
-                    "expected 1536 dimensions" in err_text
+                    "expected 384 dimensions" in err_text
                     or "at least 1 dimension" in err_text
                     or "different size" in err_text
                 )
@@ -917,10 +936,10 @@ class TestVectorPropertiesAdversarial:
                 )
                 await session.commit()
 
-    async def test_vector_exact_1536_dimensions_accepted(
+    async def test_vector_exact_384_dimensions_accepted(
         self, session_factory: sessionmaker
     ) -> None:
-        """Verify inserting exact 1536 dimensions succeeds for various value patterns (zeros, negative/positive floats)."""
+        """Verify inserting exact 384 dimensions succeeds for various value patterns (zeros, negative/positive floats)."""
         async with session_factory() as session:
             user_id = uuid.uuid4()
             session.add(UserModel(id=user_id, display_name="Valid Vec User"))
@@ -934,7 +953,7 @@ class TestVectorPropertiesAdversarial:
                     user_id=user_id,
                     scope="user",
                     content="Chunk 1",
-                    embedding=[(i % 100) * 0.01 - 0.5 for i in range(1536)],
+                    embedding=[(i % 100) * 0.01 - 0.5 for i in range(384)],
                     embedding_model="text-embedding-3-small",
                 )
                 session.add(c1)
@@ -946,7 +965,7 @@ class TestVectorPropertiesAdversarial:
                     user_id=user_id,
                     scope="user",
                     content="Zeros Chunk",
-                    embedding=[0.0] * 1536,
+                    embedding=[0.0] * 384,
                     embedding_model="text-embedding-3-small",
                 )
                 session.add(c2)
@@ -954,12 +973,12 @@ class TestVectorPropertiesAdversarial:
 
                 retrieved_1 = await session.get(MemoryChunkModel, c1_id)
                 assert retrieved_1 is not None
-                assert len(retrieved_1.embedding) == 1536
+                assert len(retrieved_1.embedding) == 384
                 assert abs(retrieved_1.embedding[0] - (-0.5)) < 1e-5
 
                 retrieved_2 = await session.get(MemoryChunkModel, c2_id)
                 assert retrieved_2 is not None
-                assert len(retrieved_2.embedding) == 1536
+                assert len(retrieved_2.embedding) == 384
                 assert all(v == 0.0 for v in retrieved_2.embedding)
 
             finally:
@@ -1015,11 +1034,11 @@ class TestVectorPropertiesAdversarial:
 
             try:
                 # Insert 10 memory chunks
-                query_vec = [0.01 * (i % 50) for i in range(1536)]
+                query_vec = [0.01 * (i % 50) for i in range(384)]
                 vec_str = "[" + ",".join(str(v) for v in query_vec) + "]"
 
                 for idx in range(10):
-                    vec = [0.01 * ((i + idx) % 50) for i in range(1536)]
+                    vec = [0.01 * ((i + idx) % 50) for i in range(384)]
                     session.add(
                         MemoryChunkModel(
                             id=uuid.uuid4(),
@@ -1081,7 +1100,7 @@ class TestSchemaStressHarness:
     async def test_concurrent_batch_memory_chunks_and_queries(
         self, session_factory: sessionmaker
     ) -> None:
-        """Spawn 5 concurrent writer tasks each writing 10 1536-dim vectors and querying nearest neighbors."""
+        """Spawn 5 concurrent writer tasks each writing 10 384-dim vectors and querying nearest neighbors."""
         async with session_factory() as session:
             user_id = uuid.uuid4()
             session.add(UserModel(id=user_id, display_name="Stress User"))
@@ -1091,7 +1110,7 @@ class TestSchemaStressHarness:
             async with session_factory() as s:
                 # 1. Insert 10 chunks
                 for i in range(10):
-                    vec = [0.005 * ((i * 7 + task_id * 13 + j) % 100) for j in range(1536)]
+                    vec = [0.005 * ((i * 7 + task_id * 13 + j) % 100) for j in range(384)]
                     chunk = MemoryChunkModel(
                         id=uuid.uuid4(),
                         user_id=user_id,
@@ -1104,7 +1123,7 @@ class TestSchemaStressHarness:
                 await s.commit()
 
                 # 2. Query nearest 3 chunks
-                q_vec = [0.005 * ((task_id * 13 + j) % 100) for j in range(1536)]
+                q_vec = [0.005 * ((task_id * 13 + j) % 100) for j in range(384)]
                 q_str = "[" + ",".join(str(v) for v in q_vec) + "]"
                 res = await s.execute(
                     sa.text(
@@ -1162,7 +1181,21 @@ class TestSchemaStressHarness:
             assert account is not None
             assert account.status == "active"
             assert account.scopes == []
-            assert account.enabled_tools == []
+
+            # 2b. Connector tool defaults to enabled = true, and the level is constrained
+            tid = uuid.uuid4()
+            await session.execute(
+                sa.text(
+                    "INSERT INTO connector_tools (id, connector_account_id, tool_name, level) "
+                    "VALUES (:id, :cid, 'gmail_search', 'read');"
+                ),
+                {"id": tid, "cid": cid},
+            )
+            await session.commit()
+            tool = await session.get(ConnectorToolModel, tid)
+            assert tool is not None
+            assert tool.enabled is True
+            assert tool.level == "read"
 
             # 3. Job defaults: status='pending', attempts=0, max_attempts=5, payload='{}'
             jid = uuid.uuid4()
@@ -1188,7 +1221,7 @@ class TestSchemaStressHarness:
                     "INSERT INTO memory_chunks (id, user_id, scope, content, embedding, embedding_model) "
                     "VALUES (:id, :uid, 'test', 'cnt', CAST(:emb AS vector), 'mod');"
                 ),
-                {"id": mid, "uid": uid, "emb": "[" + ",".join(["0.0"] * 1536) + "]"},
+                {"id": mid, "uid": uid, "emb": "[" + ",".join(["0.0"] * 384) + "]"},
             )
             await session.commit()
             chunk = await session.get(MemoryChunkModel, mid)

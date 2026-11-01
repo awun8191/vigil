@@ -6,7 +6,17 @@ from typing import TYPE_CHECKING
 import uuid
 
 import sqlalchemy as sa
-from sqlalchemy import DateTime, ForeignKey, Index, String, Text, UniqueConstraint, func
+from sqlalchemy import (
+    Boolean,
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    Index,
+    String,
+    Text,
+    UniqueConstraint,
+    func,
+)
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from src.schemas.base import Base
@@ -46,12 +56,6 @@ class ConnectedAccountModel(Base):
         server_default=sa.text("'active'"),
         index=True,
     )
-    enabled_tools: Mapped[list[str]] = mapped_column(
-        JSONB,
-        nullable=False,
-        default=list,
-        server_default=sa.text("'[]'::jsonb"),
-    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
@@ -78,6 +82,9 @@ class ConnectedAccountModel(Base):
     user: Mapped[UserModel] = relationship(
         "UserModel", back_populates="connected_accounts"
     )
+    tools: Mapped[list[ConnectorToolModel]] = relationship(
+        "ConnectorToolModel", back_populates="account", cascade="all, delete-orphan"
+    )
     items: Mapped[list[ConnectorItemModel]] = relationship(
         "ConnectorItemModel", back_populates="account", cascade="all, delete-orphan"
     )
@@ -86,6 +93,43 @@ class ConnectedAccountModel(Base):
         back_populates="account",
         uselist=False,
         cascade="all, delete-orphan",
+    )
+
+
+class ConnectorToolModel(Base):
+    """Tool exposed by a connected account, with its approval level."""
+
+    __tablename__ = "connector_tools"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    connector_account_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("connected_accounts.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    tool_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    level: Mapped[str] = mapped_column(String(16), nullable=False)
+    enabled: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=True,
+        server_default=sa.text("true"),
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "connector_account_id",
+            "tool_name",
+            name="uq_connector_tools_account_tool",
+        ),
+        # The "ck" naming convention adds the ck_connector_tools_ prefix.
+        CheckConstraint("level IN ('read', 'local', 'external')", name="level"),
+    )
+
+    account: Mapped[ConnectedAccountModel] = relationship(
+        "ConnectedAccountModel", back_populates="tools"
     )
 
 

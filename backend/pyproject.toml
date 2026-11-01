@@ -22,6 +22,9 @@ dependencies = [
     "qrcode>=7.4.2",
     "pytest>=8.2.0",
     "pytest-asyncio>=0.23.0",
+    # Provider tokenizer for context compaction. Tier 1 must count tokens with
+    # the tokenizer of the configured model, never with a character estimate.
+    "tiktoken>=0.7.0",
 ]
 
 [tool.hatch.build.targets.wheel]
