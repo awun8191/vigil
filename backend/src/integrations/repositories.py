@@ -322,7 +322,7 @@ class SandboxRunnerProtocol(Protocol):
         ...
 
     async def is_healthy(self) -> bool:
-        """Check whether the Docker daemon or docker-socket-proxy is reachable."""
+        """Check whether the Docker daemon is reachable."""
         ...
 
 
