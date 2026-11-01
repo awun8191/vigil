@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import type { AuthMe, PairingResponse } from '@/types';
-import { getBearerToken, setBearerToken } from '@/lib/api';
+import { getBearerToken, IS_MOCK, setBearerToken } from '@/lib/api';
 
 /**
  * Session state.
@@ -76,6 +76,22 @@ async function clearStoredSession(): Promise<void> {
 
 export type SessionStatus = 'loading' | 'unauthed' | 'authed';
 
+/**
+ * A simulation build has no server to pair with, so a pairing gate would be a dead end that can
+ * never be satisfied. Fixture builds are signed in from the first frame.
+ *
+ * This is still a compile-time decision: `IS_MOCK` is resolved by Vite's define step from
+ * VITE_VIGIL_MOCK. Nothing here inspects the network at runtime.
+ */
+const MOCK_DEVICE: AuthMe = {
+  device_id: 'mock-device',
+  device_name: 'Simulation device',
+  user_id: 'mock-user',
+  user_display_name: 'Simulation',
+  created_at: '2026-01-01T00:00:00Z',
+  last_seen_at: '2026-01-01T00:00:00Z',
+};
+
 interface SessionState {
   status: SessionStatus;
   device: AuthMe | null;
@@ -90,6 +106,11 @@ export const useSession = create<SessionState>((set) => ({
   device: null,
 
   async hydrate(me) {
+    if (IS_MOCK) {
+      set({ status: 'authed', device: MOCK_DEVICE });
+      return;
+    }
+
     const stored = await readStoredSession();
     if (!stored) {
       setBearerToken(null);
@@ -136,12 +157,18 @@ export const useSession = create<SessionState>((set) => ({
   },
 
   async signOut() {
+    if (IS_MOCK) {
+      // Unpairing a fixture build would strand the user on a gate with nothing behind it.
+      set({ status: 'authed', device: MOCK_DEVICE });
+      return;
+    }
     await clearStoredSession();
     setBearerToken(null);
     set({ status: 'unauthed', device: null });
   },
 
   expire() {
+    if (IS_MOCK) return;
     void clearStoredSession();
     setBearerToken(null);
     set({ status: 'unauthed', device: null });

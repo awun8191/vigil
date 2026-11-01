@@ -4,8 +4,8 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
-    "dev:mock": "VITE_VIGIL_MOCK=1 vite",
+    "dev": "VITE_VIGIL_MOCK=1 vite",
+    "dev:live": "vite",
     "build": "tsc --noEmit && vite build",
     "build:mock": "VITE_VIGIL_MOCK=1 tsc --noEmit && VITE_VIGIL_MOCK=1 vite build",
     "preview": "vite preview",
