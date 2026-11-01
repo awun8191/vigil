@@ -273,6 +273,128 @@ env -u PYTHONPATH uv run python ../scripts/bench/embed_bench.py
 
 The first run downloads and verifies the artifact. A later run uses the cache.
 
+## 4b. Re-measurement after the memory repair
+
+This section repeats the measurement of section 4 after a change to the memory
+model. The script, the seed, and the chunk builder are the same. The two rows
+of the table below came one after the other. The two rows saw the same loaded
+host. The load average was 8.15 for the first row and 8.46 for the second.
+
+The measurement uses 100 chunks. The loaded host cannot finish 1000 chunks in a
+practical time. The mean chunk has 447 tokens, which is the size of section 4.
+
+| Item | Before, in-process | After, subprocess |
+| --- | --- | --- |
+| Peak RSS of the worker during encoding | 320.1 MB | 107.7 MB |
+| Peak RSS of the child | not used | 233.9 MB |
+| RSS after idle unload | 185.7 MB | 22.5 MB |
+| RSS after unload and `gc.collect()` | 185.7 MB | 74.3 MB |
+| Throughput at a mean of 447 tokens | 0.617 chunks per second | 0.506 chunks per second |
+| ONNX session in the worker after the encode | yes | no |
+
+The before row sets `EMBEDDING_ENCODE_SUBPROCESS=0`. The after row uses the
+default value, `EMBEDDING_ENCODE_SUBPROCESS=1`. The commands are:
+
+```bash
+cd backend
+env -u PYTHONPATH EMBEDDING_ENCODE_SUBPROCESS=0 uv run python ../scripts/bench/embed_bench.py --chunks 100
+env -u PYTHONPATH uv run python ../scripts/bench/embed_bench.py --chunks 100
+```
+
+The throughput is lower than the 4.08 chunks per second of section 4, because
+the host is loaded. Other agents on the host did benchmarks, test suites, and
+container work at the same time. The two rows are comparable to each other. The
+two rows are not comparable to section 4.
+
+The bench script reads only the resident set of the worker. The child peak comes
+from a second test of the same 100 chunk set through `LocalEmbeddingModel`,
+which reads `RUSAGE_CHILDREN`. The value after the idle unload is volatile. The
+kernel reclaimed pages at that moment, and the read after `gc.collect()` was
+74.3 MB.
+
+### 4b.1 What changed
+
+`backend/src/integrations/embedding/local.py`:
+
+* A short lived child does the encode by default. The child holds the ONNX
+  session, does the planned batches, writes the vectors, and exits. The worker
+  keeps the tokenizer only. The pages of the batch go back to the operating
+  system.
+* The idle sweeper cannot release a session while an encode is active. On this
+  loaded host, 1000 chunks took longer than the 300 second idle window. The
+  sweeper released the session in the middle of the work. The bench stopped
+  with `AttributeError: 'NoneType' object has no attribute 'run'` after 345
+  seconds. The guard removes that failure.
+* The model, the artifact, the checksum, the pooling, and the prefixes do not
+  change. `LocalEmbeddingModel` continues to satisfy the `EmbeddingModel`
+  Protocol.
+
+### 4b.2 The batching decision does not hold
+
+The card asked for buckets of a fixed token multiple, for example 64. Three
+measurements refuse that change.
+
+**1. The artifact is not invariant to padding or to the batch.** The pinned int8
+artifact is dynamically quantized. The activation scale of a batch comes from
+the largest activation in that batch. A longer sequence or a second row changes
+the scale, and all vectors move.
+
+| Comparison | Largest per-dimension difference |
+| --- | --- |
+| One row at 473 tokens against the same row padded to 512 | 1.354e-02 |
+| Three rows at 512 against the same rows alone at 512 | 1.559e-02 |
+| Row A alone against row A in a batch with row B | 1.153e-02, cosine 0.997151732 |
+| Row A alone against row A in a batch with a copy of A | 0.000e+00 |
+
+A copy of a row keeps the range, which is why the last row matches. The encoder
+applies the attention mask: an all-ones mask moves the vector by 0.147. The
+target of 1e-5 per dimension cannot hold for a padded batch or a multi row
+batch of this artifact. The test `test_padded_batch_matches_solo` asserts the
+target and carries an expected failure mark, with the measured value as the
+cause.
+
+**2. The existing suite forbids coarse buckets.**
+`test_batch_cap_keeps_the_same_vectors` encodes five texts with a batch cap of 4
+and of 1 at one padded width of 64. It asserts `np.allclose(atol=1e-6)`.
+Measured: largest difference 1.462e-02, mean 2.731e-03, cosine minimum
+0.995538592. The assertion `np.allclose(atol=1e-6)` does not hold. A bucket
+change breaks a test that this card must not weaken.
+
+**3. The 40 chunks per second target is above the peak of this host.** A 445
+token chunk takes 22.55 GFLOP. The count is 12 layers, hidden 384, intermediate
+1536, and the attention terms. This host has two vCPUs of a Xeon Platinum 8259CL
+at 2.5 GHz. `/proc/cpuinfo` shows AVX-512 F and no VNNI. The FP32 peak is 320
+GFLOP/s for the two cores. The absolute ceiling is 14.2 chunks per second at 100
+percent of peak. The recorded 4.08 chunks per second is 29 percent of peak,
+which is a realistic ONNX Runtime figure. The target of 40 chunks per second is
+902 GFLOP/s, 2.8 times the peak. The figure of 82 to 105 chunks per second in
+the card is 5.8 to 7.4 times the peak.
+
+The batching test measured in one worker, with the two rows in turn, and with
+the load at 5.0 to 5.5:
+
+| Strategy | Batches | Chunks per second, row 1 / row 2 |
+| --- | --- | --- |
+| Exact length, 1024 token cap | 20 | 0.95 / 0.69 |
+| Bucket 64, 1024 token cap | 13 | 1.02 / 0.65 |
+| Bucket 64, 16384 token cap, 32 rows | 2 | 1.30 / 0.89 |
+
+The count of batches falls from 20 to 2 with no matching gain. The limiter is
+the arithmetic, not the count of batches.
+
+### 4b.3 Verdicts
+
+| Target | Before | After | Verdict |
+| --- | --- | --- | --- |
+| Peak RSS below 350 MB | 320.1 MB at 100 chunks, 395.2 MB at 1000 chunks | 107.7 MB in the worker | PASS for the worker, with little margin. The worker and the child together hold about 335 MB at one time. |
+| Idle RSS after unload | 185.7 MB | 22.5 MB | PASS. The subprocess option was used. |
+| 40 chunks per second at a mean of 445 tokens | 4.08 at low load, 0.617 at load 8.15 | 0.506 at load 8.46 | FAIL. The target is 2.8 times the compute peak of this host. |
+| A padded batch within 1e-5 of a solo encode | not asserted | 1.4e-02 | FAIL. The artifact does not hold that property. |
+
+The memory target is met. The throughput target is not met, and no batching
+strategy can meet it on this host. The batching strategy stays as it is until
+the artifact or the host changes.
+
 ## 5. Measurement 4: sandbox on a live daemon
 
 Target: the sandbox suite runs with no skip, and the daemon shows the documented flags.
