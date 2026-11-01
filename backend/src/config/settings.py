@@ -2,8 +2,19 @@
 from functools import lru_cache
 import json
 from typing import Literal, Union
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# Public values that must never protect a deployment. The first value is the
+# historical default. The second is the placeholder in deploy/.env.example.
+DEFAULT_SECRET_KEY = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+ENV_EXAMPLE_SECRET_KEY = "CHANGEME-generate-with-openssl-rand-hex-32"
+UNSAFE_SECRET_KEYS = frozenset({DEFAULT_SECRET_KEY, ENV_EXAMPLE_SECRET_KEY})
+
+
+def is_unsafe_secret_key(value: str) -> bool:
+    """Return True when a secret key is empty, public, or an example placeholder."""
+    return not value.strip() or value in UNSAFE_SECRET_KEYS
 
 
 class Settings(BaseSettings):
@@ -32,7 +43,7 @@ class Settings(BaseSettings):
 
     # --- Cryptography & Security ---
     SECRET_KEY: str = Field(
-        default="0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        default=DEFAULT_SECRET_KEY,
         description="Master secret key for AES-256-GCM credential encryption (32 bytes or 64 hex characters)",
     )
     PAIRING_CODE_TTL_SECONDS: int = 300
@@ -54,6 +65,21 @@ class Settings(BaseSettings):
                     pass
             return [origin.strip() for origin in v_stripped.split(",") if origin.strip()]
         return v
+
+    @model_validator(mode="after")
+    def reject_unsafe_secret_key_in_production(self) -> "Settings":
+        """Refuse a production configuration that keeps a published secret key.
+
+        The default key and the .env.example placeholder are public. A deployment
+        that encrypts credentials with either key protects nothing.
+        """
+        if self.APP_ENV == "production" and is_unsafe_secret_key(self.SECRET_KEY):
+            raise ValueError(
+                "SECRET_KEY is the public default or the .env.example placeholder. "
+                "Set SECRET_KEY to a unique value before booting in production. "
+                "Generate one with: openssl rand -hex 32"
+            )
+        return self
 
     # --- Tiered Model Architecture ---
     # Tier 1: Jev Decision Classifier
