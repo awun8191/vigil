@@ -594,11 +594,37 @@ async def test_chat_http_endpoints(test_app) -> None:
 
 @pytest.mark.asyncio
 async def test_runs_http_endpoints(test_app) -> None:
+    """Drive the runs routes through one service over a journal.
+
+    The service holds no state, so the test overrides the provider with one
+    service instance. A run that one request creates is visible to the next
+    request because the journal holds the row, not the service.
+    """
+    from src.dependencies import get_runs_service
+    from src.modules.runs.repository import AgentConfigDTO
+
+    settings = Settings(APP_ENV="test")
+    service = RunsService(session=None, settings=settings)
+    config = await service.save_agent_config(
+        AgentConfigDTO(
+            id=uuid4(),
+            name="http-endpoint-agent",
+            system_prompt="You answer briefly.",
+            model="scripted-model",
+            tools=["read_file"],
+            skills=[],
+            memory_scopes=["global"],
+            approval_policy={},
+            limits={"max_cost_micros": 1000},
+        )
+    )
+    test_app.dependency_overrides[get_runs_service] = lambda: service
+
     auth_headers = {"Authorization": "Bearer vgt_testtoken"}
     async with httpx.AsyncClient(transport=ASGITransport(app=test_app), base_url="http://test") as client:
         res_run = await client.post(
             "/api/v1/runs",
-            json={"config_id": str(uuid4()), "initial_prompt": "analyze data"},
+            json={"config_id": str(config.id), "initial_prompt": "analyze data"},
             headers=auth_headers,
         )
         assert res_run.status_code == 201

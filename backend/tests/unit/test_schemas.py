@@ -1,4 +1,4 @@
-"""Unit tests validating all 18 SQLAlchemy 2.0 declarative models and metadata contracts."""
+"""Unit tests validating all 19 SQLAlchemy 2.0 declarative models and metadata contracts."""
 from __future__ import annotations
 
 import uuid
@@ -10,6 +10,7 @@ from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.schema import CreateIndex
 
 from src.schemas import (
+    AgentConfigModel,
     ApprovalModel,
     ArtifactModel,
     Base,
@@ -42,6 +43,7 @@ EXPECTED_TABLES = {
     "cards",
     "card_actions",
     "threads",
+    "agent_configs",
     "runs",
     "run_workspaces",
     "messages",
@@ -53,11 +55,11 @@ EXPECTED_TABLES = {
 }
 
 
-def test_central_schema_exports_all_eighteen_tables() -> None:
-    """Verify that exactly 18 tables are registered in the centralized Base metadata."""
+def test_central_schema_exports_all_nineteen_tables() -> None:
+    """Verify that exactly 19 tables are registered in the centralized Base metadata."""
     registered_tables = set(Base.metadata.tables.keys())
     assert registered_tables == EXPECTED_TABLES
-    assert len(registered_tables) == 18
+    assert len(registered_tables) == 19
 
 
 def test_models_map_to_expected_table_names() -> None:
@@ -81,6 +83,7 @@ def test_models_map_to_expected_table_names() -> None:
         MemoryChunkModel: "memory_chunks",
         JobModel: "jobs",
         IdempotencyRecordModel: "idempotency_records",
+        AgentConfigModel: "agent_configs",
     }
     for model, expected_table in model_table_map.items():
         assert model.__tablename__ == expected_table
@@ -130,11 +133,12 @@ def test_foreign_key_cascades_and_set_null() -> None:
         assert fk.target_fullname == target
         assert fk.ondelete.upper() == "CASCADE"
 
-    # 3 foreign keys must specify SET NULL
+    # 4 foreign keys must specify SET NULL
     expected_set_null_fks = {
         ("cards", "item_id"): "connector_items.id",
         ("runs", "card_id"): "cards.id",
         ("runs", "parent_run_id"): "runs.id",
+        ("runs", "config_id"): "agent_configs.id",
     }
     for (tbl_name, col_name), target in expected_set_null_fks.items():
         tbl = Base.metadata.tables[tbl_name]
@@ -240,10 +244,11 @@ def test_memory_chunks_embedding_metadata_and_scope_parents() -> None:
     assert card_fk.ondelete.upper() == "CASCADE"
     assert chunks.c.card_id.nullable is True
 
-    # agent_configs does not exist yet, so agent_config_id carries no foreign key
+    # V-06 adds the agent_configs table for runs.config_id. The memory scope
+    # parent keeps a plain UUID until a later card adds its foreign key.
     assert chunks.c.agent_config_id.nullable is True
     assert not any(fk.parent.name == "agent_config_id" for fk in chunks.foreign_keys)
-    assert "agent_configs" not in Base.metadata.tables
+    assert "agent_configs" in Base.metadata.tables
 
     checks = {
         c.name: str(c.sqltext)

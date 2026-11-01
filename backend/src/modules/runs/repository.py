@@ -29,7 +29,7 @@ class RunDTO:
     card_id: UUID | None
     parent_run_id: UUID | None
     depth: int
-    status: str  # queued, running, awaiting_approval, awaiting_background_job, stale_thread_paused, completed, failed
+    status: str  # queued, running, awaiting_approval, awaiting_background_job, completed, failed
     started_at: datetime
     ended_at: datetime | None
     token_usage: dict[str, int]
