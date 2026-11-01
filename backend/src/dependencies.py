@@ -287,7 +287,7 @@ class _StubLLMClient:
         texts: list[str],
         model: str | None = None,
     ) -> list[list[float]]:
-        return [[0.0] * 1536 for _ in texts]
+        return [[0.0] * 384 for _ in texts]
 
     async def is_healthy(self) -> bool:
         return True

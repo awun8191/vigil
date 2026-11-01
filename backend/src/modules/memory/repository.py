@@ -31,6 +31,7 @@ class MemoryChunkCreateDTO:
     embedding: list[float]
     embedding_model: str
     summary: str | None = None
+    embedding_dim: int = 384
 
 
 @dataclass(frozen=True)
@@ -76,7 +77,7 @@ class MemoryRepository(Protocol):
 
         Args:
             user_id: Owner user UUID.
-            query_embedding: Vector embedding of search query (1536-dim).
+            query_embedding: Vector embedding of search query (384-dim).
             scopes: Allowed scopes to filter (e.g. ['global', 'card']).
             candidate_k: Initial cosine similarity candidate set size.
             top_n: Final ranked results to return.

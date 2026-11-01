@@ -112,13 +112,17 @@ class LLMClient:
         texts: list[str],
         model: str | None = None,
     ) -> list[list[float]]:
-        """Generate 1536-dimensional float vector embeddings for text chunks."""
+        """Generate deterministic 384-dimensional vectors for offline tests.
+
+        The production embedding path is the local ONNX model in
+        src.integrations.embedding. This stub exists for tests only.
+        """
         # Offline / test deterministic embedding: unit vector with hash seed
         embeddings: list[list[float]] = []
         for t in texts:
-            # Return deterministic 1536 float array
+            # Return deterministic 384 float array to match memory_chunks.embedding
             val = float(abs(hash(t)) % 1000) / 1000.0
-            vec = [0.0] * 1536
+            vec = [0.0] * self.settings.EMBEDDING_DIMENSIONS
             vec[0] = val
             vec[1] = 1.0 - val
             embeddings.append(vec)

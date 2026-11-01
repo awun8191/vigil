@@ -335,8 +335,8 @@ async def test_memory_service_lifecycle() -> None:
         scope="global",
         content="User likes dark theme",
         source_message_ids=[],
-        embedding=[0.1] * 1536,
-        embedding_model="text-embedding-3-small",
+        embedding=[0.1] * 384,
+        embedding_model="bge-small-en-v1.5",
     )
     chunk = await service.save_chunk(chunk_dto)
     assert chunk.content == "User likes dark theme"

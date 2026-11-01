@@ -35,8 +35,8 @@ def test_default_settings():
     assert settings.FAST_LLM_MODEL == "gpt-4o-mini"
     assert "openai.com" in settings.REASONING_LLM_BASE_URL
     assert settings.REASONING_LLM_MODEL == "gpt-4o"
-    assert settings.EMBEDDING_MODEL == "text-embedding-3-small"
-    assert settings.EMBEDDING_DIMENSIONS == 1536
+    assert settings.EMBEDDING_MODEL == "bge-small-en-v1.5"
+    assert settings.EMBEDDING_DIMENSIONS == 384
 
     # Sandbox defaults
     assert "docker.sock" in settings.DOCKER_HOST

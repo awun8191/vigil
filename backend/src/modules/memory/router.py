@@ -1,6 +1,6 @@
 """Memory router factory providing pgvector semantic memory search and chunk management."""
 from uuid import UUID
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, Query, status
 
 from src.config.exceptions import NotFoundError
 from src.config.settings import Settings
@@ -16,16 +16,53 @@ from src.modules.memory.data import (
 from src.modules.memory.repository import MemoryRepository
 
 
+def _to_items(results: list) -> list[MemorySearchResultItem]:
+    """Map scored DTOs to wire items, including similarity, final score, and age."""
+    return [
+        MemorySearchResultItem(
+            id=result.id,
+            content=result.content,
+            summary=result.summary,
+            similarity=result.similarity,
+            age_days=result.age_days,
+            final_score=result.final_score,
+        )
+        for result in results
+    ]
+
+
 def build_memory_router(settings: Settings) -> APIRouter:
     """
     Build and configure memory APIRouter instance.
     Endpoints:
+      - GET /api/v1/memory/search
       - POST /api/v1/memory/search
       - GET /api/v1/memory/chunks/{id}
       - PATCH /api/v1/memory/chunks/{id}/exclude
       - DELETE /api/v1/memory/chunks/{id}
     """
     router = APIRouter(prefix="/memory", tags=["Memory"])
+
+    @router.get(
+        "/search",
+        response_model=MemorySearchResponse,
+        status_code=status.HTTP_200_OK,
+        summary="Search Long-Term Memory",
+    )
+    async def search_memory_get(
+        q: str = Query(..., min_length=1, max_length=2000),
+        scopes: list[str] = Query(default=["global"]),
+        top_n: int = Query(default=8, ge=1, le=50),
+        service: MemoryRepository = Depends(get_memory_service),
+        user: UserDTO = Depends(get_current_user),
+    ) -> MemorySearchResponse:
+        results = await service.search_memory(  # type: ignore[attr-defined]
+            user_id=user.id,
+            query=q,
+            scopes=scopes,
+            top_n=top_n,
+        )
+        return MemorySearchResponse(results=_to_items(results), query=q)
 
     @router.post(
         "/search",
@@ -44,18 +81,9 @@ def build_memory_router(settings: Settings) -> APIRouter:
             scopes=payload.scopes,
             top_n=payload.top_n,
         )
-        items = [
-            MemorySearchResultItem(
-                id=r.id,
-                content=r.content,
-                summary=r.summary,
-                similarity=r.similarity,
-                age_days=r.age_days,
-                final_score=r.final_score,
-            )
-            for r in results
-        ]
-        return MemorySearchResponse(results=items, query=payload.query)
+        return MemorySearchResponse(
+            results=_to_items(results), query=payload.query
+        )
 
     @router.get(
         "/chunks/{chunk_id}",
@@ -95,8 +123,14 @@ def build_memory_router(settings: Settings) -> APIRouter:
     async def delete_chunk(
         chunk_id: UUID,
         service: MemoryRepository = Depends(get_memory_service),
-        _user: UserDTO = Depends(get_current_user),
+        user: UserDTO = Depends(get_current_user),
     ) -> None:
-        await service.delete_chunk(chunk_id)
+        chunk = await service.get_chunk_by_id(chunk_id)
+        # A chunk of another user is not found, so the endpoint never leaks one.
+        if not chunk or chunk.user_id != user.id:
+            raise NotFoundError(f"Memory chunk {chunk_id} not found")
+        deleted = await service.delete_chunk(chunk_id)
+        if not deleted:
+            raise NotFoundError(f"Memory chunk {chunk_id} not found")
 
     return router
