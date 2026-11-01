@@ -49,6 +49,21 @@ The interface features two meticulously crafted themes:
 - **Ambient Shadows:** Multi-layered diffuse shadows (`shadow-[0_20px_50px_rgba(0,0,0,0.25)]`) eliminating harsh 1px borders.
 - **Spring Physics:** Motion transitions use spring curves (`stiffness: 400, damping: 30`, or `cubic-bezier(0.25, 1, 0.5, 1)`).
 
+### 2.4 Iconography Standard (Strict Rule: Zero Emojis)
+- **Library:** `lucide-react` exclusively.
+- **Strict Directive:** **Zero emojis as UI icons anywhere in the application.** Every action, navigation item, status indicator, and attachment trigger must use crisp, high-quality vector icons from `lucide-react` (styled with `strokeWidth={1.5}` or `strokeWidth={1.75}` for light Apple-esque precision).
+- **Icon Mapping:**
+  - Home: `<Home size={18} strokeWidth={1.5} />`
+  - Chat: `<MessageSquare size={18} strokeWidth={1.5} />`
+  - Settings: `<Settings size={18} strokeWidth={1.5} />`
+  - Attach / Upload: `<Plus size={18} strokeWidth={1.5} />` or `<Paperclip size={18} strokeWidth={1.5} />`
+  - Audio / Voice: `<Mic size={18} strokeWidth={1.5} />`
+  - Send: `<ArrowUp size={18} strokeWidth={1.75} />`
+  - Action / Approval: `<Check size={16} strokeWidth={1.75} />`, `<ExternalLink size={14} strokeWidth={1.5} />`
+  - Reminders: `<Clock size={16} strokeWidth={1.5} />`
+  - Routines / Workflows: `<Sparkles size={16} strokeWidth={1.5} />` or `<Zap size={16} strokeWidth={1.5} />`
+  - Theme Toggle: `<Sun size={16} strokeWidth={1.5} />` and `<Moon size={16} strokeWidth={1.5} />`
+
 ---
 
 ## 3. Global Navigation: The Hovering Side Pill Dock
@@ -58,10 +73,10 @@ There is **no top navbar**. The top of the screen remains completely airy and un
 ### 3.1 Dock Anatomy
 - **Positioning:** Hovering vertically along the left viewport edge, completely detached from the screen boundaries (`left-6`, vertically centered or floating in upper-middle).
 - **Form:** An ultra-compact, rounded squircle pill (`rounded-full`, `p-2`, `backdrop-blur-2xl`, glass elevation).
-- **Core Items (3 only):**
-  1. **Home (`⌂`):** Navigates to the proactive task briefing.
-  2. **Chat (`💬`):** Navigates to the conversational canvas.
-  3. **Settings (`⚙`):** Opens the floating frosted settings sheet.
+- **Core Items (3 only, Lucide vector icons):**
+  1. **Home (`Home` icon):** Navigates to the proactive task briefing.
+  2. **Chat (`MessageSquare` icon):** Navigates to the conversational canvas.
+  3. **Settings (`Settings` icon):** Opens the floating frosted settings sheet.
 - **Active State:** The active item receives a glowing sky-blue background capsule with a smooth spring transition (`layoutId="activeDockIndicator"`).
 - **Mobile Adaptation:** On viewport widths `< 768px`, the dock relocates to the bottom center of the screen as a floating iOS-style bottom pill bar, preserving one-thumb ergonomics.
 
