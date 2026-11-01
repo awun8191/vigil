@@ -189,6 +189,56 @@ def _resolve_service_dependency(module_name: str, provider_name: str) -> Callabl
 
 
 # =============================================================================
+# Composition Root: Memory and Compaction
+# =============================================================================
+#
+# These two services meet here. The memory service needs the local embedder, and
+# the compaction service needs the Jev client, the Fast LLM client, and a run
+# step recorder. The module providers stay unchanged. This module supplies the
+# process-wide dependencies that the module constructors leave open.
+
+def get_memory_service(
+    session: AsyncSession = Depends(get_db_session),
+    settings: Settings = Depends(get_settings),
+) -> Any:
+    """Build the memory service with the process-wide local embedder.
+
+    The embedder is a lazy singleton. A request and an index job share one ONNX
+    session, so the process loads the model once.
+    """
+    from src.integrations.embedding import get_local_embedder
+    from src.modules.memory.service import MemoryService
+
+    return MemoryService(
+        session=session,
+        settings=settings,
+        embedder=get_local_embedder(settings),
+    )
+
+
+def get_compaction_service(
+    session: AsyncSession = Depends(get_db_session),
+    settings: Settings = Depends(get_settings),
+) -> Any:
+    """Build the compaction service with every tier client and a step recorder.
+
+    Tier 1 needs the Jev client. Tier 2 needs the Fast LLM client. The summary
+    trace needs the recorder. A missing client makes a real compaction fail when
+    units leave the context, so all three are wired here.
+    """
+    from src.modules.compaction.service import CompactionService
+    from src.modules.runs.service import RunsService
+
+    return CompactionService(
+        session=session,
+        settings=settings,
+        jev_client=get_jev_client(settings=settings),
+        fast_llm=get_llm_client(settings=settings),
+        run_steps=RunsService(session=session, settings=settings),
+    )
+
+
+# =============================================================================
 # 14 Domain Module Service Providers
 # =============================================================================
 
@@ -200,8 +250,6 @@ get_runs_service = _resolve_service_dependency("runs", "get_runs_service")
 get_approvals_service = _resolve_service_dependency("approvals", "get_approvals_service")
 get_chat_service = _resolve_service_dependency("chat", "get_chat_service")
 get_artifacts_service = _resolve_service_dependency("artifacts", "get_artifacts_service")
-get_memory_service = _resolve_service_dependency("memory", "get_memory_service")
-get_compaction_service = _resolve_service_dependency("compaction", "get_compaction_service")
 get_skills_service = _resolve_service_dependency("skills", "get_skills_service")
 get_connectors_service = _resolve_service_dependency("connectors", "get_connectors_service")
 get_settings_service = _resolve_service_dependency("settings", "get_settings_service")

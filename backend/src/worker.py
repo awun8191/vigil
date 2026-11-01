@@ -3,13 +3,48 @@ import asyncio
 import os
 import signal
 import sys
-from typing import NoReturn
+from typing import Any, Awaitable, Callable
 from uuid import uuid4
 
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from src.config.logging import configure_logging, get_logger
-from src.config.settings import get_settings
-from src.dependencies import get_db_session
+from src.config.settings import Settings, get_settings
+from src.dependencies import get_db_session, get_memory_service
+from src.modules.jobs.repository import JobDTO
 from src.modules.jobs.service import JobsService
+
+
+async def handle_index_memory(
+    payload: dict[str, Any],
+    session: AsyncSession,
+    settings: Settings,
+) -> None:
+    """Turn the unindexed turns of one session into memory chunks."""
+    memory_service = get_memory_service(session=session, settings=settings)
+    await memory_service.run_index_job(payload)
+
+
+JobHandler = Callable[[dict[str, Any], AsyncSession, Settings], Awaitable[None]]
+
+# Job type to handler. A type that has no handler keeps the poll loop moving, so
+# one unknown type cannot block the queue.
+JOB_HANDLERS: dict[str, JobHandler] = {
+    "index_memory": handle_index_memory,
+}
+
+
+async def dispatch_job(
+    job: JobDTO,
+    session: AsyncSession,
+    settings: Settings,
+) -> bool:
+    """Run the handler of one claimed job. Return False when no handler exists."""
+    handler = JOB_HANDLERS.get(job.type)
+    if handler is None:
+        return False
+    await handler(dict(job.payload or {}), session, settings)
+    return True
 
 
 async def run_worker() -> None:
@@ -45,9 +80,10 @@ async def run_worker() -> None:
                 if job:
                     logger.info("Claimed job", job_id=str(job.id), job_type=job.type, attempt=job.attempts)
                     try:
-                        # Job dispatch logic
-                        # (e.g. index_memory, connector_sync, compaction)
-                        await asyncio.sleep(0.01)  # Simulate non-blocking task
+                        handled = await dispatch_job(job, session, settings)
+                        if not handled:
+                            # No handler is registered for this job type yet.
+                            await asyncio.sleep(0.01)
                         await jobs_service.mark_completed(job.id)
                         logger.info("Completed job", job_id=str(job.id), job_type=job.type)
                     except Exception as err:
