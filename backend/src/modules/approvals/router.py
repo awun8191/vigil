@@ -34,6 +34,7 @@ def build_approvals_router(settings: Settings) -> APIRouter:
         service: ApprovalsRepository = Depends(get_approvals_service),
         _device: DeviceDTO = Depends(get_current_device),
     ) -> list[ApprovalResponse]:
+        """Return every approval that still waits for a user decision."""
         pending = await service.list_pending_approvals()
         return [ApprovalResponse.model_validate(p) for p in pending]
 
@@ -56,7 +57,7 @@ def build_approvals_router(settings: Settings) -> APIRouter:
     @router.post(
         "/{approval_id}/decision",
         response_model=ApprovalDecisionResponse,
-        status_code=status.HTTP_200_OK,
+        status_code=status.HTTP_202_ACCEPTED,
         summary="Submit Approval Decision",
     )
     async def submit_decision(
@@ -65,6 +66,13 @@ def build_approvals_router(settings: Settings) -> APIRouter:
         service: ApprovalsRepository = Depends(get_approvals_service),
         _device: DeviceDTO = Depends(get_current_device),
     ) -> ApprovalDecisionResponse:
+        """
+        Record one decision and wake the paused run.
+
+        The response is 202 and carries no tool output, because the worker
+        process executes an approved tool after it claims the resume job. A
+        second decision of the same approval returns 409.
+        """
         return await service.process_decision(  # type: ignore[attr-defined]
             approval_id=approval_id,
             decision=payload.decision,
