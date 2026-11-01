@@ -21,6 +21,7 @@ from src.modules.jobs.service import (
 )
 from src.worker import (
     JOB_HANDLERS,
+    UNWIRED_JOB_TYPES,
     JobContext,
     JobHandlerUnavailableError,
     UnknownJobTypeError,
@@ -207,12 +208,14 @@ async def test_handler_error_propagates() -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "job_type",
-    sorted({"triage_item", "poll_connector", "cleanup_sandbox", "reindex_memory"}),
-)
+@pytest.mark.parametrize("job_type", sorted(set(JOB_TYPE_PRIORITIES) & UNWIRED_JOB_TYPES))
 async def test_default_handlers_never_report_success(job_type: str) -> None:
-    """Verify no default handler returns without doing its work."""
+    """Verify a handler without an executor raises instead of returning.
+
+    The set comes from the worker, not from this file, so a handler that gains
+    an executor leaves the set and a handler that loses one enters it. The
+    coverage test above keeps the table and the priority list equal.
+    """
     with pytest.raises(JobHandlerUnavailableError) as exc_info:
         await JOB_HANDLERS[job_type](make_job(job_type), make_context())
     assert exc_info.value.job_type == job_type

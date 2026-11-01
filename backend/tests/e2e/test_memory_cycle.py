@@ -250,12 +250,7 @@ async def test_fact_recalled_next_session() -> None:
                 assert claimed is not None
                 assert claimed.type == "index_memory"
                 context = JobContext(settings=settings, session=session)
-                try:
-                    await dispatch_job(claimed, context)
-                except Exception as exc:
-                    raise AssertionError(
-                        f"the index_memory handler failed: {exc}"
-                    ) from exc
+                await dispatch_job(claimed, context)
                 await jobs.mark_completed(claimed.id)
 
         assert await _count_chunks(scratch.dsn, user_id) == len(all_sessions)

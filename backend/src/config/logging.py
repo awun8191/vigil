@@ -8,6 +8,10 @@ import structlog
 # Context variable storing the active request's correlation ID
 _request_id_ctx: ContextVar[str | None] = ContextVar("request_id_ctx", default=None)
 
+# The root handler that the last call to configure_logging installed. The
+# function removes this one handler and leaves the others in place.
+_installed_handler: logging.Handler | None = None
+
 
 def set_request_id(request_id: str) -> Token[str | None]:
     """Bind correlation ID to context variable for the active task/coroutine."""
@@ -44,6 +48,8 @@ def configure_logging(
     Configure unified structlog and standard library logging pipeline.
     Routes stdlib loggers through ProcessorFormatter for consistent JSON/console output.
     """
+    global _installed_handler
+
     renderer: structlog.types.Processor
     if log_format == "console":
         renderer = structlog.dev.ConsoleRenderer(colors=False)
@@ -81,7 +87,13 @@ def configure_logging(
     handler.setFormatter(formatter)
 
     root_logger = logging.getLogger()
-    root_logger.handlers = [handler]
+    # Remove only the handler of an earlier call. This function is idempotent,
+    # and it keeps the handlers that other libraries installed on the root
+    # logger. An assignment to root_logger.handlers would delete them.
+    if _installed_handler is not None:
+        root_logger.removeHandler(_installed_handler)
+    root_logger.addHandler(handler)
+    _installed_handler = handler
     numeric_level = getattr(logging, log_level.upper(), logging.INFO)
     root_logger.setLevel(numeric_level)
 

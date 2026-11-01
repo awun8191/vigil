@@ -24,8 +24,11 @@ from src.schemas import Base
 config = context.config
 
 # Interpret the config file for Python logging.
+# ``disable_existing_loggers`` stays False. The default True silences every
+# logger that already exists, so a migration inside a running process stops the
+# application log. Alembic only needs its own handlers here.
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 # target metadata for 'autogenerate' support
 target_metadata = Base.metadata

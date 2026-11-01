@@ -230,6 +230,16 @@ JOB_HANDLERS: dict[str, JobHandler] = {
 }
 """The dispatch table. It holds one handler for every type in JOB_TYPE_PRIORITIES."""
 
+UNWIRED_JOB_TYPES: frozenset[str] = frozenset(
+    {"triage_item", "poll_connector", "cleanup_sandbox", "reindex_memory"}
+)
+"""Job types whose handler has no executor in this worker build.
+
+Each handler here raises JobHandlerUnavailableError, so the queue records a
+failure and never a success. Remove a type from this set when its executor
+lands. The test suite reads this set, so the two cannot drift apart.
+"""
+
 
 def resolve_handler(
     job_type: str, handlers: Mapping[str, JobHandler] | None = None
