@@ -10,6 +10,16 @@ from src.config.settings import Settings
 
 logger = logging.getLogger("virgil.router")
 
+
+class RouterMountError(RuntimeError):
+    """Raised when a listed module router cannot be imported or built.
+
+    The factory fails at startup on purpose. A silent skip removes a module API
+    without a message. That defect is not easy to see. The tests stay green in a
+    different import sequence.
+    """
+
+
 # Mapping of module names to their factory function names
 MODULE_FACTORIES: list[tuple[str, str]] = [
     ("health", "build_health_router"),
@@ -34,11 +44,17 @@ def create_api_router(settings: Settings) -> APIRouter:
     Root API router factory aggregating all 14 domain module router builders.
     Enforces dynamic configuration binding and prevents global router state leaks.
 
+    A missing module router is a startup error. The factory never skips a
+    listed module.
+
     Args:
         settings: Application Settings instance.
 
     Returns:
-        APIRouter with prefix set to settings.API_V1_PREFIX and all available sub-routers mounted.
+        APIRouter with prefix set to settings.API_V1_PREFIX and all 14 sub-routers mounted.
+
+    Raises:
+        RouterMountError: If a module router cannot be imported or has no factory.
     """
     api_router = APIRouter(prefix=settings.API_V1_PREFIX)
 
@@ -46,15 +62,20 @@ def create_api_router(settings: Settings) -> APIRouter:
         module_path = f"src.modules.{module_name}.router"
         try:
             mod = importlib.import_module(module_path)
-            builder: Callable[[Settings], APIRouter] | None = getattr(mod, factory_name, None)
-            if builder and callable(builder):
-                sub_router = builder(settings)
-                api_router.include_router(sub_router)
-                logger.debug("Mounted %s router from %s", module_name, module_path)
-            else:
-                logger.debug("Router factory %s not found in %s", factory_name, module_path)
-        except (ImportError, AttributeError) as exc:
-            # Allows Milestone 2 testing before Milestone 3 domain skeletons are implemented
-            logger.debug("Module router not loaded: %s (%s)", module_path, exc)
+        except ImportError as exc:
+            logger.error("Module router import failed: %s (%s)", module_path, exc, exc_info=True)
+            raise RouterMountError(
+                f"Cannot import router module {module_path}: {exc}"
+            ) from exc
+
+        builder: Callable[[Settings], APIRouter] | None = getattr(mod, factory_name, None)
+        if builder is None or not callable(builder):
+            logger.error("Router factory %s is missing from %s", factory_name, module_path)
+            raise RouterMountError(
+                f"Module {module_path} has no callable factory {factory_name}"
+            )
+
+        api_router.include_router(builder(settings))
+        logger.debug("Mounted %s router from %s", module_name, module_path)
 
     return api_router
