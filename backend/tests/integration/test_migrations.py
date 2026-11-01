@@ -26,8 +26,31 @@ def alembic_config() -> Config:
     return cfg
 
 
+EXPECTED_TABLES = [
+    "users",
+    "devices",
+    "connected_accounts",
+    "connector_tools",
+    "connector_items",
+    "connector_sync_state",
+    "triage_decisions",
+    "cards",
+    "card_actions",
+    "threads",
+    "agent_configs",
+    "runs",
+    "run_workspaces",
+    "messages",
+    "approvals",
+    "artifacts",
+    "memory_chunks",
+    "jobs",
+    "idempotency_records",
+]
+
+
 def test_alembic_offline_sql_generation(alembic_config: Config, capsys: pytest.CaptureFixture[str]) -> None:
-    """Validate that offline SQL DDL generation produces all 16 tables, pgvector extension, and HNSW index."""
+    """Validate that offline SQL DDL generation produces all 19 tables, pgvector extension, and HNSW index."""
     output_buffer = io.StringIO()
     alembic_config.stdout = output_buffer
 
@@ -38,26 +61,8 @@ def test_alembic_offline_sql_generation(alembic_config: Config, capsys: pytest.C
     # Verify pgvector extension
     assert "CREATE EXTENSION IF NOT EXISTS vector;" in sql_text
 
-    # Verify all 16 tables exist in generated SQL
-    expected_tables = [
-        "users",
-        "devices",
-        "connected_accounts",
-        "connector_items",
-        "connector_sync_state",
-        "triage_decisions",
-        "cards",
-        "card_actions",
-        "threads",
-        "runs",
-        "messages",
-        "approvals",
-        "artifacts",
-        "memory_chunks",
-        "jobs",
-        "idempotency_records",
-    ]
-    for tbl in expected_tables:
+    # Verify all 19 tables exist in generated SQL
+    for tbl in EXPECTED_TABLES:
         assert f"CREATE TABLE {tbl}" in sql_text
 
     # Verify HNSW index and vector_cosine_ops
@@ -65,15 +70,30 @@ def test_alembic_offline_sql_generation(alembic_config: Config, capsys: pytest.C
     assert "hnsw" in sql_text.lower()
     assert "vector_cosine_ops" in sql_text
 
+    # Verify the corrections land in 0002
+    assert "ALTER TABLE memory_chunks ALTER COLUMN embedding TYPE vector(384)" in sql_text
+    assert "embedding_dim INTEGER DEFAULT 384 NOT NULL" in sql_text
+    assert "cost_micros BIGINT DEFAULT 0 NOT NULL" in sql_text
+    assert "DROP COLUMN cost_usd" in sql_text
+    assert "ADD COLUMN indexed_at TIMESTAMP WITH TIME ZONE" in sql_text
+    assert "ix_messages_unindexed ON messages (indexed_at) WHERE indexed_at IS NULL" in sql_text
+    assert "ADD COLUMN priority INTEGER DEFAULT 0 NOT NULL" in sql_text
+    assert "ADD COLUMN heartbeat_at TIMESTAMP WITH TIME ZONE" in sql_text
+    assert "CREATE INDEX ix_jobs_claim_pending ON jobs (priority DESC, run_at) WHERE status = 'pending'" in sql_text
+    assert "CREATE INDEX ix_jobs_stale_heartbeat ON jobs (status, heartbeat_at)" in sql_text
+    assert "CHECK (level IN ('read', 'local', 'external'))" in sql_text
+    assert "UNIQUE (item_id, model_version)" in sql_text
+    assert "DROP COLUMN enabled_tools" in sql_text
+
 
 @pytest.mark.asyncio
 async def test_alembic_live_upgrade_downgrade_lifecycle(alembic_config: Config) -> None:
     """
     Test live database migration lifecycle against PostgreSQL container:
     1. Upgrade to head
-    2. Verify 16 tables, vector extension, and HNSW index exist
+    2. Verify 19 tables, vector extension, HNSW index, and the corrected columns
     3. Downgrade to base
-    4. Verify all 16 tables are cleanly dropped
+    4. Verify all 19 tables are cleanly dropped
     5. Upgrade to head again (verifying idempotency)
     """
     settings = get_settings()
@@ -101,26 +121,7 @@ async def test_alembic_live_upgrade_downgrade_lifecycle(alembic_config: Config) 
             )
             tables = {row[0] for row in res.fetchall()}
             assert "alembic_version" in tables
-
-            expected_tables = {
-                "users",
-                "devices",
-                "connected_accounts",
-                "connector_items",
-                "connector_sync_state",
-                "triage_decisions",
-                "cards",
-                "card_actions",
-                "threads",
-                "runs",
-                "messages",
-                "approvals",
-                "artifacts",
-                "memory_chunks",
-                "jobs",
-                "idempotency_records",
-            }
-            assert expected_tables.issubset(tables), f"Missing tables: {expected_tables - tables}"
+            assert set(EXPECTED_TABLES).issubset(tables), f"Missing tables: {set(EXPECTED_TABLES) - tables}"
 
             # Verify vector extension
             ext_res = await conn.execute(
@@ -137,10 +138,69 @@ async def test_alembic_live_upgrade_downgrade_lifecycle(alembic_config: Config) 
             assert "hnsw" in idx_def
             assert "vector_cosine_ops" in idx_def
 
+            # Verify the 384-dimension embedding column
+            emb_res = await conn.execute(
+                sa.text(
+                    "SELECT format_type(atttypid, atttypmod) FROM pg_attribute "
+                    "WHERE attrelid = 'memory_chunks'::regclass AND attname = 'embedding';"
+                )
+            )
+            assert emb_res.scalar() == "vector(384)"
+
+            # Verify the corrected runs columns
+            runs_res = await conn.execute(
+                sa.text(
+                    "SELECT column_name FROM information_schema.columns "
+                    "WHERE table_schema = 'public' AND table_name = 'runs';"
+                )
+            )
+            run_columns = {row[0] for row in runs_res.fetchall()}
+            assert "cost_micros" in run_columns
+            assert "workspace_ref" in run_columns
+            assert "cost_usd" not in run_columns
+
+            # Verify the queue and chunking columns
+            jobs_res = await conn.execute(
+                sa.text(
+                    "SELECT column_name FROM information_schema.columns "
+                    "WHERE table_schema = 'public' AND table_name = 'jobs';"
+                )
+            )
+            job_columns = {row[0] for row in jobs_res.fetchall()}
+            assert "priority" in job_columns
+            assert "heartbeat_at" in job_columns
+
+            msg_res = await conn.execute(
+                sa.text(
+                    "SELECT column_name FROM information_schema.columns "
+                    "WHERE table_schema = 'public' AND table_name = 'messages';"
+                )
+            )
+            assert "indexed_at" in {row[0] for row in msg_res.fetchall()}
+
+            # Verify the new constraints
+            constraint_res = await conn.execute(
+                sa.text(
+                    "SELECT conname FROM pg_constraint "
+                    "WHERE conname IN ("
+                    "'ck_memory_chunks_scope_parent', 'ck_connector_tools_level', "
+                    "'uq_triage_decisions_item_model', 'uq_card_actions_card_key', "
+                    "'uq_approvals_run_tool_call');"
+                )
+            )
+            constraint_names = {row[0] for row in constraint_res.fetchall()}
+            assert constraint_names == {
+                "ck_memory_chunks_scope_parent",
+                "ck_connector_tools_level",
+                "uq_triage_decisions_item_model",
+                "uq_card_actions_card_key",
+                "uq_approvals_run_tool_call",
+            }
+
         # 3. Downgrade to base
         command.downgrade(alembic_config, "base")
 
-        # 4. Verify all 16 domain tables were dropped
+        # 4. Verify all 19 domain tables were dropped
         async with engine.connect() as conn:
             res_after = await conn.execute(
                 sa.text(
@@ -161,7 +221,7 @@ async def test_alembic_live_upgrade_downgrade_lifecycle(alembic_config: Config) 
                 )
             )
             count = res_reapply.scalar()
-            assert count == 16, f"Expected 16 tables on re-upgrade, found {count}"
+            assert count == 19, f"Expected 19 tables on re-upgrade, found {count}"
 
     finally:
         await engine.dispose()
@@ -229,16 +289,16 @@ async def test_referential_cascades_and_pgvector_query(alembic_config: Config) -
                 {"id": card_id, "uid": user_id, "iid": item_id, "typ": "email", "urg": "high", "title": "Card Title"},
             )
 
-            # 5. Insert memory chunk with 1536-dim vector
+            # 5. Insert memory chunk with a 384-dim vector
             chunk_id = uuid.uuid4()
-            vector_data = [0.01 * (i % 10) for i in range(1536)]
+            vector_data = [0.01 * (i % 10) for i in range(384)]
             vector_str = "[" + ",".join(str(v) for v in vector_data) + "]"
             await session.execute(
                 sa.text(
                     "INSERT INTO memory_chunks (id, user_id, scope, content, embedding, embedding_model) "
                     "VALUES (:id, :uid, :scope, :content, CAST(:emb AS vector), :model);"
                 ),
-                {"id": chunk_id, "uid": user_id, "scope": "user", "content": "Test memory content", "emb": vector_str, "model": "text-embedding-3-small"},
+                {"id": chunk_id, "uid": user_id, "scope": "user", "content": "Test memory content", "emb": vector_str, "model": "bge-small-en-v1.5"},
             )
 
             await session.commit()

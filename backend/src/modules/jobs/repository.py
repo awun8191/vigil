@@ -22,6 +22,8 @@ class JobDTO:
     last_error: str | None
     created_at: datetime
     updated_at: datetime
+    priority: int = 0
+    heartbeat_at: datetime | None = None
 
 
 @dataclass(frozen=True)

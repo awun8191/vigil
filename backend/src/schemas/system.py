@@ -73,10 +73,24 @@ class JobModel(Base):
         onupdate=lambda: datetime.now(timezone.utc),
         server_default=func.now(),
     )
+    priority: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=0,
+        server_default=sa.text("0"),
+    )
+    heartbeat_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
     __table_args__ = (
-        Index("ix_jobs_claim_pending", "status", "run_at"),
-        Index("ix_jobs_stale_locked", "status", "locked_at"),
+        Index(
+            "ix_jobs_claim_pending",
+            priority.desc(),
+            "run_at",
+            postgresql_where=sa.text("status = 'pending'"),
+        ),
+        Index("ix_jobs_stale_heartbeat", "status", "heartbeat_at"),
     )
 
 

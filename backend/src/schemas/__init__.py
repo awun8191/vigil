@@ -1,4 +1,4 @@
-"""Central re-export of SQLAlchemy Declarative Base and all 16 domain models."""
+"""Central re-export of SQLAlchemy Declarative Base and all 18 domain models."""
 from __future__ import annotations
 
 from src.schemas.base import Base
@@ -6,14 +6,17 @@ from src.schemas.connectors import (
     ConnectedAccountModel,
     ConnectorItemModel,
     ConnectorSyncStateModel,
+    ConnectorToolModel,
 )
 from src.schemas.identity import DeviceModel, UserModel
 from src.schemas.memory import MemoryChunkModel
 from src.schemas.runtime import (
+    AgentConfigModel,
     ApprovalModel,
     ArtifactModel,
     MessageModel,
     RunModel,
+    RunWorkspaceModel,
     ThreadModel,
 )
 from src.schemas.system import IdempotencyRecordModel, JobModel
@@ -26,6 +29,7 @@ __all__ = [
     "DeviceModel",
     # connectors.py
     "ConnectedAccountModel",
+    "ConnectorToolModel",
     "ConnectorItemModel",
     "ConnectorSyncStateModel",
     # triage.py
@@ -33,8 +37,10 @@ __all__ = [
     "CardModel",
     "CardActionModel",
     # runtime.py
+    "AgentConfigModel",
     "ThreadModel",
     "RunModel",
+    "RunWorkspaceModel",
     "MessageModel",
     "ApprovalModel",
     "ArtifactModel",

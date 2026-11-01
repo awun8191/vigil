@@ -6,7 +6,19 @@ from typing import TYPE_CHECKING, Any
 import uuid
 
 import sqlalchemy as sa
-from sqlalchemy import BigInteger, DateTime, Float, ForeignKey, Index, Integer, String, Text, func
+from sqlalchemy import (
+    BigInteger,
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+    func,
+    text,
+)
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from src.schemas.base import Base
@@ -14,6 +26,61 @@ from src.schemas.base import Base
 if TYPE_CHECKING:
     from src.schemas.identity import UserModel
     from src.schemas.triage import CardModel
+
+
+class AgentConfigModel(Base):
+    """Reusable agent template: prompt, model, tools, skills and limits.
+
+    Decision 7 of V-06 adds this table. ``runs.config_id`` points at it, so a
+    run always names the template that produced it. ``limits`` must hold
+    ``max_cost_micros``, and the check constraint enforces that key.
+    """
+
+    __tablename__ = "agent_configs"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    name: Mapped[str] = mapped_column(String(255), nullable=False, unique=True)
+    system_prompt: Mapped[str] = mapped_column(Text, nullable=False)
+    model: Mapped[str] = mapped_column(String(255), nullable=False)
+    tools: Mapped[list[str]] = mapped_column(
+        JSONB, nullable=False, default=list, server_default=sa.text("'[]'::jsonb")
+    )
+    skills: Mapped[list[str]] = mapped_column(
+        JSONB, nullable=False, default=list, server_default=sa.text("'[]'::jsonb")
+    )
+    memory_scopes: Mapped[list[str]] = mapped_column(
+        JSONB, nullable=False, default=list, server_default=sa.text("'[]'::jsonb")
+    )
+    approval_policy: Mapped[dict[str, str]] = mapped_column(
+        JSONB, nullable=False, default=dict, server_default=sa.text("'{}'::jsonb")
+    )
+    limits: Mapped[dict[str, Any]] = mapped_column(
+        JSONB,
+        nullable=False,
+        default=lambda: {"max_cost_micros": 0},
+        server_default=sa.text("'{\"max_cost_micros\": 0}'::jsonb"),
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+        server_default=func.now(),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+        server_default=func.now(),
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "limits ? 'max_cost_micros'", name="limits_max_cost_micros"
+        ),
+    )
 
 
 class ThreadModel(Base):
@@ -63,7 +130,10 @@ class RunModel(Base):
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
     config_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), nullable=True, index=True
+        UUID(as_uuid=True),
+        ForeignKey("agent_configs.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
     )
     card_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
@@ -105,12 +175,13 @@ class RunModel(Base):
         default=dict,
         server_default=sa.text("'{}'::jsonb"),
     )
-    cost_usd: Mapped[float] = mapped_column(
-        Float,
+    cost_micros: Mapped[int] = mapped_column(
+        BigInteger,
         nullable=False,
-        default=0.0,
-        server_default=sa.text("0.0"),
+        default=0,
+        server_default=sa.text("0"),
     )
+    workspace_ref: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     card: Mapped[CardModel | None] = relationship("CardModel", back_populates="runs")
     parent_run: Mapped[RunModel | None] = relationship(
@@ -170,10 +241,18 @@ class MessageModel(Base):
         default=lambda: datetime.now(timezone.utc),
         server_default=func.now(),
     )
+    indexed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
     __table_args__ = (
         Index("ix_messages_session_created", "session_id", "created_at"),
         Index("ix_messages_run_created", "run_id", "created_at"),
+        Index(
+            "ix_messages_unindexed",
+            "indexed_at",
+            postgresql_where=text("indexed_at IS NULL"),
+        ),
     )
 
     thread: Mapped[ThreadModel | None] = relationship(
@@ -224,6 +303,14 @@ class ApprovalModel(Base):
         server_default=func.now(),
     )
 
+    __table_args__ = (
+        UniqueConstraint(
+            "run_id",
+            "tool_call_id",
+            name="uq_approvals_run_tool_call",
+        ),
+    )
+
     run: Mapped[RunModel] = relationship("RunModel", back_populates="approvals")
 
 
@@ -253,3 +340,24 @@ class ArtifactModel(Base):
     )
 
     run: Mapped[RunModel] = relationship("RunModel", back_populates="artifacts")
+
+
+class RunWorkspaceModel(Base):
+    """Snapshot archive that a run owns, with its size and checksum."""
+
+    __tablename__ = "run_workspaces"
+
+    run_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("runs.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    archive_path: Mapped[str] = mapped_column(Text, nullable=False)
+    size_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    checksum: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+        server_default=func.now(),
+    )
