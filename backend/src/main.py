@@ -10,10 +10,23 @@ from fastapi.middleware.cors import CORSMiddleware
 from src.config.exceptions import register_exception_handlers
 from src.config.logging import configure_logging, get_logger
 from src.config.router import create_api_router
-from src.config.settings import Settings, get_settings
+from src.config.settings import Settings, get_settings, is_unsafe_secret_key
 from src.middlewares.idempotency import IdempotencyMiddleware
 from src.middlewares.request_id import RequestIdMiddleware
 from src.middlewares.timing import TimingMiddleware
+
+
+def assert_safe_startup_config(settings: Settings) -> None:
+    """Refuse to boot a production process that keeps a published secret key.
+
+    Settings validation raises first for this case. This guard also covers a
+    Settings object that a caller builds around validation.
+    """
+    if settings.APP_ENV == "production" and is_unsafe_secret_key(settings.SECRET_KEY):
+        raise RuntimeError(
+            "Refusing to start: SECRET_KEY is not safe for production. "
+            "Set SECRET_KEY to a unique value, for example: openssl rand -hex 32"
+        )
 
 
 @asynccontextmanager
@@ -66,6 +79,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     """
     if settings is None:
         settings = get_settings()
+
+    # 0. Refuse an unsafe production configuration before any resource is built
+    assert_safe_startup_config(settings)
 
     # 1. Initialize structured logging
     configure_logging(log_level=settings.LOG_LEVEL, log_format=settings.LOG_FORMAT)

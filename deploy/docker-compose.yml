@@ -29,10 +29,19 @@ services:
     environment:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-virgil}
       APP_ENV: ${APP_ENV:-development}
+      # No default. A missing key fails the compose command, not the boot.
+      SECRET_KEY: ${SECRET_KEY:?SECRET_KEY must be set. Generate one with openssl rand -hex 32}
       PORT: 8000
     depends_on:
       postgres:
         condition: service_healthy
+    healthcheck:
+      # Readiness, not liveness: a node without a database leaves the pool.
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/api/v1/health/ready"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
 
   worker:
     build:
@@ -44,6 +53,8 @@ services:
     environment:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-virgil}
       APP_ENV: ${APP_ENV:-development}
+      # The worker decrypts stored credentials, so it needs the same key.
+      SECRET_KEY: ${SECRET_KEY:?SECRET_KEY must be set. Generate one with openssl rand -hex 32}
     depends_on:
       postgres:
         condition: service_healthy
