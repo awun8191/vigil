@@ -1,15 +1,8 @@
 import { Suspense, lazy, useEffect, type ReactNode } from 'react';
-import {
-  BrowserRouter,
-  Navigate,
-  Outlet,
-  Route,
-  Routes,
-  useLocation,
-} from 'react-router-dom';
+import { BrowserRouter, Navigate, Outlet, Route, Routes, useLocation } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { AmbientBackground } from '@/components/layout/AmbientBackground';
-import { BrandMark } from '@/components/layout/BrandMark';
+import { HeaderBrand } from '@/components/layout/HeaderBrand';
 import { FloatingDock } from '@/components/layout/FloatingDock';
 import { api, IS_MOCK, setAuthFailureHandler } from '@/lib/api';
 import HomeRoute from '@/routes/HomeRoute';
@@ -31,18 +24,8 @@ const queryClient = new QueryClient({
 
 function AppShell() {
   return (
-    <div className="min-h-dvh">
-      <a
-        href="#main"
-        className="sr-only focus:not-sr-only focus:fixed focus:left-4 focus:top-4 focus:z-50 focus:rounded-control focus:bg-card focus:px-3 focus:py-2 focus:text-[13px]"
-      >
-        Skip to content
-      </a>
-
-      <div className="fixed left-6 top-6 z-30 max-md:left-5 max-md:top-5">
-        <BrandMark />
-      </div>
-
+    <div className="relative min-h-dvh">
+      <HeaderBrand />
       <FloatingDock />
 
       <div id="main">
@@ -50,7 +33,7 @@ function AppShell() {
       </div>
 
       {IS_MOCK ? (
-        <div className="fixed bottom-0 left-0 right-0 z-50 bg-high px-3 py-1 text-center text-[11px] font-medium tracking-[0.04em] uppercase text-inverse">
+        <div className="fixed bottom-0 left-0 right-0 z-50 bg-[var(--accent)] px-3 py-1 text-center text-[11px] font-semibold uppercase tracking-[0.08em] text-[var(--accent-ink)]">
           Simulation mode, no backend
         </div>
       ) : null}
@@ -77,7 +60,7 @@ function AuthGate({ children }: { children: ReactNode }) {
   if (status === 'loading') {
     return (
       <div className="flex min-h-dvh items-center justify-center">
-        <span className="text-[13px] text-ink-3">Connecting...</span>
+        <span className="text-[13px] text-[var(--text-muted)]">Connecting...</span>
       </div>
     );
   }

@@ -16,10 +16,11 @@ The app requires a paired device. Pairing codes are printed by the backend as an
 ## Simulation mode
 
 ```sh
-npm run dev:mock
+npm run dev          # fixtures, no backend (the default)
+npm run dev:live     # talks to the FastAPI backend on :8000
 ```
 
-Serves fixture data with no backend. This is a build-time switch (`VITE_VIGIL_MOCK=1`) and can
+`dev` serves fixture data with no backend at all. This is a build-time switch (`VITE_VIGIL_MOCK=1`) and can
 never activate at runtime: a device that loses its token must see an error, not fabricated cards.
 A persistent banner marks the mode.
 

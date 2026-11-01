@@ -1,65 +1,48 @@
-import { useState } from 'react';
 import { ChevronDown, Sparkles } from 'lucide-react';
+import { useState } from 'react';
 
-interface ThinkingCapsuleProps {
+interface Props {
   active: boolean;
-  steps?: Array<{ label: string; at: number }>;
+  summary?: string;
+  steps?: Array<{ label: string }>;
 }
 
-/**
- * Shown in the position the reply will occupy, from the moment a turn is sent until the first
- * token lands. `role="status"` is what announces it: without it the wait is silent.
- *
- * Steps are only rendered when the caller supplies them. The current backend stream emits plain
- * tokens with no step events, so in practice this stays collapsed.
- */
-export function ThinkingCapsule({ active, steps = [] }: ThinkingCapsuleProps) {
-  const [expanded, setExpanded] = useState(false);
+/** Breathing indicator occupying the position the reply will take. */
+export function ThinkingCapsule({ active, summary = 'Thinking it through', steps = [] }: Props) {
+  const [open, setOpen] = useState(false);
   if (!active) return null;
 
-  const hasSteps = steps.length > 0;
-
   return (
-    <div
-      role="status"
-      className="inline-flex flex-col gap-2 rounded-[var(--r-pill)] border border-hairline bg-card/70 px-3.5 py-2 backdrop-blur-sm"
-    >
-      <div className="flex items-center gap-2">
-        <Sparkles
-          size={14}
-          strokeWidth={1.5}
-          aria-hidden="true"
-          className="text-accent motion-safe:animate-pulse"
-        />
-        <span className="text-[13px] text-ink-2">Scanning calendar and inbox...</span>
-
-        {hasSteps ? (
-          <button
-            type="button"
-            onClick={() => setExpanded((value) => !value)}
-            aria-expanded={expanded}
-            aria-label={expanded ? 'Hide steps' : 'Show steps'}
-            className="ml-1 grid h-5 w-5 place-items-center rounded-full text-ink-3 transition-colors hover:text-ink-2"
-          >
-            <ChevronDown
-              size={14}
-              strokeWidth={1.5}
-              aria-hidden="true"
-              className={expanded ? 'rotate-180 transition-transform' : 'transition-transform'}
-            />
-          </button>
+    <div className="mb-3" role="status">
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        aria-expanded={open}
+        className="glass inline-flex items-center gap-2 rounded-full py-1.5 pl-3 pr-2.5 text-[13px] font-medium text-[var(--text-muted)] transition-transform duration-300 ease-spring hover:scale-[1.02] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]"
+      >
+        <Sparkles size={14} strokeWidth={1.5} className="animate-pulse text-[var(--accent)]" />
+        {summary}
+        {steps.length > 0 ? (
+          <ChevronDown
+            size={14}
+            strokeWidth={1.5}
+            className={`transition-transform duration-300 ease-spring ${open ? 'rotate-180' : ''}`}
+          />
         ) : null}
-      </div>
+      </button>
 
-      {expanded && hasSteps ? (
-        <ol className="space-y-1 pl-5 text-[12px] text-ink-3">
-          {steps.map((step) => (
-            <li key={`${step.label}-${step.at}`} className="list-disc">
-              {step.label}
+      {open && steps.length > 0 ? (
+        <ul className="space-y-2 pb-1 pl-3 pt-3">
+          {steps.map((s, i) => (
+            <li key={i} className="flex items-center gap-2.5 text-[13px] text-[var(--text-muted)]">
+              <span className="h-3.5 w-3.5 rounded-full border border-[var(--border)]" />
+              {s.label}
             </li>
           ))}
-        </ol>
+        </ul>
       ) : null}
     </div>
   );
 }
+
+export default ThinkingCapsule;

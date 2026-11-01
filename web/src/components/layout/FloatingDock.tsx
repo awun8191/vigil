@@ -1,68 +1,79 @@
 import { Home, MessageSquare, Settings } from 'lucide-react';
-import { NavLink, useLocation } from 'react-router-dom';
+import { motion } from 'framer-motion';
+import type { ComponentType } from 'react';
+import { useLocation, useNavigate } from 'react-router-dom';
+
+type IconType = ComponentType<{ size?: number; strokeWidth?: number }>;
 
 interface DockItem {
-  to: string;
+  id: 'home' | 'chat' | 'settings';
   label: string;
-  Icon: typeof Home;
-  end: boolean;
+  to: string;
+  Icon: IconType;
 }
 
-const ITEMS: DockItem[] = [
-  { to: '/', label: 'Home', Icon: Home, end: true },
-  { to: '/chat', label: 'Chat', Icon: MessageSquare, end: false },
-  { to: '/settings', label: 'Settings', Icon: Settings, end: false },
+const items: DockItem[] = [
+  { id: 'home', label: 'Home', to: '/', Icon: Home },
+  { id: 'chat', label: 'Chat', to: '/chat', Icon: MessageSquare },
+  { id: 'settings', label: 'Settings', to: '/settings', Icon: Settings },
 ];
 
-/**
- * The hovering side pill dock.
- *
- * Desktop: fixed to the left margin, vertically centred.
- * Mobile: bottom centre, stacked ABOVE the chat input pill. The two never share an offset, which
- * is what the first draft of the spec got wrong.
- */
+const spring = { type: 'spring' as const, stiffness: 400, damping: 30 };
+
+/** Hovering glass pill. Desktop sits in the left margin, mobile along the bottom. */
 export function FloatingDock() {
   const { pathname } = useLocation();
-  // At most one backdrop-filter layer per viewport: the settings sheet owns the blur when open.
-  const suppressBlur = pathname.startsWith('/settings');
+  const navigate = useNavigate();
+
+  const activeId: DockItem['id'] = pathname.startsWith('/settings')
+    ? 'settings'
+    : pathname.startsWith('/chat')
+      ? 'chat'
+      : 'home';
 
   return (
     <nav
       aria-label="Primary"
-      className={[
-        'fixed z-40 flex items-center gap-1 rounded-[var(--r-pill)] border border-hairline',
-        'bg-chrome p-1.5',
-        suppressBlur ? '' : 'backdrop-blur-2xl',
-        // Mobile: bottom centre, above the input pill.
-        'left-1/2 -translate-x-1/2',
-        'bottom-[calc(5.5rem+env(safe-area-inset-bottom))]',
-        // Desktop: left margin, vertically centred.
-        'md:left-6 md:translate-x-0 md:top-1/2 md:-translate-y-1/2 md:bottom-auto',
-        'md:flex-col md:gap-1.5',
-      ].join(' ')}
-      style={{ boxShadow: 'var(--shadow-chrome)' }}
+      className="glass fixed bottom-6 left-1/2 z-40 flex -translate-x-1/2 flex-row items-center gap-1 rounded-full p-1.5 md:bottom-auto md:left-6 md:top-1/2 md:-translate-y-1/2 md:translate-x-0 md:flex-col"
+      style={{ paddingBottom: 'max(0.375rem, env(safe-area-inset-bottom))' }}
     >
-      {ITEMS.map(({ to, label, Icon, end }) => (
-        <NavLink
-          key={to}
-          to={to}
-          end={end}
-          aria-label={label}
-          title={label}
-          className={({ isActive }) =>
-            [
-              'relative grid h-11 w-11 place-items-center rounded-[var(--r-pill)]',
-              'transition-[background-color,color] duration-[var(--dur-base)] ease-[var(--ease-spring)]',
-              'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent',
-              isActive
-                ? 'bg-accent-soft text-accent'
-                : 'text-ink-3 hover:bg-hairline hover:text-ink-2',
-            ].join(' ')
-          }
-        >
-          <Icon size={18} strokeWidth={1.5} aria-hidden="true" />
-        </NavLink>
-      ))}
+      {items.map(({ id, label, to, Icon }) => {
+        const active = activeId === id;
+        return (
+          <button
+            key={id}
+            type="button"
+            onClick={() => navigate(to)}
+            aria-label={label}
+            aria-current={active ? 'page' : undefined}
+            title={label}
+            className="group relative flex h-11 w-11 items-center justify-center rounded-full outline-none transition-colors focus-visible:ring-2 focus-visible:ring-[var(--accent)]"
+            style={{ color: active ? 'var(--accent)' : 'var(--text-muted)' }}
+          >
+            {active && (
+              <motion.span
+                layoutId="dock-active"
+                transition={spring}
+                className="absolute inset-0 rounded-full"
+                style={{
+                  background: 'color-mix(in srgb, var(--accent) 14%, transparent)',
+                  boxShadow: '0 0 22px color-mix(in srgb, var(--accent) 38%, transparent)',
+                }}
+              />
+            )}
+            <motion.span
+              className="relative"
+              whileTap={{ scale: 0.88 }}
+              whileHover={{ scale: 1.08 }}
+              transition={spring}
+            >
+              <Icon size={18} strokeWidth={1.5} />
+            </motion.span>
+          </button>
+        );
+      })}
     </nav>
   );
 }
+
+export default FloatingDock;

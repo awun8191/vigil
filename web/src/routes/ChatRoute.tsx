@@ -25,7 +25,6 @@ export default function ChatRoute() {
   const sessions = useSessions();
   const createSession = useCreateSession();
   const creatingRef = useRef(false);
-
   const suggestions = useCardTitles(3);
 
   const activeSessionId =
@@ -57,32 +56,21 @@ export default function ChatRoute() {
 
   return (
     <div className="flex h-dvh flex-col">
-      <MessageStream
-        messages={messages}
-        streamedText={stream.streamedText}
-        streaming={stream.streaming}
-        trailing={
-          showThinking ? <ThinkingCapsule active /> : null
-        }
-        emptyHint={<EmptyChat suggestions={suggestions} onPick={stream.send} />}
-      />
+      <div className="min-h-0 flex-1">
+        <MessageStream
+          messages={messages}
+          streamedText={stream.streamedText}
+          streaming={stream.streaming}
+          trailing={showThinking ? <ThinkingCapsule active /> : null}
+          emptyHint={<EmptyChat suggestions={suggestions} onPick={stream.send} />}
+        />
+      </div>
 
       {stream.connection === 'reconnecting' ? (
-        <div className="mx-auto w-full max-w-2xl px-4">
-          <div
-            role="status"
-            className="mb-2 flex items-center gap-2 rounded-[var(--r-control)] border border-hairline bg-card px-3 py-2 text-[12px] text-ink-3"
-          >
-            <RotateCw size={13} strokeWidth={1.5} className="motion-safe:animate-spin" aria-hidden="true" />
+        <div className="pointer-events-none fixed inset-x-0 bottom-[10.5rem] z-20 flex justify-center px-4 md:bottom-28 md:pl-20">
+          <p className="glass inline-flex items-center gap-2 rounded-full px-3.5 py-2 text-[12px] text-[var(--text-muted)]">
+            <RotateCw size={13} strokeWidth={1.5} className="animate-spin" />
             Reconnecting to Vigil...
-          </div>
-        </div>
-      ) : null}
-
-      {messagesQuery.isError ? (
-        <div className="mx-auto w-full max-w-2xl px-4">
-          <p role="alert" className="mb-2 px-2 text-[12px] text-ink-3">
-            This conversation could not be loaded.
           </p>
         </div>
       ) : null}
@@ -107,10 +95,21 @@ function EmptyChat({
   onPick: (text: string) => void;
 }) {
   return (
-    <div className="flex flex-col items-center px-4 pt-24 text-center">
-      <SparkMark size={20} className="text-accent" />
-      <h1 className="mt-4 text-[22px] font-semibold tracking-[-0.015em]">What are we working on?</h1>
-      <p className="mt-1.5 text-[14px] text-ink-3">
+    <div className="animate-rise flex flex-col items-center px-4 pt-8 text-center">
+      <div
+        className="flex h-16 w-16 items-center justify-center rounded-full"
+        style={{
+          background: 'color-mix(in srgb, var(--accent) 12%, transparent)',
+          boxShadow: '0 0 48px color-mix(in srgb, var(--accent) 28%, transparent)',
+          color: 'var(--accent)',
+        }}
+      >
+        <SparkMark size={22} />
+      </div>
+      <h1 className="mt-6 text-[26px] font-semibold tracking-[-0.03em]">
+        What are we working on?
+      </h1>
+      <p className="mt-2 max-w-sm text-[15px] leading-relaxed text-[var(--text-muted)]">
         Ask anything, or hand Vigil a task it can run end to end.
       </p>
 
@@ -121,7 +120,7 @@ function EmptyChat({
               <button
                 type="button"
                 onClick={() => onPick(suggestion)}
-                className="w-full rounded-[var(--r-control)] border border-hairline bg-card px-4 py-3 text-left text-[14px] text-ink-2 transition-colors duration-[var(--dur-base)] hover:border-hairline-strong hover:text-ink"
+                className="card w-full rounded-[20px] px-4 py-3 text-left text-[14px] text-[var(--text)] transition-colors"
               >
                 {suggestion}
               </button>

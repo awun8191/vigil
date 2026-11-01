@@ -1,78 +1,68 @@
-import Markdown from 'react-markdown';
-import { SparkMark } from '@/components/layout/SparkMark';
+import { motion } from 'framer-motion';
+import { SparkMark } from '../layout/SparkMark';
 import type { ChatMessage } from '@/types';
 
-interface MessageItemProps {
+const enter = {
+  initial: { opacity: 0, y: 12 },
+  animate: { opacity: 1, y: 0 },
+  transition: { type: 'spring' as const, stiffness: 400, damping: 30 },
+};
+
+interface Props {
   message: ChatMessage;
+  /** Set when this message opens a new day, rendered as a labelled divider. */
+  divider?: string;
 }
 
-export function MessageItem({ message }: MessageItemProps) {
-  const isUser = message.role === 'user';
+export function MessageItem({ message, divider }: Props) {
   const time = new Date(message.created_at).toLocaleTimeString(undefined, {
     hour: 'numeric',
     minute: '2-digit',
   });
 
-  if (isUser) {
+  if (message.role === 'user') {
     return (
-      <li className="flex justify-end">
-        <div className="group max-w-[85%]">
-          <div
-            className="rounded-[20px] border border-hairline bg-raised px-4 py-2.5 text-[15px] leading-relaxed whitespace-pre-wrap"
-            style={{ boxShadow: 'var(--shadow-card)' }}
-          >
+      <motion.div {...enter} className="flex justify-end">
+        <div className="max-w-[85%] space-y-2">
+          {divider ? <Divider label={divider} /> : null}
+          <div className="rounded-2xl border border-[color-mix(in_srgb,var(--accent)_22%,transparent)] bg-[color-mix(in_srgb,var(--accent)_9%,transparent)] px-4 py-3 text-[15px] leading-relaxed whitespace-pre-wrap">
             {message.content}
           </div>
-          <p className="mt-1 pr-1 text-right text-[11px] text-ink-3 opacity-0 transition-opacity duration-[var(--dur-fast)] group-hover:opacity-100">
-            {time}
-          </p>
         </div>
-      </li>
+      </motion.div>
     );
   }
 
   return (
-    <li className="group flex gap-3">
-      <SparkMark size={13} className="mt-2 shrink-0 text-accent" />
-      <div className="min-w-0 flex-1">
-        <div className="prose-vigil text-[15px] leading-[1.7] text-ink">
-          <Markdown
-            skipHtml
-            components={{
-              a: ({ href, children }) => (
-                <a
-                  href={href}
-                  target="_blank"
-                  rel="noreferrer noopener"
-                  className="text-accent underline decoration-accent/40 underline-offset-2"
-                >
-                  {children}
-                </a>
-              ),
-              code: ({ children, className }) => {
-                const isBlock = typeof className === 'string' && className.includes('language-');
-                return isBlock ? (
-                  <code className="block overflow-x-auto rounded-[var(--r-control)] bg-sunken p-3 font-mono text-[13px]">
-                    {children}
-                  </code>
-                ) : (
-                  <code className="rounded bg-sunken px-1 py-0.5 font-mono text-[13px]">
-                    {children}
-                  </code>
-                );
-              },
-              p: ({ children }) => <p className="mb-3 last:mb-0">{children}</p>,
-              ul: ({ children }) => <ul className="mb-3 list-disc pl-5 last:mb-0">{children}</ul>,
-              ol: ({ children }) => <ol className="mb-3 list-decimal pl-5 last:mb-0">{children}</ol>,
-            }}
-          >
-            {message.content}
-          </Markdown>
+    <motion.div {...enter} className="space-y-4">
+      {divider ? <Divider label={divider} /> : null}
+      <div className="flex gap-3">
+        <SparkMark size={14} className="mt-[5px] shrink-0 text-[var(--accent)]" />
+        <div className="min-w-0 flex-1">
+          {divider ? (
+            <div className="bubble max-w-[34rem] rounded-3xl px-5 py-4 text-[15px] leading-relaxed [&_p]:mb-3 [&_p:last-child]:mb-0">
+              {message.content}
+            </div>
+          ) : (
+            <p className="text-[15px] leading-relaxed whitespace-pre-wrap">{message.content}</p>
+          )}
+          <p className="mt-1 text-[11px] text-[var(--text-muted)] opacity-0 transition-opacity group-hover:opacity-100">
+            {time}
+          </p>
         </div>
-        <p className="mt-1 text-[11px] text-ink-3 opacity-0 transition-opacity duration-[var(--dur-fast)] group-hover:opacity-100">
-          {time}
-        </p>
       </div>
-    </li>
+    </motion.div>
   );
 }
+
+function Divider({ label }: { label: string }) {
+  return (
+    <div className="flex items-center gap-4 text-[11px] font-medium uppercase tracking-[0.14em] text-[var(--text-muted)]">
+      <span className="h-px flex-1 bg-[var(--border)]" />
+      {label}
+      <span className="h-px flex-1 bg-[var(--border)]" />
+    </div>
+  );
+}
+
+export default MessageItem;
