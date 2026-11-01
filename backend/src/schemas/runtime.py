@@ -8,6 +8,7 @@ import uuid
 import sqlalchemy as sa
 from sqlalchemy import (
     BigInteger,
+    CheckConstraint,
     DateTime,
     ForeignKey,
     Index,
@@ -25,6 +26,61 @@ from src.schemas.base import Base
 if TYPE_CHECKING:
     from src.schemas.identity import UserModel
     from src.schemas.triage import CardModel
+
+
+class AgentConfigModel(Base):
+    """Reusable agent template: prompt, model, tools, skills and limits.
+
+    Decision 7 of V-06 adds this table. ``runs.config_id`` points at it, so a
+    run always names the template that produced it. ``limits`` must hold
+    ``max_cost_micros``, and the check constraint enforces that key.
+    """
+
+    __tablename__ = "agent_configs"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    name: Mapped[str] = mapped_column(String(255), nullable=False, unique=True)
+    system_prompt: Mapped[str] = mapped_column(Text, nullable=False)
+    model: Mapped[str] = mapped_column(String(255), nullable=False)
+    tools: Mapped[list[str]] = mapped_column(
+        JSONB, nullable=False, default=list, server_default=sa.text("'[]'::jsonb")
+    )
+    skills: Mapped[list[str]] = mapped_column(
+        JSONB, nullable=False, default=list, server_default=sa.text("'[]'::jsonb")
+    )
+    memory_scopes: Mapped[list[str]] = mapped_column(
+        JSONB, nullable=False, default=list, server_default=sa.text("'[]'::jsonb")
+    )
+    approval_policy: Mapped[dict[str, str]] = mapped_column(
+        JSONB, nullable=False, default=dict, server_default=sa.text("'{}'::jsonb")
+    )
+    limits: Mapped[dict[str, Any]] = mapped_column(
+        JSONB,
+        nullable=False,
+        default=lambda: {"max_cost_micros": 0},
+        server_default=sa.text("'{\"max_cost_micros\": 0}'::jsonb"),
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+        server_default=func.now(),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+        server_default=func.now(),
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "limits ? 'max_cost_micros'", name="limits_max_cost_micros"
+        ),
+    )
 
 
 class ThreadModel(Base):
@@ -74,7 +130,10 @@ class RunModel(Base):
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
     config_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), nullable=True, index=True
+        UUID(as_uuid=True),
+        ForeignKey("agent_configs.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
     )
     card_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),

@@ -1,7 +1,6 @@
 """Runs router factory providing agent execution harness endpoints and SSE streams."""
-import json
 from uuid import UUID
-from fastapi import APIRouter, Depends, Query, status
+from fastapi import APIRouter, Depends, Header, Query, status
 from fastapi.responses import StreamingResponse
 
 from src.config.exceptions import NotFoundError
@@ -15,6 +14,11 @@ from src.modules.runs.data import (
     RunStepResponse,
 )
 from src.modules.runs.repository import RunsRepository
+from src.modules.runs.stream import (
+    SSE_HEADERS,
+    parse_last_event_id,
+    stream_run_events,
+)
 
 
 def build_runs_router(settings: Settings) -> APIRouter:
@@ -85,21 +89,26 @@ def build_runs_router(settings: Settings) -> APIRouter:
     async def stream_events(
         run_id: UUID,
         since_step: int = Query(default=0, ge=0),
+        last_event_id: str | None = Header(default=None, alias="Last-Event-ID"),
         service: RunsRepository = Depends(get_runs_service),
         _device: DeviceDTO = Depends(get_current_device),
     ) -> StreamingResponse:
-        async def event_generator():
-            async for step in service.stream_steps(run_id, since_step):  # type: ignore[attr-defined]
-                data = json.dumps(
-                    {
-                        "step_number": step.step_number,
-                        "event_type": step.event_type,
-                        "payload": step.payload,
-                    }
-                )
-                yield f"id: {step.step_number}\nevent: {step.event_type}\ndata: {data}\n\n"
+        """
+        Stream run steps after the client cursor.
 
-        return StreamingResponse(event_generator(), media_type="text/event-stream")
+        The `Last-Event-ID` header from a reconnect wins over the `since_step`
+        query parameter. The stream closes after the run completes or fails.
+        """
+        run = await service.get_run_by_id(run_id)
+        if not run:
+            raise NotFoundError(f"Run {run_id} not found")
+
+        cursor = parse_last_event_id(last_event_id, fallback=since_step)
+        return StreamingResponse(
+            stream_run_events(service, run_id, cursor),
+            media_type="text/event-stream",
+            headers=SSE_HEADERS,
+        )
 
     @router.post(
         "/{run_id}/cancel",

@@ -11,6 +11,7 @@ from src.schemas.connectors import (
 from src.schemas.identity import DeviceModel, UserModel
 from src.schemas.memory import MemoryChunkModel
 from src.schemas.runtime import (
+    AgentConfigModel,
     ApprovalModel,
     ArtifactModel,
     MessageModel,
@@ -36,6 +37,7 @@ __all__ = [
     "CardModel",
     "CardActionModel",
     # runtime.py
+    "AgentConfigModel",
     "ThreadModel",
     "RunModel",
     "RunWorkspaceModel",

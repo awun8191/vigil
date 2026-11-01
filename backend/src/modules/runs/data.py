@@ -40,7 +40,6 @@ class RunResponse(BaseModel):
         "running",
         "awaiting_approval",
         "awaiting_background_job",
-        "stale_thread_paused",
         "completed",
         "failed",
     ] = Field(..., description="Current execution state.")
