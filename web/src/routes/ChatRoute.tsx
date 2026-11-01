@@ -79,6 +79,7 @@ export default function ChatRoute() {
         onSend={stream.send}
         onStop={stream.stop}
         streaming={stream.streaming}
+        hasReplyTokens={stream.streamedText.length > 0}
         disabled={!activeSessionId}
         {...(seed ? { seed } : {})}
         onSeedConsumed={handleSeedConsumed}
