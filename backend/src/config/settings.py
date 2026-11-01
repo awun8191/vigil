@@ -91,6 +91,20 @@ class Settings(BaseSettings):
     EMBEDDING_IDLE_UNLOAD_SECONDS: int = 300
     EMBEDDING_INTRA_OP_THREADS: int = 2
 
+    # --- Memory Retrieval (cosine similarity with exponential time decay) ---
+    # The override threshold is measured on the local model: correct answers score
+    # 0.679 to 0.801, the best wrong answers 0.561 to 0.615.
+    MEMORY_RETRIEVAL_HALF_LIFE_DAYS: float = 30.0
+    MEMORY_RETRIEVAL_FLOOR: float = 0.35
+    MEMORY_RETRIEVAL_OVERRIDE_THRESHOLD: float = 0.65
+    MEMORY_RETRIEVAL_MIN_SIMILARITY: float = 0.25
+    MEMORY_RETRIEVAL_CANDIDATE_K: int = 50
+    MEMORY_RETRIEVAL_TOP_N: int = 8
+    MEMORY_RETRIEVAL_EF_SEARCH: int = 200
+    MEMORY_RETRIEVAL_ITERATIVE_SCAN: Literal[
+        "off", "relaxed_order", "strict_order"
+    ] = "relaxed_order"
+
     # --- Docker Sandbox Runner ---
     DOCKER_HOST: str = "unix:///var/run/docker.sock"
     SANDBOX_IMAGE: str = "virgil-sandbox:latest"

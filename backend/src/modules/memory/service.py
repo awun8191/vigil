@@ -2,12 +2,13 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
+import math
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from typing import Any, ClassVar, Protocol, Sequence, runtime_checkable
 from uuid import UUID, uuid4
 
-from sqlalchemy import select, update
+from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.config.settings import Settings
@@ -20,6 +21,14 @@ from src.modules.memory.repository import (
     MemoryChunkCreateDTO,
     MemoryChunkDTO,
     MemorySearchResultDTO,
+)
+from src.modules.memory.retrieval import (
+    SECONDS_PER_DAY,
+    RetrievalCandidate,
+    RetrievalPolicy,
+    candidate_statement,
+    hnsw_statements,
+    rank_candidates,
 )
 from src.schemas.memory import MemoryChunkModel
 from src.schemas.runtime import MessageModel, ThreadModel
@@ -307,7 +316,13 @@ class MemoryService:
 
     # --------------------------------------------------------- chunk retrieval
 
+    @property
+    def _session_bound(self) -> bool:
+        """True when the service talks to Postgres. The in-memory store is test only."""
+        return self.session is not None
+
     async def save_chunk(self, data: MemoryChunkCreateDTO) -> MemoryChunkDTO:
+        """Persist one chunk. The database path is the production path."""
         chunk_id = uuid4()
         now = datetime.now(timezone.utc)
         chunk = MemoryChunkDTO(
@@ -321,7 +336,27 @@ class MemoryService:
             excluded=False,
             created_at=now,
         )
-        self._chunks[chunk_id] = chunk
+        if self._session_bound:
+            self.session.add(
+                MemoryChunkModel(
+                    id=chunk_id,
+                    user_id=data.user_id,
+                    scope=data.scope,
+                    content=data.content,
+                    summary=data.summary,
+                    # JSONB cannot serialize UUID objects.
+                    source_message_ids=[str(item) for item in data.source_message_ids],
+                    embedding=list(data.embedding),
+                    embedding_model=data.embedding_model,
+                    embedding_dim=data.embedding_dim,
+                    excluded=False,
+                    created_at=now,
+                )
+            )
+            await self.session.flush()
+        else:
+            _IN_MEMORY_EMBEDDINGS[chunk_id] = list(data.embedding)
+            self._chunks[chunk_id] = chunk
         return chunk
 
     async def search_decay_weighted(
@@ -329,54 +364,115 @@ class MemoryService:
         user_id: UUID,
         query_embedding: list[float],
         scopes: list[str],
-        candidate_k: int = 50,
-        top_n: int = 8,
-        half_life_days: float = 30.0,
-        floor: float = 0.35,
-        override_threshold: float = 0.85,
+        candidate_k: int | None = None,
+        top_n: int | None = None,
+        half_life_days: float | None = None,
+        floor: float | None = None,
+        override_threshold: float | None = None,
     ) -> list[MemorySearchResultDTO]:
-        """Execute pgvector cosine query and apply decay formula in Python or SQL."""
-        results: list[MemorySearchResultDTO] = []
-        for chunk in self._chunks.values():
-            if chunk.user_id == user_id and chunk.scope in scopes and not chunk.excluded:
-                results.append(
-                    MemorySearchResultDTO(
-                        id=chunk.id,
-                        content=chunk.content,
-                        summary=chunk.summary,
-                        similarity=0.92,
-                        age_days=1.5,
-                        final_score=0.88,
-                    )
+        """Search with the time decay rules.
+
+        The argument defaults come from settings, not from constants in this file,
+        so the deployed threshold is the measured 0.65 and not the provisional 0.85.
+        """
+        explicit: dict[str, Any] = {}
+        if candidate_k is not None:
+            explicit["candidate_k"] = candidate_k
+        if half_life_days is not None:
+            explicit["half_life_days"] = half_life_days
+        if floor is not None:
+            explicit["floor"] = floor
+        if override_threshold is not None:
+            explicit["override_threshold"] = override_threshold
+        policy = replace(RetrievalPolicy.from_settings(self.settings), **explicit)
+        return await self.search_embedding(
+            user_id,
+            query_embedding,
+            scopes=scopes,
+            policy=policy.with_top_n(top_n),
+        )
+
+    async def search_embedding(
+        self,
+        user_id: UUID,
+        query_embedding: Sequence[float],
+        *,
+        scopes: Sequence[str] | None = None,
+        policy: RetrievalPolicy | None = None,
+    ) -> list[MemorySearchResultDTO]:
+        """Run the approximate scan, then apply the cut, the decay, and the order."""
+        active_policy = policy or RetrievalPolicy.from_settings(self.settings)
+        allowed_scopes = list(scopes or [DEFAULT_SCOPE])
+        active_model = self.settings.EMBEDDING_MODEL
+
+        if not self._session_bound:
+            candidates = self._in_memory_candidates(
+                user_id, query_embedding, allowed_scopes
+            )
+            return rank_candidates(candidates, active_policy, active_model)
+
+        # The settings must be in force before the statement plans, because the
+        # tenant filter runs after the approximate scan.
+        for statement in hnsw_statements(active_policy):
+            await self.session.execute(statement)
+        rows = (
+            await self.session.execute(
+                candidate_statement(
+                    user_id,
+                    query_embedding,
+                    allowed_scopes,
+                    active_policy,
+                    active_model,
                 )
-        return results[:top_n]
+            )
+        ).all()
+        candidates = [
+            RetrievalCandidate(
+                id=row[0],
+                content=row[1],
+                summary=row[2],
+                similarity=float(row[3]),
+                age_days=float(row[4]),
+                embedding_model=row[5],
+            )
+            for row in rows
+        ]
+        return rank_candidates(candidates, active_policy, active_model)
 
     async def get_chunk_by_id(self, chunk_id: UUID) -> MemoryChunkDTO | None:
-        return self._chunks.get(chunk_id)
+        """Return one chunk, from Postgres when the service is session bound."""
+        if not self._session_bound:
+            return self._chunks.get(chunk_id)
+        row = (
+            await self.session.execute(
+                select(MemoryChunkModel).where(MemoryChunkModel.id == chunk_id)
+            )
+        ).scalar_one_or_none()
+        return self._to_dto(row) if row is not None else None
 
     async def set_excluded(self, chunk_id: UUID, excluded: bool) -> bool:
-        chunk = self._chunks.get(chunk_id)
-        if not chunk:
-            return False
-        updated = MemoryChunkDTO(
-            id=chunk.id,
-            user_id=chunk.user_id,
-            scope=chunk.scope,
-            content=chunk.content,
-            summary=chunk.summary,
-            source_message_ids=chunk.source_message_ids,
-            embedding_model=chunk.embedding_model,
-            excluded=excluded,
-            created_at=chunk.created_at,
+        """Toggle the excluded flag. The row stays for inspection."""
+        if not self._session_bound:
+            chunk = self._chunks.get(chunk_id)
+            if not chunk:
+                return False
+            self._chunks[chunk_id] = replace(chunk, excluded=excluded)
+            return True
+        result = await self.session.execute(
+            update(MemoryChunkModel)
+            .where(MemoryChunkModel.id == chunk_id)
+            .values(excluded=excluded)
         )
-        self._chunks[chunk_id] = updated
-        return True
+        return bool(result.rowcount)
 
     async def delete_chunk(self, chunk_id: UUID) -> bool:
-        if chunk_id in self._chunks:
-            del self._chunks[chunk_id]
-            return True
-        return False
+        """Delete one chunk. Returns False when the row does not exist."""
+        if not self._session_bound:
+            return self._chunks.pop(chunk_id, None) is not None
+        result = await self.session.execute(
+            delete(MemoryChunkModel).where(MemoryChunkModel.id == chunk_id)
+        )
+        return bool(result.rowcount)
 
     # Domain Orchestration Methods
     async def search_memory(
@@ -386,16 +482,69 @@ class MemoryService:
         scopes: list[str] | None = None,
         top_n: int = 8,
     ) -> list[MemorySearchResultDTO]:
-        """High-level retrieval embedding query text and applying decay ranking."""
-        embedding = [0.0] * self.settings.EMBEDDING_DIMENSIONS
-        if self.embedding_client:
-            embeddings = await self.embedding_client.embed_texts([query])
-            if embeddings:
-                embedding = embeddings[0]
-
-        return await self.search_decay_weighted(
-            user_id=user_id,
-            query_embedding=embedding,
-            scopes=scopes or ["global"],
-            top_n=top_n,
+        """Encode the query on the local model and return the decayed ranking."""
+        policy = RetrievalPolicy.from_settings(self.settings).with_top_n(top_n)
+        embedding = await asyncio.to_thread(self.embedder.embed_query, query)
+        return await self.search_embedding(
+            user_id, embedding, scopes=scopes, policy=policy
         )
+
+    # ------------------------------------------------------------- internals
+
+    @staticmethod
+    def _to_dto(row: Any) -> MemoryChunkDTO:
+        return MemoryChunkDTO(
+            id=row.id,
+            user_id=row.user_id,
+            scope=row.scope,
+            content=row.content,
+            summary=row.summary,
+            source_message_ids=[UUID(str(item)) for item in row.source_message_ids],
+            embedding_model=row.embedding_model,
+            excluded=row.excluded,
+            created_at=row.created_at,
+        )
+
+    @staticmethod
+    def _cosine_similarity(left: Sequence[float], right: Sequence[float]) -> float:
+        """Cosine similarity over the shared width, for the in-memory store only."""
+        width = min(len(left), len(right))
+        if width == 0:
+            return 0.0
+        dot = sum(float(left[i]) * float(right[i]) for i in range(width))
+        left_norm = math.sqrt(sum(float(left[i]) ** 2 for i in range(width)))
+        right_norm = math.sqrt(sum(float(right[i]) ** 2 for i in range(width)))
+        if left_norm == 0.0 or right_norm == 0.0:
+            return 0.0
+        return dot / (left_norm * right_norm)
+
+    def _in_memory_candidates(
+        self,
+        user_id: UUID,
+        query_embedding: Sequence[float],
+        scopes: Sequence[str],
+    ) -> list[RetrievalCandidate]:
+        """Score the in-memory store, so session-less callers share the same rules."""
+        now = datetime.now(timezone.utc)
+        candidates: list[RetrievalCandidate] = []
+        for chunk in self._chunks.values():
+            if chunk.user_id != user_id or chunk.scope not in scopes or chunk.excluded:
+                continue
+            vector = _IN_MEMORY_EMBEDDINGS.get(chunk.id, [])
+            candidates.append(
+                RetrievalCandidate(
+                    id=chunk.id,
+                    content=chunk.content,
+                    summary=chunk.summary,
+                    similarity=self._cosine_similarity(query_embedding, vector),
+                    age_days=max(
+                        0.0, (now - chunk.created_at).total_seconds() / SECONDS_PER_DAY
+                    ),
+                    embedding_model=chunk.embedding_model,
+                )
+            )
+        return candidates
+
+
+# The in-memory chunk DTO holds no vector, so the store keeps one beside it.
+_IN_MEMORY_EMBEDDINGS: dict[UUID, list[float]] = {}
