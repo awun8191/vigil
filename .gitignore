@@ -1,5 +1,5 @@
 # ==========================================
-# Virgil Monorepo Root .gitignore
+# Vigil Monorepo Root .gitignore
 # ==========================================
 
 # ------------------------------------------
@@ -63,7 +63,7 @@ deploy/.env.*
 *.p12
 
 # ------------------------------------------
-# Virgil Runtime, Sandbox & Docker Volumes
+# Vigil Runtime, Sandbox & Docker Volumes
 # ------------------------------------------
 sandboxes/
 workspace/

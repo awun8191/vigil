@@ -90,6 +90,6 @@ def configure_logging(
     logging.getLogger("asyncpg").setLevel(logging.WARNING)
 
 
-def get_logger(name: str = "virgil") -> structlog.stdlib.BoundLogger:
+def get_logger(name: str = "vigil") -> structlog.stdlib.BoundLogger:
     """Obtain a structured logger instance."""
     return structlog.get_logger(name)

@@ -1111,7 +1111,7 @@ wheels = [
 ]
 
 [[package]]
-name = "virgil-backend"
+name = "vigil-backend"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [

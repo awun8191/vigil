@@ -17,7 +17,7 @@ from src.config.security import (
 
 class TestAES256GCMAdversarial:
     KEY = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-    SAMPLE_PLAINTEXT = "virgil_secret_oauth_payload_with_credentials_#123!"
+    SAMPLE_PLAINTEXT = "vigil_secret_oauth_payload_with_credentials_#123!"
 
     def test_bit_flip_fuzzing_all_bytes(self) -> None:
         """Every single byte in the ciphertext payload (nonce, ct, tag) is mutated by bit flips.
@@ -163,7 +163,7 @@ class TestAES256GCMAdversarial:
 
     def test_large_payload_stress(self) -> None:
         """1MB and 2MB payloads roundtrip cleanly and tampering raises SecurityError."""
-        large_text = "Virgil-Enterprise-Payload-" * 40000  # ~1MB
+        large_text = "Vigil-Enterprise-Payload-" * 40000  # ~1MB
         ciphertext = encrypt_secret(large_text, self.KEY)
         assert decrypt_secret(ciphertext, self.KEY) == large_text
 

@@ -1,20 +1,20 @@
-# Design Specification: Virgil Web Client & Interaction Surface
+# Design Specification: Vigil Web Client & Interaction Surface
 
 - **Date:** 2026-11-01
 - **Status:** Approved
-- **Author:** Virgil Core Team
+- **Author:** Vigil Core Team
 - **Target Surface:** `web/`
 
 ---
 
 ## 1. Vision & Mental Model
 
-Virgil is an open-source, self-hostable proactive AI assistant and execution harness. Rather than a blunt, industrial DevOps terminal or a generic AI chatbot, the Virgil web application is conceived as a **comforting, warm, sleek, and comforting digital companion**.
+Vigil is an open-source, self-hostable proactive AI assistant and execution harness. Rather than a blunt, industrial DevOps terminal or a generic AI chatbot, the Vigil web application is conceived as a **comforting, warm, sleek, and comforting digital companion**.
 
-Drawing inspiration from **Apple’s fluid tactile ergonomics**, **Google DeepMind’s calm atmospheric intelligence**, and **Hark’s pillowy, welcoming warmth**, Virgil rejects AI tropes (harsh purple gradients, cluttered cards, and dark mesh textures) in favor of serene ambient glows, frosted glass, and squircle geometry.
+Drawing inspiration from **Apple’s fluid tactile ergonomics**, **Google DeepMind’s calm atmospheric intelligence**, and **Hark’s pillowy, welcoming warmth**, Vigil rejects AI tropes (harsh purple gradients, cluttered cards, and dark mesh textures) in favor of serene ambient glows, frosted glass, and squircle geometry.
 
 The product is purposefully architected around two primary everyday views, controlled by a hovering pill dock:
-1. **Home (`/`):** A calm daily briefing surface presenting tasks identified proactively by Virgil, gentle contextual reminders, and pre-configured routines.
+1. **Home (`/`):** A calm daily briefing surface presenting tasks identified proactively by Vigil, gentle contextual reminders, and pre-configured routines.
 2. **Chat (`/chat`):** A distraction-free conversational canvas anchored by a floating, minimal input pill with file attachment and voice recording capabilities.
 
 ---
@@ -68,7 +68,7 @@ The interface features two meticulously crafted themes:
 
 ## 3. Global Navigation: The Hovering Side Pill Dock
 
-There is **no top navbar**. The top of the screen remains completely airy and uncluttered, bearing only a discrete, minimalist brand mark in the upper left corner: `Virgil ✦`.
+There is **no top navbar**. The top of the screen remains completely airy and uncluttered, bearing only a discrete, minimalist brand mark in the upper left corner: `Vigil ✦`.
 
 ### 3.1 Dock Anatomy
 - **Positioning:** Hovering vertically along the left viewport edge, completely detached from the screen boundaries (`left-6`, vertically centered or floating in upper-middle).
@@ -84,11 +84,11 @@ There is **no top navbar**. The top of the screen remains completely airy and un
 
 ## 4. Section Specification: The Home View
 
-The Home view serves as the user's peaceful daily command briefing. It eliminates administrative noise and presents only high-signal items synthesized by Virgil.
+The Home view serves as the user's peaceful daily command briefing. It eliminates administrative noise and presents only high-signal items synthesized by Vigil.
 
 ### 4.1 Header & Status Area
-- **Time-Aware Greeting:** E.g., *"Good morning. Virgil has organized 3 items for you today."*
-- **Empty / Zen State:** When no items require attention, the view displays a calm ambient message: *"You're all caught up. Virgil is monitoring in the background."* with a slow, soothing radial breathing glow.
+- **Time-Aware Greeting:** E.g., *"Good morning. Vigil has organized 3 items for you today."*
+- **Empty / Zen State:** When no items require attention, the view displays a calm ambient message: *"You're all caught up. Vigil is monitoring in the background."* with a slow, soothing radial breathing glow.
 
 ### 4.2 Proactive Card Feed
 Cards are displayed in a spacious, responsive vertical or bento layout:
@@ -99,7 +99,7 @@ Cards are displayed in a spacious, responsive vertical or bento layout:
      - Pill tag: `✦ ACTION READY` in sky blue.
      - Title and context preview (e.g., *"Reply drafted for Sarah: Q4 Infrastructure budget"*).
      - Inline pill actions: `[ Review & Send ]` (primary sky-blue pill), `[ Dismiss ]` (subtle ghost pill).
-     - Context Bridge: `Discuss with Virgil ↗` link, which transitions seamlessly into Chat with the task pre-loaded.
+     - Context Bridge: `Discuss with Vigil ↗` link, which transitions seamlessly into Chat with the task pre-loaded.
 2. **Contextual Reminders:**
    - Soft, timely nudges (e.g., *"Design sync in 30 minutes. Prep notes synthesized."*).
    - Inline actions: `[ Open Notes ]`, `[ Snooze ]`.
@@ -117,9 +117,9 @@ The Chat view is a clean, centered conversational canvas paired with a signature
 - **Layout:** Centered column (`max-w-3xl`) with generous top and bottom margins to prevent overlap with the floating dock and input pill.
 - **Message Rendering:**
   - **User Messages:** Right-aligned, soft squircle pills with gentle border highlights.
-  - **Virgil Messages:** Left-aligned, unboxed natural typography heralded by the `Virgil ✦` mark.
+  - **Vigil Messages:** Left-aligned, unboxed natural typography heralded by the `Vigil ✦` mark.
 - **Living Thinking & Tool Capsules:**
-  - When Virgil is executing background tools or searching connectors, it does not dump raw monospace logs.
+  - When Vigil is executing background tools or searching connectors, it does not dump raw monospace logs.
   - It displays a compact, frosted **Thinking Capsule**: `✦ Scanning calendar & inbox...` with a subtle pulsating sky-blue halo.
   - Tapping the capsule smoothly unfolds step details, parameters, and outputs in an animated drawer.
 
@@ -129,7 +129,7 @@ Suspended above the bottom edge of the viewport (`bottom-8`, centered):
 - **Glassmorphism:** Deep blur (`backdrop-blur-2xl`), subtle sky-blue ambient shadow.
 - **Controls inside the Pill:**
   - **Left: File / Attachment Button (`+`):** Compact circular button to upload documents, images, or code files.
-  - **Center: Text Input:** Auto-expanding field with placeholder *"Ask Virgil anything or assign a task..."*.
+  - **Center: Text Input:** Auto-expanding field with placeholder *"Ask Vigil anything or assign a task..."*.
   - **Right: Audio / Voice Button (`🎙`):** Circular button for voice input. While active, it morphs into an animated waveform visualizer.
   - **Far Right: Send Button (`↑`):** Circular action button that illuminates in vibrant sky-blue when message or file content is present.
 
@@ -144,7 +144,7 @@ Triggered by tapping `⚙` on the hovering dock, the Settings interface opens as
    - ☼ *Cream & White* (Warm Light Mode)
    - ☾ *Deep Navy & Sky Blue* (Atmospheric Dark Mode)
 2. **Device Pairing:**
-   - Input to enter pairing code (`VGL-...`) to connect with Virgil’s `/api/v1/auth/pair`.
+   - Input to enter pairing code (`VIG-...`) to connect with Vigil’s `/api/v1/auth/pair`.
    - Display option for QR code pairing with mobile devices.
 3. **System & Connector Health:**
    - Real-time status badges for the FastAPI backend (`/api/v1/health`), Worker background queue, and MCP connectors (Gmail, Google Calendar).

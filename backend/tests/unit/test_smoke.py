@@ -52,7 +52,7 @@ async def test_asyncio_test_runner():
 @pytest.mark.asyncio
 async def test_fastapi_asgi_lifecycle():
     """Verify FastAPI application can instantiate and handle in-memory ASGI requests."""
-    app = FastAPI(title="Virgil Smoke App")
+    app = FastAPI(title="Vigil Smoke App")
 
     @app.get("/smoke")
     async def smoke():
@@ -70,7 +70,7 @@ def test_cryptography_aes_gcm():
     key = AESGCM.generate_key(bit_length=256)
     aes = AESGCM(key)
     nonce = os.urandom(12)
-    secret = b"virgil-credentials"
+    secret = b"vigil-credentials"
     encrypted = aes.encrypt(nonce, secret, None)
     decrypted = aes.decrypt(nonce, encrypted, None)
     assert decrypted == secret
@@ -79,7 +79,7 @@ def test_cryptography_aes_gcm():
 def test_qrcode_ascii_generation():
     """Verify ASCII QR code generation works without PIL."""
     qr = qrcode.QRCode()
-    qr.add_data("VGL-TEST-1234")
+    qr.add_data("VIG-TEST-1234")
     out = io.StringIO()
     qr.print_ascii(out=out)
     result = out.getvalue()

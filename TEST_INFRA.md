@@ -1,4 +1,4 @@
-# E2E Test Infra: virgil-agent (Phase 1)
+# E2E Test Infra: vigil-agent (Phase 1)
 
 ## Test Philosophy
 - Opaque-box, requirement-driven, and architectural-invariant enforcement.

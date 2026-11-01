@@ -1,4 +1,4 @@
-"""Alembic async environment configuration for Virgil."""
+"""Alembic async environment configuration for Vigil."""
 import asyncio
 import concurrent.futures
 from logging.config import fileConfig
@@ -42,7 +42,7 @@ def get_url() -> str:
             url = config.get_main_option("sqlalchemy.url")
     if url and url.startswith("postgresql://"):
         url = url.replace("postgresql://", "postgresql+asyncpg://", 1)
-    return url or "postgresql+asyncpg://postgres:postgres@localhost:5432/virgil"
+    return url or "postgresql+asyncpg://postgres:postgres@localhost:5432/vigil"
 
 
 def run_migrations_offline() -> None:

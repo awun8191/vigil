@@ -11,7 +11,7 @@ class PairingRequest(BaseModel):
         min_length=6,
         max_length=32,
         description="Temporary one-time pairing code issued at server boot or settings.",
-        examples=["VGL-789234"],
+        examples=["VIG-789234"],
     )
     device_name: str = Field(
         ...,

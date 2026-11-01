@@ -178,7 +178,7 @@ class AuthService:
     # Domain Orchestration Methods
     async def generate_startup_pairing_code(self) -> str:
         """Generate temporary pairing code for console printing at startup."""
-        raw_code = f"VGL-{secrets.token_hex(3).upper()}"
+        raw_code = f"VIG-{secrets.token_hex(3).upper()}"
         user = await self.get_or_create_default_user()
         expires = datetime.now(timezone.utc).timestamp() + self.settings.PAIRING_CODE_TTL_SECONDS
         dto = PairingCodeDTO(

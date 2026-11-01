@@ -1,4 +1,4 @@
-# Vigil (`virgil-agent`)
+# Vigil (`vigil-agent`)
 
 > **Open-Source, Self-Hostable Proactive AI Assistant & Sandboxed Execution Harness**  
 > *Draft 0.1 Technical Specification & Production Implementation Blueprint*
@@ -59,8 +59,8 @@ This pattern fails in production environments for four critical reasons:
    The model API requires that every single tool call ID emitted in Turn $N$ must receive a corresponding `role="tool"` message before Turn $N+1$ can be called. If $C_1$ is auto-approved, $C_2$ is asynchronous, and $C_3$ requires user approval, a naive loop pauses without generating the tool result for $C_1$ or $C_2$. Resuming later produces API protocol violations because IDs are missing or out of order.
 4. **Docker Volume Drift**: If an in-progress run modifies files in `/workspace` before pausing, and the sandbox container is reaped due to an idle timeout, resuming hours later in a fresh container results in lost files.
 
-### The Virgil Solution
-Virgil eliminates these failure modes through:
+### The Vigil Solution
+Vigil eliminates these failure modes through:
 - **Stateless DB-backed transitions**: Runs transition between database enum states (`QUEUED`, `RUNNING`, `AWAITING_APPROVAL`, `AWAITING_BACKGROUND_JOB`, `STALE_THREAD_PAUSED`, `COMPLETED`, `FAILED`).
 - **A Multi-Tool Barrier Synchronizer**: Partitions parallel tool calls into immediate execution, background queuing, and gated approvals, persisting all partial results and guaranteeing that every tool call ID is satisfied before resuming model inference.
 - **Decoupled Workspace Snapshots**: `/workspace` is synced to host storage on pause and re-hydrated into a clean container on resume.
@@ -115,7 +115,7 @@ src/modules/<resource>/
 ## 4. Complete Monorepo Directory Layout
 
 ```text
-virgil-agent/
+vigil-agent/
 ├── backend/
 │   ├── pyproject.toml                   # Managed strictly via uv
 │   ├── uv.lock
@@ -538,7 +538,7 @@ Instead, memory is written and embedded through an asynchronous, batched backgro
 ### 7.2 The Exponential Time-Decay Scoring Formula
 Standard cosine similarity fails for assistants because an email discussion from 9 months ago about "travel plans" will outscore a casual remark from yesterday unless time is factored in. Conversely, hard time cutoffs lose critical facts.
 
-Virgil applies an exponential half-life decay function with a non-zero floor and a semantic override gate:
+Vigil applies an exponential half-life decay function with a non-zero floor and a semantic override gate:
 
 $$\text{similarity} = 1 - (\vec{e}_{\text{chunk}} \Leftrightarrow \vec{q})$$
 
@@ -595,7 +595,7 @@ LIMIT :top_n; -- e.g. 8
 ## 8. Deep-Dive: Core Subsystem 3 — Postgres-Backed Job Queue (`SKIP LOCKED`) & Worker Engine
 
 ### 8.1 Zero-Contention Job Claiming
-Virgil runs multiple concurrent workers against a single Postgres instance using row-level locking:
+Vigil runs multiple concurrent workers against a single Postgres instance using row-level locking:
 
 ```sql
 WITH claimable AS (
@@ -679,7 +679,7 @@ Full log stored in artifacts. Use deliver_file or read_file if detailed inspecti
 
 ## 10. Deep-Dive: Core Subsystem 5 — Two-Stage Proactive Triage Pipeline
 
-To achieve near-zero running cost during high-volume background polling, Virgil splits triage into a two-stage filter:
+To achieve near-zero running cost during high-volume background polling, Vigil splits triage into a two-stage filter:
 
 ```mermaid
 flowchart LR

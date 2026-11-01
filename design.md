@@ -1,4 +1,4 @@
-# Virgil Web Design Specification (`design.md`)
+# Vigil Web Design Specification (`design.md`)
 
 > **Design Philosophy: The Auteur Standard**  
 > An ultra-clean, comforting, and engaging digital surface. Rejects blunt "DevOps/Docker terminal" aesthetics and generic AI slop in favor of the calm, atmospheric intelligence of **Google DeepMind**, the fluid tactile ergonomics of **Apple**, and the warm, pillowy friendliness of **Hark**.
@@ -7,13 +7,13 @@
 
 ## 1. Core Product Architecture & Mental Model
 
-Virgil is a proactive, self-hostable personal AI assistant and execution harness. Its web interface is intentionally organized into **two primary everyday surfaces**, navigated by a **hovering side pill dock**:
+Vigil is a proactive, self-hostable personal AI assistant and execution harness. Its web interface is intentionally organized into **two primary everyday surfaces**, navigated by a **hovering side pill dock**:
 
-1. **Home (`/`):** The calm morning briefing. Displays tasks Virgil has proactively identified, action approval gates, gentle contextual reminders, and pre-configured routines.
+1. **Home (`/`):** The calm morning briefing. Displays tasks Vigil has proactively identified, action approval gates, gentle contextual reminders, and pre-configured routines.
 2. **Chat (`/chat`):** The direct conversational canvas. Centered message flow anchored by a signature floating hero input pill with attachment and voice recording capabilities.
 3. **Settings (Modal):** A floating frosted glass sheet for theme switching, device pairing, and system health.
 
-**Header Elimination:** There is **no top navbar**. The top of the screen remains completely airy and uncluttered, bearing only a discrete, minimalist brand mark in the upper-left margin: `Virgil ✦`.
+**Header Elimination:** There is **no top navbar**. The top of the screen remains completely airy and uncluttered, bearing only a discrete, minimalist brand mark in the upper-left margin: `Vigil ✦`.
 
 ---
 
@@ -78,7 +78,7 @@ A delicate, compact pill that floats completely detached from the screen edges:
 
 ```
 ┌────────────────────────────────────────────────────────────────────────┐
-│ Virgil ✦                                                               │
+│ Vigil ✦                                                               │
 │                                                                        │
 │   ╭───╮                                                                │
 │   │ ⌂ │  Home (<Home />)                                               │
@@ -104,7 +104,7 @@ A delicate, compact pill that floats completely detached from the screen edges:
 
 ### 5.1 The Home View (Proactive Briefing & Tasks)
 
-The Home view is your peaceful morning deck. When all tasks are cleared, it displays a relaxing zen empty state (*"You're all caught up. Virgil is monitoring in the background."*).
+The Home view is your peaceful morning deck. When all tasks are cleared, it displays a relaxing zen empty state (*"You're all caught up. Vigil is monitoring in the background."*).
 
 #### Card Archetypes:
 1. **Action Ready (Triage & Approvals):**
@@ -112,7 +112,7 @@ The Home view is your peaceful morning deck. When all tasks are cleared, it disp
    - Tag: `✦ ACTION READY` in sky blue with `<Sparkles size={13} />`.
    - Title & context preview (e.g. *"Reply drafted for Sarah regarding Q4 budget"*).
    - Actions: Primary pill `[ Review & Send ]` (`<Check />`), ghost pill `[ Dismiss ]` (`<X />`).
-   - Bridge: `Discuss with Virgil ↗` (`<ArrowUpRight />`) navigates into Chat with the task context pre-loaded.
+   - Bridge: `Discuss with Vigil ↗` (`<ArrowUpRight />`) navigates into Chat with the task context pre-loaded.
 2. **Contextual Reminders:**
    - Tag: `GENTLE REMINDER` with `<Clock size={13} />`.
    - Subtitle & preview (e.g. *"Design Sync in 30 mins — prep notes ready"*).
@@ -131,15 +131,15 @@ A clean, distraction-free conversational canvas:
 #### Conversational Stream
 - **Width & Spacing:** Centered reading width (`max-w-3xl`) with generous vertical padding.
 - **User Messages:** Soft squircle container on the right (`rounded-2xl`, subtle border tint).
-- **Virgil Messages:** Unboxed typography on the left heralded by the `✦` spark mark.
-- **Thinking Capsules:** When Virgil is scanning tools, it renders an animated, compact frosted capsule:  
+- **Vigil Messages:** Unboxed typography on the left heralded by the `✦` spark mark.
+- **Thinking Capsules:** When Vigil is scanning tools, it renders an animated, compact frosted capsule:  
   *`<Sparkles size={14} className="text-sky-400 animate-pulse" /> Scanning calendar & inbox...`* with `<ChevronDown size={14} />` to expand steps, eliminating ugly raw terminal dumps.
 
 #### The Floating Hero Input Pill
 Suspended in the bottom-center (`bottom-8`, `max-w-2xl w-full`):
 ```
 ╭────────────────────────────────────────────────────────────────────────╮
-│  (+)  Ask Virgil anything or assign a task...                 (🎙) (↑) │
+│  (+)  Ask Vigil anything or assign a task...                 (🎙) (↑) │
 ╰────────────────────────────────────────────────────────────────────────╯
 ```
 - **Left: [ + ] File / Attachment:** Circular button (`<Plus size={18} />`) for documents, images, or code.
@@ -154,7 +154,7 @@ Suspended in the bottom-center (`bottom-8`, `max-w-2xl w-full`):
 Triggered by tapping `<Settings />` on the hovering dock:
 - Opens as a **floating frosted sheet** (`rounded-[32px]`, `backdrop-blur-3xl`, `border border-white/10`) without losing current view context.
 - **Theme Switcher:** Two-pill toggle between ☼ Cream & White (`<Sun />`) and ☾ Deep Navy & Sky Blue (`<Moon />`).
-- **Device Pairing:** Enter pairing code (`VGL-...`) or view QR code for mobile companion app (`/api/v1/auth/pair`).
+- **Device Pairing:** Enter pairing code (`VIG-...`) or view QR code for mobile companion app (`/api/v1/auth/pair`).
 - **Telemetry & Health:** Real-time indicator badges for FastAPI backend, Worker queue, and MCP connectors.
 
 ---
@@ -175,7 +175,7 @@ web/src/
     ├── layout/
     │   ├── AmbientBackground.tsx   # Dual-theme radial glow meshes
     │   ├── FloatingSideDock.tsx    # Hovering 3-icon pill dock (Home, Chat, Settings)
-    │   └── HeaderBrand.tsx         # Minimalist "Virgil ✦" mark
+    │   └── HeaderBrand.tsx         # Minimalist "Vigil ✦" mark
     ├── home/
     │   ├── BriefingHeader.tsx      # Greeting & zen empty state
     │   ├── TaskCard.tsx            # Frosted squircle action/approval card

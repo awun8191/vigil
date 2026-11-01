@@ -11,10 +11,10 @@ from src.main import create_app
 @pytest.mark.asyncio
 async def test_create_app_instance() -> None:
     """Verify application attributes and settings assignment."""
-    settings = Settings(APP_NAME="Virgil Test App", DEBUG=True)
+    settings = Settings(APP_NAME="Vigil Test App", DEBUG=True)
     app = create_app(settings)
     assert isinstance(app, FastAPI)
-    assert app.title == "Virgil Test App"
+    assert app.title == "Vigil Test App"
     assert app.docs_url == "/docs"
     assert app.state.settings == settings
 

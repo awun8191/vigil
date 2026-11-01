@@ -1,4 +1,4 @@
-"""Root test configuration and fixtures for virgil-backend."""
+"""Root test configuration and fixtures for vigil-backend."""
 import sys
 import pytest
 

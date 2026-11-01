@@ -1,7 +1,7 @@
-# Project: virgil-agent (Phase 1: Foundations & Architecture Scaffold)
+# Project: vigil-agent (Phase 1: Foundations & Architecture Scaffold)
 
 ## Architecture
-Virgil is an open-source, self-hostable proactive AI assistant and execution harness. Phase 1 establishes the rock-solid foundations and module-driven architecture scaffold:
+Vigil is an open-source, self-hostable proactive AI assistant and execution harness. Phase 1 establishes the rock-solid foundations and module-driven architecture scaffold:
 - **FastAPI Backend (`backend/`)**: Modular architecture with dynamic router factories and ASGI middleware pipeline.
 - **Strict Protocol Boundaries**: Every domain module defines persistence and external interaction solely through `@runtime_checkable typing.Protocol` abstractions in `repository.py`. Zero SQL, zero ORM, zero HTTP calls in `repository.py`.
 - **Constructor Dependency Injection**: `service.py` implements all domain logic, accepting `session` and `settings` via constructor injection.
@@ -95,12 +95,12 @@ Zero imports of `sqlalchemy`, `sqlmodel`, `tortoise`, or raw SQL.
 
 ### Auth & Health Wire Contracts
 - `GET /api/v1/health` -> `200 OK` `{"status": "ok", "version": "0.1.0", "database": "connected" | "disabled"}`
-- `POST /api/v1/auth/pair` with `{"pairing_code": "VGL-...", "device_name": "My Device"}` -> `200 OK` `{"device_token": "vgt_...", "device_id": "uuid", "device_name": "My Device"}`
+- `POST /api/v1/auth/pair` with `{"pairing_code": "VIG-...", "device_name": "My Device"}` -> `200 OK` `{"device_token": "vgt_...", "device_id": "uuid", "device_name": "My Device"}`
 - `GET /api/v1/auth/me` with `Authorization: Bearer vgt_...` -> `200 OK` `{"device_id": "uuid", "device_name": "My Device", "created_at": "...", "last_seen_at": "..."}`
 
 ## Code Layout
 ```
-/home/nasbombz/Documents/Projects/virgil-agent/
+/home/nasbombz/Documents/Projects/vigil-agent/
 ├── backend/
 │   ├── pyproject.toml
 │   ├── uv.lock

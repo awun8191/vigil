@@ -141,5 +141,5 @@ class LLMClient:
             tool_calls=[],
             prompt_tokens=10,
             completion_tokens=15,
-            model="virgil-local-engine",
+            model="vigil-local-engine",
         )
