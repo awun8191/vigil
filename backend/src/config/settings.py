@@ -135,6 +135,16 @@ class Settings(BaseSettings):
     MEMORY_RETRIEVAL_ITERATIVE_SCAN: Literal[
         "off", "relaxed_order", "strict_order"
     ] = "relaxed_order"
+    # The measured crossover between the exact scan and the tenant graph. The
+    # exact scan answers up to and including this tenant row count. Section 3.5
+    # of docs/BENCHMARKS.md records the measurement that set this value: the
+    # exact scan is faster at 5,000 and 10,000 rows, and the tenant graph is
+    # faster at 20,000 and 50,000 rows.
+    MEMORY_RETRIEVAL_EXACT_SCAN_MAX_ROWS: int = 20000
+    # The measured width of the tenant graph. At 50,000 rows the graph reaches
+    # recall@50 of 0.6216 at 200 and 0.9796 at 1000, which is the maximum that
+    # pgvector accepts.
+    MEMORY_RETRIEVAL_TENANT_GRAPH_EF_SEARCH: int = 1000
 
     # --- Docker Sandbox Runner ---
     DOCKER_HOST: str = "unix:///var/run/docker.sock"

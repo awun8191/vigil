@@ -78,7 +78,11 @@ def test_worker_imports_in_fresh_interpreter() -> None:
 
 
 def test_served_app_mounts_run_routes_in_fresh_interpreter() -> None:
-    """The app that src.main serves publishes 44 paths. The run routes are in that set."""
+    """The app that src.main serves publishes 46 paths. The run routes are in that set.
+
+    The count is pinned, so an accidental route change fails this test. It was 44
+    before the phase 1 security merge. The served app publishes 46 now.
+    """
     result = run_fresh_interpreter(SERVED_APP_PROBE)
 
     assert result.returncode == 0, result.stderr
@@ -88,8 +92,8 @@ def test_served_app_mounts_run_routes_in_fresh_interpreter() -> None:
     )
     payload = json.loads(payload_line.removeprefix("PROBE_PAYLOAD "))
 
-    assert payload["served_app_path_count"] == 44, payload["served_app_paths"]
-    assert payload["created_app_path_count"] == 44, payload["created_app_paths"]
+    assert payload["served_app_path_count"] == 46, payload["served_app_paths"]
+    assert payload["created_app_path_count"] == 46, payload["created_app_paths"]
     for path in payload["required_paths"]:
         assert path in payload["served_app_paths"], path
         assert path in payload["created_app_paths"], path

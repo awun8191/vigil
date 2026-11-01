@@ -26,8 +26,7 @@ from src.modules.memory.retrieval import (
     SECONDS_PER_DAY,
     RetrievalCandidate,
     RetrievalPolicy,
-    candidate_statement,
-    hnsw_statements,
+    plan_retrieval,
     rank_candidates,
 )
 from src.schemas.memory import MemoryChunkModel
@@ -236,6 +235,9 @@ class MemoryService:
         self.embedding_client = embedding_client
         self._embedder = embedder
         self._chunker = chunker
+        # The path name of the last search: "exact" or "hnsw". The caller reads
+        # it to report which path served the query.
+        self.last_retrieval_path: str | None = None
 
     # ------------------------------------------------------------- embeddings
 
@@ -491,26 +493,27 @@ class MemoryService:
         active_model = self.settings.EMBEDDING_MODEL
 
         if not self._session_bound:
+            self.last_retrieval_path = "exact"
             candidates = self._in_memory_candidates(
                 user_id, query_embedding, allowed_scopes
             )
             return rank_candidates(candidates, active_policy, active_model)
 
-        # The settings must be in force before the statement plans, because the
-        # tenant filter runs after the approximate scan.
-        for statement in hnsw_statements(active_policy):
+        # The tenant row count chooses the path. The settings of that path must
+        # be in force before the statement plans, because the tenant filter runs
+        # after an approximate scan.
+        plan = await plan_retrieval(
+            self.session,
+            user_id,
+            query_embedding,
+            allowed_scopes,
+            active_policy,
+            active_model,
+        )
+        self.last_retrieval_path = plan.path
+        for statement in plan.statements:
             await self.session.execute(statement)
-        rows = (
-            await self.session.execute(
-                candidate_statement(
-                    user_id,
-                    query_embedding,
-                    allowed_scopes,
-                    active_policy,
-                    active_model,
-                )
-            )
-        ).all()
+        rows = (await self.session.execute(plan.statement)).all()
         candidates = [
             RetrievalCandidate(
                 id=row[0],

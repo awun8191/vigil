@@ -62,7 +62,11 @@ def build_memory_router(settings: Settings) -> APIRouter:
             scopes=scopes,
             top_n=top_n,
         )
-        return MemorySearchResponse(results=_to_items(results), query=q)
+        return MemorySearchResponse(
+            results=_to_items(results),
+            query=q,
+            path=getattr(service, "last_retrieval_path", None),
+        )
 
     @router.post(
         "/search",
@@ -82,7 +86,9 @@ def build_memory_router(settings: Settings) -> APIRouter:
             top_n=payload.top_n,
         )
         return MemorySearchResponse(
-            results=_to_items(results), query=payload.query
+            results=_to_items(results),
+            query=payload.query,
+            path=getattr(service, "last_retrieval_path", None),
         )
 
     @router.get(

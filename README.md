@@ -549,16 +549,76 @@ $$\text{decay} = 0.5^{\left(\frac{\text{age\_days}}{\text{half\_life\_days}}\rig
 $$\text{recency\_multiplier} = \text{floor} + (1.0 - \text{floor}) \times \text{decay} \quad (\text{Default: } \text{floor} = 0.35)$$
 
 $$\text{final\_score} = \begin{cases} 
-\text{similarity} & \text{if } \text{similarity} \ge \text{override\_threshold } (0.85) \\
+\text{similarity} & \text{if } \text{similarity} \ge \text{override\_threshold } (0.65) \\
 \text{similarity} \times \text{recency\_multiplier} & \text{otherwise}
 \end{cases}$$
 
 ### Mathematical Properties:
 - **Halving Property**: Every 30 days, the recency bonus drops by 50%.
 - **Non-Zero Floor ($0.35$)**: Even an item from 2 years ago retains at least 35% of its semantic weight. Important past events never disappear completely.
-- **High-Confidence Override ($\ge 0.85$)**: If the user asks a specific question ("What was the registration key for Server X?") and an old chunk matches with $\ge 0.85$ cosine similarity, the time penalty is completely bypassed ($\text{multiplier} = 1.0$).
+- **High-Confidence Override ($\ge 0.65$)**: If the user asks a specific question ("What was the registration key for Server X?") and an old chunk matches with $\ge 0.65$ cosine similarity, the time penalty is completely bypassed ($\text{multiplier} = 1.0$).
+- **Calibration**: 0.85 was the first draft value. Measured on `bge-small-en-v1.5`, correct answers score 0.679 to 0.801 and the best wrong answers score 0.561 to 0.615. A threshold of 0.85 never fires. The shipped value is 0.65. Set the value per model, because each model has its own score range.
 
-### 7.3 Executable SQL Query
+### 7.3 Retrieval Path: Exact Scan or Tenant Graph
+
+The candidate query takes one of two paths. The path depends on the number of rows that the user holds in `memory_chunks`. `MEMORY_RETRIEVAL_EXACT_SCAN_MAX_ROWS` sets the crossover.
+
+| Tenant rows | Path name | What answers the query |
+| --- | --- | --- |
+| At or below the crossover | `exact` | The tenant btree index reduces the heap. The database sorts the tenant rows by cosine distance. The top 50 rows are exact. |
+| Above the crossover, with a tenant graph | `hnsw` | The graph of that tenant walks by cosine distance. The partial index holds the rows of one tenant, so the walk spends no budget on other tenants. |
+| Above the crossover, without a tenant graph | `exact` | The query falls back to the exact scan. It is correct and slower. |
+
+The exact scan is the default path at low row counts. The vector index is not the default path there. The benchmark gives the cause. With 100,000 rows over 100 users, one tenant is 1 percent of the heap. At `ef_search` 200, the global graph reaches recall@50 of 0.56. The exact scan reaches 0.99998 on the same rows and the same queries.
+
+`hnsw.iterative_scan` does not repair the global graph. The scan mode turns 2 returned rows into 50 rows. The recall stays at 0.56. One global graph holds all tenants, so a walk spends its budget on rows that the filter rejects. The setting cannot make the graph meet the floor on a filtered query.
+
+The measured crossover is 20,000 tenant rows. At 5,000 and 10,000 rows the exact scan is faster, and at 20,000 and 50,000 rows the tenant graph is faster. Section 3.5 of `docs/BENCHMARKS.md` gives the table and the host load.
+
+A tenant graph is a partial HNSW index for one tenant. It is built with `m = 32` and `ef_construction = 200`. On 50,000 rows it reaches recall@50 of 0.9796 at `ef_search` 1000. The global graph reaches 0.8483 on the same rows at the same width. The measured width of a tenant graph is 1000, which is the maximum that pgvector accepts.
+
+A tenant above the crossover gets the graph after the maintenance step builds it. `create_tenant_graph_index` builds the index and retires the global graph, because the global graph stays a valid plan for the tenant query and it then misses the floor. The build blocks writes for its duration, so run it at maintenance time. Until the graph exists, the query uses the exact scan and stays correct.
+
+The query keeps its inputs and its response fields. It also reports the path name, `exact` or `hnsw`, for each query.
+
+### 7.4 Executable SQL Query
+
+The path sets the session before the query runs. The exact path runs these statements first:
+
+```sql
+SET LOCAL enable_indexscan = off;
+SET LOCAL enable_indexonlyscan = off;
+SET LOCAL enable_sort = on;
+```
+
+The graph path runs these statements first:
+
+```sql
+SET LOCAL hnsw.ef_search = 1000;
+-- This setting turns 2 returned rows into 50. It does not raise the recall.
+SET LOCAL hnsw.iterative_scan = 'relaxed_order';
+SET LOCAL enable_indexscan = on;
+SET LOCAL enable_indexonlyscan = on;
+SET LOCAL enable_sort = off;
+```
+
+The width and the scan mode come from `settings.py`. 1000 is the measured width of a tenant graph. The scan mode changes the row count and not the recall, as Section 7.3 states. The refused sort keeps the btree and a sort from answering the query instead of the tenant graph.
+
+A tenant graph is built by this maintenance statement:
+
+```sql
+CREATE INDEX ix_memory_chunks_hnsw_<tenant hex> ON memory_chunks
+USING hnsw (embedding vector_cosine_ops)
+WITH (m = 32, ef_construction = 200)
+WHERE user_id = '<tenant uuid>';
+
+DROP INDEX IF EXISTS ix_memory_chunks_embedding_hnsw;
+```
+
+The second statement retires the global graph. After it runs, each tenant query has one usable graph.
+
+The candidate query is the same on both paths. The statements above decide which access method answers it. On the exact path the order is exact. On the graph path the order comes from the graph walk.
+
 ```sql
 WITH vector_candidates AS (
     SELECT 
@@ -854,7 +914,7 @@ flowchart LR
   1. Implement `src/modules/memory/`:
      - Background chunking of completed runs and idle chat sessions.
      - Embedding generation and storage in `memory_chunks`.
-     - Two-stage time-decay retrieval query ($K=50$ candidates, half-life 30 days, floor 0.35, override 0.85).
+     - Two-stage time-decay retrieval query ($K=50$ candidates, half-life 30 days, floor 0.35, override 0.65). The path is exact below the measured crossover and the graph above it.
      - Memory search and deletion endpoints (`GET /memory/search`, `DELETE /memory/chunks/{id}`).
   2. Implement `src/modules/compaction/`:
      - Context size monitor ($> 70\%$ limit).
