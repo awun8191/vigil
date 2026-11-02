@@ -12,6 +12,7 @@ Every action that leaves your machine waits for your approval.
 
 [Quickstart](#quickstart) · [Architecture](#architecture) · [API](#api-surface) · [Documentation](#documentation) · [Contributing](#contributing)
 
+[![CI](https://github.com/awun8191/vigil/actions/workflows/ci.yml/badge.svg)](https://github.com/awun8191/vigil/actions/workflows/ci.yml)
 ![License](https://img.shields.io/badge/license-Apache--2.0-blue)
 ![Python](https://img.shields.io/badge/python-3.12%2B-3776AB?logo=python&logoColor=white)
 ![FastAPI](https://img.shields.io/badge/FastAPI-0.115%2B-009688?logo=fastapi&logoColor=white)
