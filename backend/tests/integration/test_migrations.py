@@ -53,7 +53,8 @@ EXPECTED_TABLES = [
 
 def test_alembic_offline_sql_generation(alembic_config: Config, capsys: pytest.CaptureFixture[str]) -> None:
     """Validate that offline SQL DDL generation produces all 22 tables, pgvector extension, and HNSW index."""
-    """Validate that offline SQL DDL generation produces all 22 tables, pgvector extension, and HNSW index."""    output_buffer = io.StringIO()    alembic_config.stdout = output_buffer
+    output_buffer = io.StringIO()
+    alembic_config.stdout = output_buffer
 
     command.upgrade(alembic_config, "head", sql=True)
     captured = capsys.readouterr()
@@ -201,8 +202,9 @@ async def test_alembic_live_upgrade_downgrade_lifecycle(alembic_config: Config) 
         # 3. Downgrade to base
         command.downgrade(alembic_config, "base")
 
-        # 4. Verify all 21 domain tables were dropped
-        # 4. Verify all 20 domain tables were dropped        async with engine.connect() as conn:            res_after = await conn.execute(
+        # 4. Verify all 22 domain tables were dropped
+        async with engine.connect() as conn:
+            res_after = await conn.execute(
                 sa.text(
                     "SELECT table_name FROM information_schema.tables "
                     "WHERE table_schema = 'public' AND table_type = 'BASE TABLE' AND table_name != 'alembic_version';"
@@ -221,7 +223,8 @@ async def test_alembic_live_upgrade_downgrade_lifecycle(alembic_config: Config) 
                 )
             )
             count = res_reapply.scalar()
-            assert count == 22, f"Expected 22 tables on re-upgrade, found {count}"    finally:
+            assert count == 22, f"Expected 22 tables on re-upgrade, found {count}"
+    finally:
         await engine.dispose()
 
 
