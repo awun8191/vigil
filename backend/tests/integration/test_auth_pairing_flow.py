@@ -24,7 +24,7 @@ async def test_full_device_pairing_and_auth_lifecycle() -> None:
     auth_service = AuthService(session=None, settings=settings)  # type: ignore[arg-type]
 
     pairing_code = await auth_service.generate_startup_pairing_code()
-    assert pairing_code.startswith("VGL-")
+    assert pairing_code.startswith("VIG-")
 
     transport = ASGITransport(app=app, raise_app_exceptions=False)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:

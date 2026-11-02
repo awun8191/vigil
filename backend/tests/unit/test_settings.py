@@ -10,7 +10,7 @@ def test_default_settings():
     settings = Settings()
 
     # Server defaults
-    assert settings.APP_NAME == "Virgil"
+    assert settings.APP_NAME == "Vigil"
     assert settings.APP_ENV == "development"
     assert settings.DEBUG is False
     assert settings.HOST == "0.0.0.0"
@@ -40,7 +40,7 @@ def test_default_settings():
 
     # Sandbox defaults
     assert "docker.sock" in settings.DOCKER_HOST
-    assert settings.SANDBOX_IMAGE == "virgil-sandbox:latest"
+    assert settings.SANDBOX_IMAGE == "vigil-sandbox:latest"
 
     # Logging & Idempotency
     assert settings.LOG_LEVEL == "INFO"
@@ -61,7 +61,7 @@ def test_settings_env_override():
     env_overrides = {
         "APP_ENV": "production",
         "PORT": "9000",
-        "DATABASE_URL": "postgresql+asyncpg://user:pass@db:5432/virgil_prod",
+        "DATABASE_URL": "postgresql+asyncpg://user:pass@db:5432/vigil_prod",
         "LOG_LEVEL": "WARNING",
         # A production boot now requires a real key, not the public default.
         "SECRET_KEY": "9f2c4e6a8b0d1f3a5c7e9b2d4f6a8c0e9f2c4e6a8b0d1f3a5c7e9b2d4f6a8c0e",
@@ -70,22 +70,22 @@ def test_settings_env_override():
         settings = Settings()
         assert settings.APP_ENV == "production"
         assert settings.PORT == 9000
-        assert settings.DATABASE_URL == "postgresql+asyncpg://user:pass@db:5432/virgil_prod"
+        assert settings.DATABASE_URL == "postgresql+asyncpg://user:pass@db:5432/vigil_prod"
         assert settings.LOG_LEVEL == "WARNING"
 
 
 def test_cors_origins_comma_separated():
     """Verify comma-separated string in CORS_ORIGINS is parsed into a list."""
-    with patch.dict(os.environ, {"CORS_ORIGINS": "https://virgil.app, https://admin.virgil.app"}):
+    with patch.dict(os.environ, {"CORS_ORIGINS": "https://vigil.app, https://admin.vigil.app"}):
         settings = Settings()
-        assert settings.CORS_ORIGINS == ["https://virgil.app", "https://admin.virgil.app"]
+        assert settings.CORS_ORIGINS == ["https://vigil.app", "https://admin.vigil.app"]
 
 
 def test_cors_origins_json_list():
     """Verify JSON array string in CORS_ORIGINS is parsed into a list."""
-    with patch.dict(os.environ, {"CORS_ORIGINS": '["https://virgil.app"]'}):
+    with patch.dict(os.environ, {"CORS_ORIGINS": '["https://vigil.app"]'}):
         settings = Settings()
-        assert settings.CORS_ORIGINS == ["https://virgil.app"]
+        assert settings.CORS_ORIGINS == ["https://vigil.app"]
 
 
 def test_invalid_app_env_raises_error():

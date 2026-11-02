@@ -40,7 +40,7 @@ def test_gmail_consent_url_generation() -> None:
     mgr = GmailAuthManager(secret_key=SAMPLE_SECRET_KEY)
     url = mgr.get_authorization_url(
         client_id="my-client-id",
-        redirect_uri="https://api.virgil.local/oauth/callback",
+        redirect_uri="https://api.vigil.local/oauth/callback",
         state="state-12345",
     )
     assert "https://accounts.google.com/o/oauth2/v2/auth?" in url

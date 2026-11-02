@@ -1,5 +1,5 @@
 """
-Central dependency hub for Virgil FastAPI backend.
+Central dependency hub for Vigil FastAPI backend.
 
 Centrally re-exports:
 - Core application dependencies (get_settings, get_db_session, get_current_device, get_current_user)

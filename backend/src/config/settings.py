@@ -28,7 +28,7 @@ class Settings(BaseSettings):
     )
 
     # --- Application & Server ---
-    APP_NAME: str = "Virgil"
+    APP_NAME: str = "Vigil"
     APP_ENV: Literal["development", "staging", "production", "test"] = "development"
     DEBUG: bool = False
     HOST: str = "0.0.0.0"
@@ -36,7 +36,7 @@ class Settings(BaseSettings):
     API_V1_PREFIX: str = "/api/v1"
 
     # --- Database (PostgreSQL 16 + pgvector) ---
-    DATABASE_URL: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/virgil"
+    DATABASE_URL: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/vigil"
     DATABASE_POOL_SIZE: int = 20
     DATABASE_MAX_OVERFLOW: int = 10
     DATABASE_ECHO: bool = False
@@ -47,7 +47,7 @@ class Settings(BaseSettings):
         description="Master secret key for AES-256-GCM credential encryption (32 bytes or 64 hex characters)",
     )
     PAIRING_CODE_TTL_SECONDS: int = 300
-    DEVICE_TOKEN_SECRET: str = "virgil-device-token-secret-change-in-production"
+    DEVICE_TOKEN_SECRET: str = "vigil-device-token-secret-change-in-production"
     CORS_ORIGINS: Union[list[str], str] = ["*"]
 
     @field_validator("CORS_ORIGINS", mode="after")
@@ -143,7 +143,7 @@ class Settings(BaseSettings):
 
     # --- Docker Sandbox Runner ---
     DOCKER_HOST: str = "unix:///var/run/docker.sock"
-    SANDBOX_IMAGE: str = "virgil-sandbox:latest"
+    SANDBOX_IMAGE: str = "vigil-sandbox:latest"
     WORKSPACE_BASE_PATH: str = "/var/vigil/workspaces"
 
     # --- Logging Configuration ---
@@ -160,7 +160,7 @@ class Settings(BaseSettings):
 
     # --- Notifications Subsystem ---
     NTFY_BASE_URL: str = "https://ntfy.sh"
-    NTFY_TOPIC: str = "virgil-notifications"
+    NTFY_TOPIC: str = "vigil-notifications"
     NTFY_AUTH_TOKEN: str = ""
 
 

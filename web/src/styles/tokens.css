@@ -1,0 +1,271 @@
+@import 'tailwindcss';
+
+@font-face {
+  font-family: 'Plus Jakarta Sans Variable';
+  font-style: normal;
+  font-weight: 200 800;
+  font-display: swap;
+  src: url('/fonts/jakarta-var.woff2') format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304,
+    U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF;
+}
+
+@theme {
+  --font-sans: 'Plus Jakarta Sans Variable', 'Plus Jakarta Sans', ui-sans-serif, system-ui,
+    sans-serif;
+
+  --letter-spacing-heading: -0.015em;
+  --ease-spring: cubic-bezier(0.25, 1, 0.5, 1);
+
+  --animate-rise: rise 0.6s cubic-bezier(0.25, 1, 0.5, 1) both;
+  --animate-drift: drift 18s ease-in-out infinite;
+  --animate-wave: wave 0.9s ease-in-out infinite;
+
+  @keyframes rise {
+    0% {
+      opacity: 0;
+      transform: translateY(12px);
+    }
+    100% {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  @keyframes drift {
+    0%,
+    100% {
+      transform: translate3d(0, 0, 0) scale(1);
+    }
+    50% {
+      transform: translate3d(2%, -3%, 0) scale(1.06);
+    }
+  }
+
+  @keyframes wave {
+    0%,
+    100% {
+      transform: scaleY(0.25);
+    }
+    50% {
+      transform: scaleY(1);
+    }
+  }
+}
+
+/* ---------------------------------------------------------------------------------------------
+   Palette. Set on <html data-theme="light|dark"> by the inline bootstrap in index.html, before
+   first paint, so there is never a flash of the wrong theme.
+   --------------------------------------------------------------------------------------------- */
+
+:root,
+[data-theme='dark'] {
+  --bg-from: #070a10;
+  --bg-to: #0a0f1d;
+  --card: rgba(255, 255, 255, 0.05);
+  --card-hover: rgba(255, 255, 255, 0.075);
+  --card-strong: rgba(255, 255, 255, 0.08);
+  --border: rgba(255, 255, 255, 0.08);
+  --border-strong: rgba(255, 255, 255, 0.18);
+  --accent: #38bdf8;
+  --accent-ink: #04202e;
+  --text: #f8fafc;
+  --text-muted: #94a3b8;
+  --glass: rgba(15, 22, 38, 0.55);
+  --shadow: 0 20px 50px rgba(0, 0, 0, 0.35), 0 4px 14px rgba(0, 0, 0, 0.25);
+  --btn-primary-bg: #f8fafc;
+  --btn-primary-ink: #0a0f1d;
+  --cloud-1: rgba(56, 189, 248, 0.22);
+  --cloud-2: rgba(99, 102, 241, 0.2);
+  --cloud-3: rgba(148, 163, 184, 0.12);
+  --horizon: rgba(7, 10, 16, 0.92);
+  --grain-opacity: 0.09;
+  --spark: rgba(226, 240, 255, 0.9);
+  color-scheme: dark;
+}
+
+[data-theme='light'] {
+  --bg-from: #fbf9f5;
+  --bg-to: #f7f5ee;
+  --card: #ffffff;
+  --card-hover: #ffffff;
+  --card-strong: #ffffff;
+  --border: rgba(0, 0, 0, 0.05);
+  --border-strong: rgba(15, 23, 42, 0.16);
+  --accent: #0284c7;
+  --accent-ink: #ffffff;
+  --text: #0f172a;
+  --text-muted: #64748b;
+  --glass: rgba(255, 255, 255, 0.7);
+  --shadow: 0 20px 50px rgba(15, 23, 42, 0.08), 0 4px 14px rgba(15, 23, 42, 0.04);
+  --btn-primary-bg: #0f172a;
+  --btn-primary-ink: #fbf9f5;
+  --cloud-1: rgba(253, 186, 116, 0.42);
+  --cloud-2: rgba(125, 211, 252, 0.34);
+  --cloud-3: rgba(254, 240, 200, 0.7);
+  --horizon: rgba(251, 249, 245, 0.95);
+  --grain-opacity: 0.07;
+  --spark: rgba(217, 119, 6, 0.8);
+  color-scheme: light;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  font-family: 'Plus Jakarta Sans Variable', 'Plus Jakarta Sans', ui-sans-serif, system-ui, sans-serif;
+  background: linear-gradient(180deg, var(--bg-from), var(--bg-to));
+  background-attachment: fixed;
+  color: var(--text);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  transition:
+    background 0.5s cubic-bezier(0.25, 1, 0.5, 1),
+    color 0.4s;
+}
+
+::selection {
+  background: color-mix(in srgb, var(--accent) 30%, transparent);
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.glass {
+  background: var(--glass);
+  -webkit-backdrop-filter: blur(40px) saturate(140%);
+  backdrop-filter: blur(40px) saturate(140%);
+  border: 1px solid color-mix(in srgb, var(--text) 10%, transparent);
+  box-shadow: var(--shadow);
+}
+
+.card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow);
+  -webkit-backdrop-filter: blur(30px) saturate(140%);
+  backdrop-filter: blur(30px) saturate(140%);
+  transition: background 0.4s cubic-bezier(0.25, 1, 0.5, 1);
+}
+.card:hover {
+  background: var(--card-hover);
+}
+
+/* Softer surface for chat bubbles and small tiles */
+.bubble {
+  background: var(--card);
+  border: 1px solid var(--border);
+  -webkit-backdrop-filter: blur(24px) saturate(140%);
+  backdrop-filter: blur(24px) saturate(140%);
+}
+
+/* Pill button system: solid primary, tinted soft, outlined ghost, quiet text */
+.btn {
+  display: inline-flex;
+  height: 40px;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border-radius: 9999px;
+  padding: 0 20px;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
+  border: 1px solid transparent;
+  transition:
+    transform 0.45s cubic-bezier(0.25, 1, 0.5, 1),
+    background 0.3s,
+    color 0.3s,
+    opacity 0.3s;
+}
+.btn:hover {
+  transform: scale(1.03);
+}
+.btn:active {
+  transform: scale(0.96);
+}
+.btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.btn:disabled {
+  opacity: 0.6;
+  pointer-events: none;
+}
+.btn-primary {
+  background: var(--btn-primary-bg);
+  color: var(--btn-primary-ink);
+}
+.btn-soft {
+  background: color-mix(in srgb, var(--text) 9%, transparent);
+  color: var(--text);
+}
+.btn-soft:hover {
+  background: color-mix(in srgb, var(--text) 13%, transparent);
+}
+.btn-ghost {
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+.btn-ghost:hover {
+  background: color-mix(in srgb, var(--text) 6%, transparent);
+}
+.btn-quiet {
+  padding: 0 14px;
+  color: var(--text-muted);
+}
+.btn-quiet:hover {
+  color: var(--text);
+  background: color-mix(in srgb, var(--text) 6%, transparent);
+}
+
+/* Drifting sparks */
+.spark {
+  position: absolute;
+  opacity: var(--o);
+  animation-name: spark-float;
+  animation-timing-function: ease-in-out;
+  animation-iteration-count: infinite;
+  animation-direction: alternate;
+  will-change: transform, opacity;
+}
+@keyframes spark-float {
+  0% {
+    transform: translate3d(0, 0, 0) scale(1);
+    opacity: var(--o);
+  }
+  50% {
+    opacity: calc(var(--o) * 0.3);
+  }
+  100% {
+    transform: translate3d(18px, -46px, 0) scale(0.75);
+    opacity: var(--o);
+  }
+}
+
+.scroll-soft {
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--text) 18%, transparent) transparent;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+@utility tabular {
+  font-variant-numeric: tabular-nums;
+}

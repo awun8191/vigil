@@ -25,7 +25,7 @@ class TestTokenHashing:
         assert hash_token("") == "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 
     def test_hash_token_unicode(self) -> None:
-        token = "virgil-🔑-secure-token-東京"
+        token = "vigil-🔑-secure-token-東京"
         digest = hash_token(token)
         assert len(digest) == 64
 

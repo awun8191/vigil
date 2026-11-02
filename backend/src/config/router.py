@@ -8,7 +8,7 @@ from fastapi import APIRouter
 
 from src.config.settings import Settings
 
-logger = logging.getLogger("virgil.router")
+logger = logging.getLogger("vigil.router")
 
 
 class RouterMountError(RuntimeError):

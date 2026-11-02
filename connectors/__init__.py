@@ -1,1 +1,1 @@
-"""Virgil external connectors package."""
+"""Vigil external connectors package."""

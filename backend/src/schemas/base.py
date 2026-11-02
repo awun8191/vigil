@@ -1,4 +1,4 @@
-"""Unified Declarative Base for all Virgil SQLAlchemy 2.0 domain models."""
+"""Unified Declarative Base for all Vigil SQLAlchemy 2.0 domain models."""
 from __future__ import annotations
 
 from sqlalchemy import MetaData
@@ -15,6 +15,6 @@ convention = {
 
 
 class Base(DeclarativeBase):
-    """Central declarative base class for all Virgil database models."""
+    """Central declarative base class for all Vigil database models."""
 
     metadata = MetaData(naming_convention=convention)

@@ -1,4 +1,4 @@
-"""Adversarial stress and empirical validation suite for Virgil Milestone 1 schemas.
+"""Adversarial stress and empirical validation suite for Vigil Milestone 1 schemas.
 
 Empirically challenges:
 1. Unique Constraints:

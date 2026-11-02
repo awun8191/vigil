@@ -393,11 +393,11 @@ async def run_worker() -> None:
     """Run background job worker loop."""
     settings = get_settings()
     configure_logging(log_level=settings.LOG_LEVEL, log_format=settings.LOG_FORMAT)
-    logger = get_logger("virgil.worker")
+    logger = get_logger("vigil.worker")
 
     worker_id = f"worker-{os.getpid()}-{uuid4().hex[:6]}"
     logger.info(
-        "Starting Virgil background worker",
+        "Starting Vigil background worker",
         worker_id=worker_id,
         poll_interval=settings.JOB_POLL_INTERVAL_SECONDS,
         heartbeat_interval=HEARTBEAT_INTERVAL_SECONDS,
@@ -491,7 +491,7 @@ async def run_worker() -> None:
         except asyncio.TimeoutError:
             pass
 
-    logger.info("Virgil background worker stopped", worker_id=worker_id)
+    logger.info("Vigil background worker stopped", worker_id=worker_id)
 
 
 def main() -> None:

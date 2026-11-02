@@ -3,9 +3,9 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "virgil-backend"
+name = "vigil-backend"
 version = "0.1.0"
-description = "Virgil Proactive AI Assistant & Sandboxed Execution Harness Backend"
+description = "Vigil Proactive AI Assistant & Sandboxed Execution Harness Backend"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [

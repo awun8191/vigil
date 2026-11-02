@@ -1,4 +1,4 @@
-"""Configuration, exception handling, security, and router factory for Virgil."""
+"""Configuration, exception handling, security, and router factory for Vigil."""
 from src.config.exceptions import (
     AppException,
     BadGatewayError,

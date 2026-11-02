@@ -10,7 +10,7 @@ from src.config.settings import Settings
 from src.modules.health.data import HealthStatusResponse
 from src.modules.health.repository import HealthCheckDTO
 
-logger = logging.getLogger("virgil.health.service")
+logger = logging.getLogger("vigil.health.service")
 
 
 class HealthService:
