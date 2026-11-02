@@ -7,6 +7,7 @@ from src.schemas.connectors import (
     ConnectorItemModel,
     ConnectorSyncStateModel,
     ConnectorToolModel,
+    MCPServerModel,
 )
 from src.schemas.identity import DeviceModel, UserModel
 from src.schemas.memory import MemoryChunkModel
@@ -33,6 +34,7 @@ __all__ = [
     "ConnectorToolModel",
     "ConnectorItemModel",
     "ConnectorSyncStateModel",
+    "MCPServerModel",
     # triage.py
     "TriageDecisionModel",
     "CardModel",

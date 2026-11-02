@@ -24,6 +24,7 @@ from src.schemas import (
     DeviceModel,
     IdempotencyRecordModel,
     JobModel,
+    MCPServerModel,
     MemoryChunkModel,
     MessageModel,
     RunModel,
@@ -56,14 +57,15 @@ EXPECTED_TABLES = {
     "idempotency_records",
     "skills",
     "audit_log",
+    "mcp_servers",
 }
 
 
 def test_central_schema_exports_all_tables() -> None:
-    """Verify that exactly 20 tables are registered in the centralized Base metadata."""
+    """Verify that exactly 22 tables are registered in the centralized Base metadata."""
     registered_tables = set(Base.metadata.tables.keys())
     assert registered_tables == EXPECTED_TABLES
-    assert len(registered_tables) == 20
+    assert len(registered_tables) == 22
 
 
 def test_models_map_to_expected_table_names() -> None:
@@ -90,14 +92,14 @@ def test_models_map_to_expected_table_names() -> None:
         AgentConfigModel: "agent_configs",
         SkillModel: "skills",
         AuditLogModel: "audit_log",
-    }
+        MCPServerModel: "mcp_servers",    }
     for model, expected_table in model_table_map.items():
         assert model.__tablename__ == expected_table
         assert model.__table__.name == expected_table
 
 
 def test_primary_keys() -> None:
-    """Verify primary key columns across all 20 models."""
+    """Verify primary key columns across all 22 models."""
     for table_name in EXPECTED_TABLES:
         table = Base.metadata.tables[table_name]
         pk_cols = [c.name for c in table.primary_key.columns]
