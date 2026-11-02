@@ -1,4 +1,4 @@
-"""Core tool harness: eight stateless tools over the sandbox runner.
+"""Core tool harness: nine stateless tools over the sandbox runner.
 
 Every tool declares a name, a JSON schema, and an approval level. The level is ``read``,
 ``local`` or ``external``. A call validates its arguments against the tool schema first.
@@ -29,7 +29,7 @@ ApprovalLevel = Literal["read", "local", "external"]
 APPROVAL_LEVELS: tuple[ApprovalLevel, ...] = ("read", "local", "external")
 
 #: The harness exposes this many tools.
-TOOL_COUNT = 8
+TOOL_COUNT = 9
 
 
 class ToolResult(BaseModel):
@@ -155,6 +155,7 @@ from src.modules.runs.tools.delivery import DELIVERY_TOOLS  # noqa: E402
 from src.modules.runs.tools.files import FILE_TOOLS  # noqa: E402
 from src.modules.runs.tools.human import HUMAN_TOOLS  # noqa: E402
 from src.modules.runs.tools.shell import SHELL_TOOLS  # noqa: E402
+from src.modules.runs.tools.skills import SKILL_TOOLS  # noqa: E402
 from src.modules.runs.tools.tasks import TASK_TOOLS  # noqa: E402
 
 
@@ -168,9 +169,9 @@ def build_registry(tools: Sequence[Tool]) -> Mapping[str, Tool]:
     return MappingProxyType(registry)
 
 
-#: The eight tools of the harness, indexed by name. It is read only.
+#: The nine tools of the harness, indexed by name. It is read only.
 TOOLS: Mapping[str, Tool] = build_registry(
-    (*FILE_TOOLS, *SHELL_TOOLS, *DELIVERY_TOOLS, *HUMAN_TOOLS, *TASK_TOOLS)
+    (*FILE_TOOLS, *SHELL_TOOLS, *DELIVERY_TOOLS, *HUMAN_TOOLS, *TASK_TOOLS, *SKILL_TOOLS)
 )
 
 

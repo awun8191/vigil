@@ -490,7 +490,7 @@ def get_notification_dispatcher(
 #
 # The loop takes a model client and a tool executor as protocols. This section
 # is the only place that maps those protocols onto real adapters: the Docker
-# sandbox runner, the eight tool adapters, the connector host and the artifact
+# sandbox runner, the nine tool adapters, the connector host and the artifact
 # table. A test injects a fake model and a fake connector here.
 # =============================================================================
 

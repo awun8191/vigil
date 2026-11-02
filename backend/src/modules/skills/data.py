@@ -11,7 +11,7 @@ class SkillResponse(BaseModel):
     id: UUID = Field(..., description="Skill UUID.")
     name: str = Field(..., description="Unique skill identifier (e.g. 'linear-mcp').")
     description: str = Field(..., description="Capability description.")
-    version: int = Field(default=1, description="Skill schema version.")
+    version: str = Field(..., description="Manifest version string (e.g. '1.0.0').")
     source: str = Field(..., description="Source origin ('builtin', 'git', 'upload').")
     commit: str | None = Field(default=None, description="Pinned git commit SHA.")
     enabled: bool = Field(default=True, description="Whether skill is active.")
@@ -21,9 +21,20 @@ class SkillResponse(BaseModel):
 
 
 class SkillInstallRequest(BaseModel):
-    """Inbound request to install a skill from a Git repository."""
-    repo_url: str = Field(..., description="Git clone URL.")
-    commit: str | None = Field(default=None, description="Optional commit SHA to pin.")
+    """Inbound request to install a skill from a Git repository.
+
+    ``commit`` is required. A branch name or a tag moves, so it is not a pin.
+    The service rejects any value that is not a hexadecimal commit SHA.
+    """
+
+    repo_url: str = Field(
+        ..., min_length=1, description="Git clone URL over https."
+    )
+    commit: str = Field(
+        ...,
+        min_length=1,
+        description="Commit SHA to pin. A branch name is rejected.",
+    )
 
 
 class SkillToggleRequest(BaseModel):

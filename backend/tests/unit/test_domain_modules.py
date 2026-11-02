@@ -656,11 +656,33 @@ async def test_artifacts_http_endpoints(test_app) -> None:
 
 @pytest.mark.asyncio
 async def test_skills_http_endpoints(test_app) -> None:
-    auth_headers = {"Authorization": "Bearer vgt_testtoken"}
-    async with httpx.AsyncClient(transport=ASGITransport(app=test_app), base_url="http://test") as client:
-        res = await client.get("/api/v1/skills", headers=auth_headers)
-        assert res.status_code == 200
-        assert isinstance(res.json(), list)
+    # The skills router is the only endpoint test that reaches PostgreSQL.
+    # The process-wide engine singleton binds to the first event loop that
+    # borrows it, so a shared module app reuses a stale loop-bound pool here.
+    # A test-local engine keeps this test hermetic without changing its asserts.
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+
+    from src.dependencies import get_db_session
+
+    engine = create_async_engine(Settings(DEBUG=True).DATABASE_URL)
+    factory = async_sessionmaker(
+        bind=engine, class_=AsyncSession, expire_on_commit=False
+    )
+
+    async def _test_session():  # type: ignore[no-untyped-def]
+        async with factory() as session:
+            yield session
+
+    test_app.dependency_overrides[get_db_session] = _test_session
+    try:
+        auth_headers = {"Authorization": "Bearer vgt_testtoken"}
+        async with httpx.AsyncClient(transport=ASGITransport(app=test_app), base_url="http://test") as client:
+            res = await client.get("/api/v1/skills", headers=auth_headers)
+            assert res.status_code == 200
+            assert isinstance(res.json(), list)
+    finally:
+        test_app.dependency_overrides.pop(get_db_session, None)
+        await engine.dispose()
 
 
 @pytest.mark.asyncio

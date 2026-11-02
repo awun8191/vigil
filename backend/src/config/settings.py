@@ -146,6 +146,11 @@ class Settings(BaseSettings):
     SANDBOX_IMAGE: str = "vigil-sandbox:latest"
     WORKSPACE_BASE_PATH: str = "/var/vigil/workspaces"
 
+    # --- Skills Registry ---
+    # An install is extracted below this root. ``skill_load`` resolves a name
+    # against this root and copies the directory into the sandbox workspace.
+    SKILLS_ROOT: str = "/var/vigil/skills"
+
     # --- Logging Configuration ---
     LOG_LEVEL: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
     LOG_FORMAT: Literal["json", "console"] = "json"

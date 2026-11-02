@@ -13,7 +13,7 @@ class SkillDTO:
     id: UUID
     name: str
     description: str
-    version: int
+    version: str
     source: str  # builtin, git, upload
     commit: str | None
     enabled: bool
@@ -28,7 +28,7 @@ class SkillCreateDTO:
     name: str
     description: str
     storage_path: str
-    version: int = 1
+    version: str = "1"
     source: str = "builtin"
     commit: str | None = None
     enabled: bool = True
