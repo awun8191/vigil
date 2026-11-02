@@ -462,6 +462,10 @@ async def _fill_table(
                 "CREATE INDEX ix_memory_chunks_embedding_hnsw ON memory_chunks "
                 "USING hnsw (embedding vector_cosine_ops) WITH (m = 16, ef_construction = 64)"
             )
+        # A table that a bulk load filled has no statistics until this runs. The
+        # planner needs them to choose the tenant index and the sort, so the
+        # measured latency reflects the shipped path and not a stale plan.
+        await connection.execute("ANALYZE memory_chunks")
     finally:
         await connection.close()
 

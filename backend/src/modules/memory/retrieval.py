@@ -86,7 +86,7 @@ class RetrievalPolicy:
     # Measured crossover. At or below this tenant row count the exact scan is
     # the shipped path, because it meets the recall floor and it is exact. The
     # measurement is in section 3 of docs/BENCHMARKS.md.
-    exact_scan_max_rows: int = 50000
+    exact_scan_max_rows: int = 20000
     # The measured width of the per-tenant graph. The global graph cannot reach
     # the floor at any width, and a tenant graph at 200 reaches 0.8048 at 50,000
     # rows. At 1000 it reaches 0.9796. The measurement is in section 3.5.

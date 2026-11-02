@@ -61,6 +61,7 @@ from src.modules.memory.retrieval import (  # noqa: E402
     RetrievalPolicy,
     exact_scan_statements,
     graph_path_statements,
+    plan_retrieval,
     tenant_graph_ddl,
 )
 from src.modules.memory.service import MemoryService  # noqa: E402
@@ -160,13 +161,25 @@ def plan_summary(plan: list) -> list[str]:
 
 
 def uses_hnsw(nodes: Sequence[str]) -> bool:
-    """Return True when a plan node reads the HNSW index."""
-    return any("ix_memory_chunks_embedding_hnsw" in node for node in nodes)
+    """Return True when a plan node reads an HNSW index, global or per tenant."""
+    return any("hnsw" in node.lower() for node in nodes)
 
 
 async def reset_tables(connection: asyncpg.Connection) -> None:
-    """Empty the two tables the measurement uses, then reclaim the space."""
-    await connection.execute("DROP INDEX IF EXISTS ix_memory_chunks_embedding_hnsw")
+    """Empty the two tables the measurement uses, then reclaim the space.
+
+    Every HNSW index on the table goes first, not only the global one. A tenant
+    graph that an earlier run built stays valid for its tenant, and the planner
+    reads it in a later run, so that run would not measure the path the
+    arguments ask for.
+    """
+    graphs = await connection.fetch(
+        "SELECT indexname FROM pg_indexes "
+        "WHERE tablename = 'memory_chunks' AND indexdef ILIKE '%USING hnsw%'"
+    )
+    for row in graphs:
+        # The name comes from the catalog, not from an argument.
+        await connection.execute(f'DROP INDEX IF EXISTS "{row["indexname"]}"')
     await connection.execute("TRUNCATE memory_chunks, users CASCADE")
     await connection.execute("VACUUM (FULL, ANALYZE) memory_chunks")
 
@@ -509,18 +522,35 @@ async def main() -> int:
             if args.path == "hnsw"
             else [str(item) for item in exact_scan_statements()]
             if args.path == "exact"
-            else []
+            else None
         )
         label = f"shipped {args.path}"
+        chosen_path = args.path
+        if presets is None:
+            # The auto path must plan with the settings that the router uses for
+            # this tenant. An empty preset list plans the bare query, and a
+            # leftover graph index then answers it, so the plan line would not
+            # describe the shipped path.
+            async with sessionmaker() as plan_session:
+                planned = await plan_retrieval(
+                    plan_session,
+                    users[0],
+                    queries[0][0],
+                    ["global"],
+                    shipped_policy,
+                    ACTIVE_MODEL,
+                )
+            chosen_path = planned.path
+            presets = [str(item) for item in planned.statements]
         planner_plan = await plan_for(
             probe, users[0], queries[0][0], args.top_n, presets
         )
-        log(f"{label} path: {planner_plan}")
-        if args.path == "hnsw" and not uses_hnsw(planner_plan):
+        log(f"{label} path ({chosen_path}): {planner_plan}")
+        if chosen_path == "hnsw" and not uses_hnsw(planner_plan):
             raise SystemExit(
                 "the graph path does not read the HNSW index: " f"{planner_plan}"
             )
-        if args.path == "exact" and uses_hnsw(planner_plan):
+        if chosen_path == "exact" and uses_hnsw(planner_plan):
             raise SystemExit(
                 "the exact path reads the HNSW index: " f"{planner_plan}"
             )
