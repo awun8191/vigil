@@ -1,10 +1,13 @@
 """Connectors router factory providing MCP connector management and sync triggers."""
+from datetime import datetime
+from typing import Literal
 from uuid import UUID
 from fastapi import APIRouter, Depends, status
+from pydantic import BaseModel, ConfigDict, Field
 
-from src.config.exceptions import NotFoundError
+from src.config.exceptions import ConflictError, NotFoundError
 from src.config.settings import Settings
-from src.dependencies import get_connectors_service, get_current_user
+from src.dependencies import get_connectors_service, get_current_user, get_jobs_service
 from src.modules.auth.repository import UserDTO
 from src.modules.connectors.data import (
     ConnectorAccountResponse,
@@ -13,6 +16,49 @@ from src.modules.connectors.data import (
     SyncTriggerResponse,
 )
 from src.modules.connectors.repository import ConnectorsRepository
+from src.modules.jobs.repository import JobCreateDTO, JobsRepository
+
+
+class RegisterMCPServerRequest(BaseModel):
+    """Inbound request to attach a third party MCP server."""
+
+    name: str = Field(..., min_length=1, max_length=64)
+    transport: Literal["stdio", "sse"] = Field(...)
+    command: str | None = Field(default=None)
+    url: str | None = Field(default=None)
+
+
+class MCPServerResponse(BaseModel):
+    """Outbound representation of a registered third party MCP server."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    name: str
+    transport: str
+    command: str | None = None
+    url: str | None = None
+    enabled: bool
+    created_at: datetime
+
+
+class MCPToolResponse(BaseModel):
+    """Outbound representation of a discovered third party tool."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    server_name: str
+    name: str
+    description: str
+    level: str
+
+
+class MCPDiscoveryResponse(BaseModel):
+    """Outbound confirmation that tool discovery was dispatched."""
+
+    server_name: str
+    job_id: UUID
+    status: str
 
 
 def build_connectors_router(settings: Settings) -> APIRouter:
@@ -24,6 +70,9 @@ def build_connectors_router(settings: Settings) -> APIRouter:
       - GET /api/v1/connectors/accounts/{id}
       - POST /api/v1/connectors/accounts/{id}/sync
       - GET /api/v1/connectors/accounts/{id}/items
+      - POST /api/v1/connectors/mcp-servers (202, enqueues discover_mcp_tools)
+      - GET /api/v1/connectors/mcp-servers
+      - DELETE /api/v1/connectors/mcp-servers/{name}
     """
     router = APIRouter(prefix="/connectors", tags=["Connectors"])
 
@@ -95,5 +144,70 @@ def build_connectors_router(settings: Settings) -> APIRouter:
         _user: UserDTO = Depends(get_current_user),
     ) -> list[ItemResponse]:
         return []
+
+    @router.post(
+        "/mcp-servers",
+        response_model=MCPDiscoveryResponse,
+        status_code=status.HTTP_202_ACCEPTED,
+        summary="Register External MCP Server",
+    )
+    async def register_mcp_server(
+        payload: RegisterMCPServerRequest,
+        service: ConnectorsRepository = Depends(get_connectors_service),
+        jobs: JobsRepository = Depends(get_jobs_service),
+        _user: UserDTO = Depends(get_current_user),
+    ) -> MCPDiscoveryResponse:
+        """Enqueue tool discovery for a third party server without running it.
+
+        The handler never spawns a process. It validates the name and
+        enqueues a ``discover_mcp_tools`` job. The worker runs the
+        handshake there and stores the server only after it succeeds.
+        """
+        existing = await service.get_mcp_server(payload.name)  # type: ignore[attr-defined]
+        if existing is not None:
+            raise ConflictError(
+                f"an MCP server named {payload.name!r} is already registered"
+            )
+        job = await jobs.enqueue(
+            JobCreateDTO(
+                type="discover_mcp_tools",
+                payload={
+                    "name": payload.name,
+                    "transport": payload.transport,
+                    "command": payload.command,
+                    "url": payload.url,
+                },
+            )
+        )
+        return MCPDiscoveryResponse(
+            server_name=payload.name, job_id=job.id, status="queued"
+        )
+
+    @router.get(
+        "/mcp-servers",
+        response_model=list[MCPServerResponse],
+        status_code=status.HTTP_200_OK,
+        summary="List External MCP Servers",
+    )
+    async def list_mcp_servers(
+        service: ConnectorsRepository = Depends(get_connectors_service),
+        _user: UserDTO = Depends(get_current_user),
+    ) -> list[MCPServerResponse]:
+        servers = await service.list_mcp_servers()  # type: ignore[attr-defined]
+        return [MCPServerResponse.model_validate(s) for s in servers]
+
+    @router.delete(
+        "/mcp-servers/{name}",
+        status_code=status.HTTP_204_NO_CONTENT,
+        summary="Unregister External MCP Server",
+    )
+    async def unregister_mcp_server(
+        name: str,
+        service: ConnectorsRepository = Depends(get_connectors_service),
+        _user: UserDTO = Depends(get_current_user),
+    ) -> None:
+        removed = await service.unregister_mcp_server(name)  # type: ignore[attr-defined]
+        if not removed:
+            raise NotFoundError(f"MCP server {name!r} not found")
 
     return router

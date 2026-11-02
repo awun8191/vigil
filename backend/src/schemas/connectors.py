@@ -231,3 +231,33 @@ class ConnectorSyncStateModel(Base):
     account: Mapped[ConnectedAccountModel] = relationship(
         "ConnectedAccountModel", back_populates="sync_state"
     )
+
+
+class MCPServerModel(Base):
+    """Third party MCP server attached by a user over stdio or SSE."""
+
+    __tablename__ = "mcp_servers"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    name: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    transport: Mapped[str] = mapped_column(String(16), nullable=False)
+    command: Mapped[str | None] = mapped_column(Text, nullable=True)
+    url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    enabled: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=True,
+        server_default=sa.text("true"),
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+        server_default=func.now(),
+    )
+
+    __table_args__ = (
+        CheckConstraint("transport IN ('stdio', 'sse')", name="transport"),
+    )
