@@ -7,6 +7,7 @@ tests (prefix, checksum, idle unload) never need the artifact.
 from __future__ import annotations
 
 import hashlib
+import time
 from pathlib import Path
 
 import numpy as np
@@ -171,8 +172,12 @@ def test_unload_is_idempotent(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -
 
 @pytest.fixture(scope="module")
 def embedder() -> LocalEmbeddingModel:
-    """Load the real model, or skip the module with a reason when unavailable."""
-    model = LocalEmbeddingModel(_settings())
+    """Load the real model in this process, or skip the module with a reason.
+
+    These tests read the session directly and compare its vectors, so the
+    fixture keeps the in-process path. The subprocess path has its own test.
+    """
+    model = LocalEmbeddingModel(_settings(EMBEDDING_ENCODE_SUBPROCESS=False))
     try:
         model.load()
     except EmbeddingArtifactError as exc:
@@ -404,3 +409,145 @@ def test_load_logs_the_checksum_and_the_dimensions(
         model.load()
     assert [record for record in caplog.records if record.name == "virgil.embedding"] == []
     model.close()
+
+
+# -------------------------------------------------- memory model and parity
+
+
+class _RecordingSession:
+    """Wrap a real session and record the shape of every run."""
+
+    def __init__(self, session: object) -> None:
+        self._session = session
+        self.shapes: list[tuple[int, int]] = []
+
+    def run(
+        self, output_names: object, feeds: dict[str, np.ndarray]
+    ) -> list[np.ndarray]:
+        rows, width = feeds["input_ids"].shape
+        self.shapes.append((int(rows), int(width)))
+        return self._session.run(output_names, feeds)  # type: ignore[attr-defined]
+
+
+def _pool_vector(hidden: np.ndarray) -> np.ndarray:
+    """Take the CLS row and normalize it, the way the encoder does."""
+    vector = np.asarray(hidden, dtype=np.float32)
+    norm = float(np.linalg.norm(vector))
+    return vector / norm if norm > 0.0 else vector
+
+
+def test_chunk_token_cap_still_holds(embedder: LocalEmbeddingModel) -> None:
+    """A chunk above the 512 token cap reaches the encoder as at most 512 tokens."""
+    long_text = "word " * 4000
+    assert embedder.count_tokens(long_text) > embedder.max_tokens
+
+    recorder = _RecordingSession(embedder.session)
+    model = LocalEmbeddingModel(
+        _settings(EMBEDDING_ENCODE_SUBPROCESS=False),
+        session_factory=lambda path: recorder,
+    )
+    model._tokenizer = embedder._ensure_tokenizer()
+
+    vectors = model.embed_documents([long_text])
+
+    assert recorder.shapes, "the encoder must run at least one batch"
+    assert all(width <= model.max_tokens for _, width in recorder.shapes)
+    assert all(rows <= model.max_batch for rows, _ in recorder.shapes)
+    assert len(vectors) == 1
+    assert len(vectors[0]) == model.dimensions
+
+
+def test_subprocess_encode_matches_the_in_process_path(
+    embedder: LocalEmbeddingModel,
+) -> None:
+    """The short lived child returns the vectors of the in-process run."""
+    texts = [
+        "The spare key for the flat is in the blue pot on the balcony.",
+        "The dentist appointment is on 14 March at 9 am.",
+        "The wifi password for the guest network is cedar-42.",
+    ]
+    model = LocalEmbeddingModel(_settings())
+    assert model._subprocess is True
+
+    remote = np.asarray(model.embed_documents(texts), dtype=np.float32)
+    local = np.asarray(embedder.embed_documents(texts), dtype=np.float32)
+
+    assert model.session is None, "the session must live in the child only"
+    assert np.allclose(remote, local, atol=1e-6)
+    model.close()
+
+
+def test_idle_unload_skips_an_encode_in_flight(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The sweeper must not release the session below a running batch."""
+    payload = b"pretend onnx bytes"
+    settings = _settings(
+        EMBEDDING_MODEL_DIR=str(tmp_path),
+        EMBEDDING_ARTIFACT_SHA256=hashlib.sha256(payload).hexdigest(),
+        EMBEDDING_IDLE_UNLOAD_SECONDS=1,
+    )
+    (tmp_path / "model_int8.onnx").write_bytes(payload)
+    model = LocalEmbeddingModel(settings, session_factory=lambda path: object())
+    monkeypatch.setattr(model, "_ensure_tokenizer", lambda: object())
+    model.load()
+
+    seen: dict[str, bool] = {}
+
+    def batch(texts: list[str]) -> list[list[float]]:
+        seen["unloaded"] = model.unload_if_idle(now=time.monotonic() + 1000.0)
+        return [[0.0] * 384 for _ in texts]
+
+    monkeypatch.setattr(model, "_encode_batch", batch)
+    model.embed_documents(["one text"])
+
+    assert seen["unloaded"] is False, "an encode in flight holds the session"
+    assert model.session is not None
+    model.close()
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "the pinned int8 artifact is dynamically quantized: the activation scale "
+        "of a run comes from its largest activation, so a padded row or a second "
+        "row changes the vector. Measured max difference 1.35e-02 for one padded "
+        "row and 1.15e-02 for a two row batch, against the 1e-5 target."
+    ),
+)
+def test_padded_batch_matches_solo(embedder: LocalEmbeddingModel) -> None:
+    """A text encoded alone and inside a padded batch differ by at most 1e-5."""
+    tokenizer = embedder._ensure_tokenizer()
+    text = "The registration key for Server X is alpha-7."
+    other = "The car service is booked for Friday morning."
+    encoding = tokenizer.encode(text)
+    companion = tokenizer.encode(other)
+
+    solo = _pool_vector(
+        embedder.session.run(
+            None,
+            {
+                "input_ids": np.array([encoding.ids], dtype=np.int64),
+                "attention_mask": np.array([encoding.attention_mask], dtype=np.int64),
+                "token_type_ids": np.zeros((1, len(encoding.ids)), dtype=np.int64),
+            },
+        )[0][0][0]
+    )
+
+    width = embedder.max_tokens
+    input_ids = np.zeros((3, width), dtype=np.int64)
+    attention_mask = np.zeros((3, width), dtype=np.int64)
+    for row, item in enumerate([encoding, companion, encoding]):
+        input_ids[row, : len(item.ids)] = item.ids
+        attention_mask[row, : len(item.attention_mask)] = item.attention_mask
+    hidden = embedder.session.run(
+        None,
+        {
+            "input_ids": input_ids,
+            "attention_mask": attention_mask,
+            "token_type_ids": np.zeros_like(input_ids),
+        },
+    )[0]
+    padded = _pool_vector(hidden[0][0])
+
+    assert float(np.max(np.abs(solo - padded))) <= 1e-5
