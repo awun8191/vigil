@@ -41,13 +41,13 @@ from src.modules.connectors.repository import ConnectorsRepository
 from src.modules.settings.repository import SettingsRepository
 from src.modules.jobs.repository import JobsRepository
 
-EXPECTED_23_PROVIDERS = [
+EXPECTED_24_PROVIDERS = [
     # Core Dependencies (4)
     "get_settings",
     "get_db_session",
     "get_current_device",
     "get_current_user",
-    # Domain services (14)
+    # Domain services (15)
     "get_health_service",
     "get_auth_service",
     "get_cards_service",
@@ -61,6 +61,7 @@ EXPECTED_23_PROVIDERS = [
     "get_skills_service",
     "get_connectors_service",
     "get_settings_service",
+    "get_audit_service",
     "get_jobs_service",
     # External integrations (5)
     "get_jev_client",
@@ -71,11 +72,11 @@ EXPECTED_23_PROVIDERS = [
 ]
 
 
-def test_dependencies_all_exports_exactly_23_providers() -> None:
-    """Verify that src.dependencies.__all__ exists and contains exactly 23 expected providers."""
+def test_dependencies_all_exports_exactly_24_providers() -> None:
+    """Verify that src.dependencies.__all__ exists and contains exactly 24 expected providers."""
     assert hasattr(deps, "__all__"), "src.dependencies must define __all__"
-    assert len(deps.__all__) == 23, f"Expected 23 exports, got {len(deps.__all__)}: {deps.__all__}"
-    assert set(deps.__all__) == set(EXPECTED_23_PROVIDERS)
+    assert len(deps.__all__) == 24, f"Expected 24 exports, got {len(deps.__all__)}: {deps.__all__}"
+    assert set(deps.__all__) == set(EXPECTED_24_PROVIDERS)
 
 
 def test_every_exported_provider_is_callable() -> None:

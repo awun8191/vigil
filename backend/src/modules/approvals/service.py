@@ -23,6 +23,12 @@ from src.modules.approvals.repository import (
     ApprovalCreateDTO,
     ApprovalDTO,
 )
+from src.modules.audit.repository import AuditRepository
+from src.modules.audit.service import (
+    ACTION_APPROVAL_DECISION,
+    AuditService,
+    record_event,
+)
 from src.modules.jobs.repository import JobCreateDTO, JobsRepository
 from src.modules.jobs.service import JobsService
 from src.modules.runs.repository import MessageCreateDTO, RunsRepository
@@ -63,12 +69,14 @@ class ApprovalsService:
         mcp_host: MCPHostProtocol | None = None,
         jobs_service: JobsRepository | None = None,
         runs_service: RunsRepository | None = None,
+        audit: AuditRepository | None = None,
     ) -> None:
         self.session = session
         self.settings = settings
         # The API must not execute a tool. The host is accepted for wiring
         # compatibility and is never called from this service.
         self.mcp_host = mcp_host
+        self.audit = audit or AuditService(session=session, settings=settings)
         self.jobs_service = jobs_service or JobsService(
             session=session, settings=settings
         )
@@ -456,6 +464,23 @@ class ApprovalsService:
                 await self.session.commit()
             except Exception:
                 await self._rollback_quietly()
+
+        # The decision is durable now. The audit write comes after the commit on
+        # purpose: a failed audit write must not undo a recorded decision.
+        # record_event logs the failure and returns, so this call cannot raise.
+        await record_event(
+            self.audit,
+            actor="user",
+            action=ACTION_APPROVAL_DECISION,
+            subject=str(decided.id),
+            details={
+                "run_id": str(decided.run_id),
+                "tool_name": decided.tool_name,
+                "tool_call_id": decided.tool_call_id,
+                "decision": decided.status,
+                "decision_note": decided.decision_note,
+            },
+        )
 
         return ApprovalDecisionResponse(
             approval_id=decided.id,

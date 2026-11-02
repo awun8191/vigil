@@ -1,4 +1,4 @@
-"""Unit tests validating all 19 SQLAlchemy 2.0 declarative models and metadata contracts."""
+"""Unit tests validating all 20 SQLAlchemy 2.0 declarative models and metadata contracts."""
 from __future__ import annotations
 
 import uuid
@@ -13,6 +13,7 @@ from src.schemas import (
     AgentConfigModel,
     ApprovalModel,
     ArtifactModel,
+    AuditLogModel,
     Base,
     CardActionModel,
     CardModel,
@@ -52,14 +53,15 @@ EXPECTED_TABLES = {
     "memory_chunks",
     "jobs",
     "idempotency_records",
+    "audit_log",
 }
 
 
 def test_central_schema_exports_all_nineteen_tables() -> None:
-    """Verify that exactly 19 tables are registered in the centralized Base metadata."""
+    """Verify that exactly 20 tables are registered in the centralized Base metadata."""
     registered_tables = set(Base.metadata.tables.keys())
     assert registered_tables == EXPECTED_TABLES
-    assert len(registered_tables) == 19
+    assert len(registered_tables) == 20
 
 
 def test_models_map_to_expected_table_names() -> None:
@@ -84,6 +86,7 @@ def test_models_map_to_expected_table_names() -> None:
         JobModel: "jobs",
         IdempotencyRecordModel: "idempotency_records",
         AgentConfigModel: "agent_configs",
+        AuditLogModel: "audit_log",
     }
     for model, expected_table in model_table_map.items():
         assert model.__tablename__ == expected_table

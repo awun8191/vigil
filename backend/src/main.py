@@ -123,7 +123,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # 4. Attach uniform exception handlers
     register_exception_handlers(app)
 
-    # 5. Mount root API router aggregating all 14 domain modules
+    # 5. Mount root API router aggregating all 15 domain modules
     app.include_router(create_api_router(settings))
 
     return app

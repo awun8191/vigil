@@ -3,7 +3,7 @@ Central dependency hub for Vigil FastAPI backend.
 
 Centrally re-exports:
 - Core application dependencies (get_settings, get_db_session, get_current_device, get_current_user)
-- All 14 domain module service providers (get_<module>_service)
+- All 15 domain module service providers (get_<module>_service)
 - External infrastructure integration clients (get_jev_client, get_llm_client, etc.)
 
 Routers and tasks must import dependencies strictly from this module.
@@ -241,7 +241,7 @@ def get_compaction_service(
 
 
 # =============================================================================
-# 14 Domain Module Service Providers
+# 15 Domain Module Service Providers
 # =============================================================================
 
 get_health_service = _resolve_service_dependency("health", "get_health_service")
@@ -254,6 +254,7 @@ get_artifacts_service = _resolve_service_dependency("artifacts", "get_artifacts_
 get_skills_service = _resolve_service_dependency("skills", "get_skills_service")
 get_connectors_service = _resolve_service_dependency("connectors", "get_connectors_service")
 get_settings_service = _resolve_service_dependency("settings", "get_settings_service")
+get_audit_service = _resolve_service_dependency("audit", "get_audit_service")
 get_jobs_service = _resolve_service_dependency("jobs", "get_jobs_service")
 
 
@@ -715,7 +716,7 @@ __all__ = [
     "get_db_session",
     "get_current_device",
     "get_current_user",
-    # Domain Module Service Providers (14)
+    # Domain Module Service Providers (15)
     "get_health_service",
     "get_auth_service",
     "get_cards_service",
@@ -729,6 +730,7 @@ __all__ = [
     "get_skills_service",
     "get_connectors_service",
     "get_settings_service",
+    "get_audit_service",
     "get_jobs_service",
     # External Integration Client Providers (5)
     "get_jev_client",
