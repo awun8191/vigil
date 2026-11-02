@@ -5,8 +5,9 @@ build-backend = "hatchling.build"
 [project]
 name = "vigil-backend"
 version = "0.1.0"
-description = "Vigil Proactive AI Assistant & Sandboxed Execution Harness Backend"
+description = "Vigil: a self-hostable proactive AI assistant with approval-gated sandboxed execution."
 readme = "README.md"
+license = "Apache-2.0"
 requires-python = ">=3.12"
 dependencies = [
     "fastapi>=0.115.0",

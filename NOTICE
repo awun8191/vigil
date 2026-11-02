@@ -1,0 +1,11 @@
+Vigil
+Copyright 2026 Dauda Nasir
+
+This product includes software developed at
+the Vigil project (https://github.com/awun8191/vigil).
+
+The following components keep their own licenses:
+
+- pgvector, Copyright (c) 2015 to 2024, Andrew Kane. PostgreSQL license.
+- bge-small-en-v1.5, Copyright (c) Beijing Academy of Artificial Intelligence. MIT license.
+- Xenova/bge-small-en-v1.5 ONNX conversion, MIT license.
