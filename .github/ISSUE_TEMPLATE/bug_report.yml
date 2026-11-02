@@ -1,0 +1,79 @@
+name: "Bug report"
+description: "Report a defect with the steps that reproduce it."
+title: "[bug]: "
+labels: ["bug", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not report a security defect here. Follow [SECURITY.md](../blob/main/SECURITY.md).
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: State the behavior that you saw and the behavior that you expected.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Give the smallest sequence that shows the defect.
+      placeholder: |
+        1. Start the stack with docker compose
+        2. Pair a device
+        3. POST /api/v1/runs with ...
+        4. Read the worker log
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs
+      description: Paste the log lines or the error envelope. Remove tokens and keys.
+      render: shell
+    validations:
+      required: false
+  - type: input
+    id: commit
+    attributes:
+      label: Commit or version
+      placeholder: "output of git rev-parse --short HEAD"
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Runs and the barrier
+        - Job queue and worker
+        - Memory and retrieval
+        - Compaction
+        - Triage and cards
+        - Sandbox runner
+        - Connectors
+        - Auth and pairing
+        - Web client
+        - Migrations
+        - Deployment
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Operating system, Docker version, PostgreSQL version, and how you run Vigil.
+      placeholder: |
+        Debian 12, Docker 29.9.1, PostgreSQL 16.15 + pgvector 0.8.7, docker compose, Python 3.12
+    validations:
+      required: true
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before you submit
+      options:
+        - label: I removed secrets, tokens, and personal data from the logs.
+          required: true
+        - label: I searched the open issues for the same defect.
+          required: true

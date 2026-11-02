@@ -1,0 +1,57 @@
+name: "Feature request"
+description: "Propose a capability or a change in behavior."
+title: "[feat]: "
+labels: ["enhancement", "triage"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: Describe the task that Vigil cannot do today. State who needs it.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed change
+      description: Describe the behavior that you want. Name the module or the connector that changes.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives
+      description: Describe the other options that you considered.
+    validations:
+      required: false
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Runs and the barrier
+        - Job queue and worker
+        - Memory and retrieval
+        - Compaction
+        - Triage and cards
+        - Sandbox runner
+        - Connectors
+        - Auth and pairing
+        - Web client
+        - Mobile client
+        - Deployment
+        - Documentation
+    validations:
+      required: true
+  - type: checkboxes
+    id: invariants
+    attributes:
+      label: Architecture invariants
+      description: A proposal that breaks an invariant needs a separate discussion first.
+      options:
+        - label: The run stays stateless between turns.
+          required: false
+        - label: An external side effect still requires an approval row.
+          required: false
+        - label: The design needs no new datastore beyond PostgreSQL.
+          required: false

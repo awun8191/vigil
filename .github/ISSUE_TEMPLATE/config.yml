@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security defect
+    url: https://github.com/awun8191/vigil/security/advisories/new
+    about: Report a vulnerability in private. Do not open a public issue.
+  - name: Question or idea
+    url: https://github.com/awun8191/vigil/discussions
+    about: Ask a question or discuss a design before you open an issue.
+  - name: Documentation
+    url: https://github.com/awun8191/vigil/blob/main/docs/ARCHITECTURE.md
+    about: Read the technical specification and the subsystem design.
