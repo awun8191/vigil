@@ -120,3 +120,8 @@ Thumbs.db
 # Agent Runtime & Scratch Ephemeral Data
 # ------------------------------------------
 .agents/
+
+# ------------------------------------------
+# Local Git Worktrees
+# ------------------------------------------
+.worktrees/
