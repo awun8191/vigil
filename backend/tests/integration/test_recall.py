@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import math
+import time
 import uuid
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -27,7 +28,10 @@ from sqlalchemy.ext.asyncio import (
 
 from src.config.settings import Settings, get_settings
 from src.modules.memory.repository import MemoryChunkCreateDTO
-from src.modules.memory.retrieval import RetrievalPolicy
+from src.modules.memory.retrieval import (
+    RetrievalPolicy,
+    create_tenant_graph_index,
+)
 from src.modules.memory.service import MemoryService
 from src.schemas.base import Base
 
@@ -40,6 +44,9 @@ RECALL_CHUNKS_PER_USER = 1000
 RECALL_TOTAL = RECALL_USERS * RECALL_CHUNKS_PER_USER
 RECALL_QUERIES = 5
 RECALL_FLOOR = 0.95
+HEAVY_USER_CHUNKS = 50000
+HEAVY_USER_QUERIES = 20
+BULK_INSERT_BATCH = 1000
 
 INSERT_CHUNK = (
     "INSERT INTO memory_chunks "
@@ -234,11 +241,11 @@ async def test_recall_at_100k() -> None:
                     recall = len(exact_ids & approximate_ids) / len(exact_ids)
                     recalls.append(recall)
 
-                # The settings are in force for the query that just ran.
-                ef_search = await session.execute(text("SHOW hnsw.ef_search"))
-                assert ef_search.scalar() == str(policy.ef_search)
-                scan_mode = await session.execute(text("SHOW hnsw.iterative_scan"))
-                assert scan_mode.scalar() == policy.iterative_scan
+                # The tenant holds 1000 rows, so the exact scan answers. It is
+                # exact by construction, and the graph settings do not apply.
+                assert service.last_retrieval_path == "exact"
+                index_scan = await session.execute(text("SHOW enable_indexscan"))
+                assert index_scan.scalar() == "off"
         finally:
             await probe.close()
 
@@ -385,3 +392,235 @@ async def test_delete_removes_chunk() -> None:
             )
 
     assert [result.content for result in results] == ["a second chunk"]
+
+
+def _percentile(values: Sequence[float], fraction: float) -> float:
+    """Return the linear interpolated percentile of a sample."""
+    ordered = sorted(values)
+    if not ordered:
+        return float("nan")
+    position = (len(ordered) - 1) * fraction
+    lower = math.floor(position)
+    upper = math.ceil(position)
+    if lower == upper:
+        return ordered[lower]
+    return ordered[lower] + (ordered[upper] - ordered[lower]) * (position - lower)
+
+
+async def _fill_table(
+    scratch: ScratchDatabase,
+    user_ids: Sequence[uuid.UUID],
+    chunks_per_user: int,
+    build_global: bool = True,
+) -> None:
+    """Insert the rows, then build the graph once from the finished table.
+
+    The graph is dropped before the insert and created after it, so the insert
+    measures the table and not the graph maintenance. ``build_global`` builds
+    the global graph, which is the schema default. A caller that installs a
+    tenant graph passes false, because that graph is the one it measures.
+    """
+    rng = np.random.default_rng(20261101)
+    created_at = datetime.now(timezone.utc)
+    total = len(user_ids) * chunks_per_user
+    connection = await asyncpg.connect(scratch.dsn)
+    try:
+        await connection.executemany(
+            "INSERT INTO users (id, display_name) VALUES ($1, $2)",
+            [
+                (user_id, f"recall-user-{index}")
+                for index, user_id in enumerate(user_ids)
+            ],
+        )
+        await connection.execute(
+            "DROP INDEX IF EXISTS ix_memory_chunks_embedding_hnsw"
+        )
+        await connection.execute("SET maintenance_work_mem = '512MB'")
+        await connection.execute("SET max_parallel_maintenance_workers = 0")
+        await connection.execute("SET synchronous_commit = off")
+
+        batch: list[tuple] = []
+        for index in range(total):
+            batch.append(
+                (
+                    uuid.uuid4(),
+                    user_ids[index % len(user_ids)],
+                    f"recall chunk {index}",
+                    _vector_text(_unit(_near_query(rng))),
+                    ACTIVE_MODEL,
+                    created_at,
+                )
+            )
+            if len(batch) == BULK_INSERT_BATCH:
+                await connection.executemany(INSERT_CHUNK, batch)
+                batch.clear()
+        if batch:
+            await connection.executemany(INSERT_CHUNK, batch)
+
+        if build_global:
+            await connection.execute(
+                "CREATE INDEX ix_memory_chunks_embedding_hnsw ON memory_chunks "
+                "USING hnsw (embedding vector_cosine_ops) WITH (m = 16, ef_construction = 64)"
+            )
+        # A table that a bulk load filled has no statistics until this runs. The
+        # planner needs them to choose the tenant index and the sort, so the
+        # measured latency reflects the shipped path and not a stale plan.
+        await connection.execute("ANALYZE memory_chunks")
+    finally:
+        await connection.close()
+
+
+async def _exact_top_ids(
+    probe: asyncpg.Connection,
+    user_id: uuid.UUID,
+    query: np.ndarray,
+    top_n: int = 50,
+) -> set[uuid.UUID]:
+    """Return the exact top n ids for one query, with every index path off."""
+    async with probe.transaction():
+        await probe.execute("SET LOCAL enable_indexscan = off")
+        await probe.execute("SET LOCAL enable_indexonlyscan = off")
+        await probe.execute("SET LOCAL enable_bitmapscan = off")
+        rows = await probe.fetch(
+            "SELECT id FROM memory_chunks "
+            "WHERE user_id = $1 AND scope = 'global' AND excluded = false "
+            "AND embedding_model = $2 "
+            "ORDER BY embedding <=> $3::vector LIMIT $4",
+            user_id,
+            ACTIVE_MODEL,
+            _vector_text(query, precision=6),
+            top_n,
+        )
+    return {row["id"] for row in rows}
+
+
+async def _measure_shipped_path(
+    scratch: ScratchDatabase,
+    user_ids: Sequence[uuid.UUID],
+    queries_per_user: int,
+    top_n: int = 50,
+) -> dict:
+    """Measure recall@50 and the latency of the shipped path against an exact scan.
+
+    The service chooses the path. The result records the path name, so a test
+    can state which path answered the query and not only its recall.
+    """
+    rng = np.random.default_rng(20261102)
+    recalls: list[float] = []
+    latencies: list[float] = []
+    paths: set[str] = set()
+    probe = await asyncpg.connect(scratch.dsn)
+    try:
+        async with scratch.sessionmaker() as session:
+            service = MemoryService(session=session, settings=Settings())
+            policy = RetrievalPolicy.from_settings(Settings()).with_top_n(top_n)
+            for user_id in user_ids:
+                for _ in range(queries_per_user):
+                    query = _unit(_near_query(rng))
+                    expected = await _exact_top_ids(probe, user_id, query, top_n)
+                    started = time.perf_counter()
+                    results = await service.search_embedding(
+                        user_id,
+                        [float(value) for value in query],
+                        scopes=["global"],
+                        policy=policy,
+                    )
+                    latencies.append((time.perf_counter() - started) * 1000.0)
+                    paths.add(service.last_retrieval_path or "unknown")
+                    found = {result.id for result in results}
+                    recalls.append(len(expected & found) / len(expected))
+            await session.rollback()
+    finally:
+        await probe.close()
+    return {"paths": paths, "recalls": recalls, "latencies": latencies}
+
+
+def _report(name: str, measured: dict) -> float:
+    """Print one measurement line and return the mean recall."""
+    recalls = measured["recalls"]
+    mean_recall = sum(recalls) / len(recalls)
+    print(
+        f"{name}: paths={sorted(measured['paths'])} queries={len(recalls)} "
+        f"recall@50 mean={mean_recall:.6f} min={min(recalls):.3f} "
+        f"p50={_percentile(measured['latencies'], 0.50):.2f}ms "
+        f"p95={_percentile(measured['latencies'], 0.95):.2f}ms"
+    )
+    return mean_recall
+
+
+@pytest.mark.asyncio
+async def test_recall_many_light_users() -> None:
+    """100k rows over 100 users: the shipped path is the exact scan, and it holds.
+
+    Every tenant holds 1000 rows. That is below the measured crossover, so the
+    answer must come from the tenant rows and an exact sort. The vector index
+    reaches recall@50 of 0.56 on the same rows, and the test would catch a
+    return to that path.
+    """
+    user_ids = [uuid.uuid4() for _ in range(RECALL_USERS)]
+    policy = RetrievalPolicy.from_settings(Settings())
+    assert policy.exact_scan_max_rows >= RECALL_CHUNKS_PER_USER, (
+        "the crossover is below one light tenant, so the exact path cannot serve "
+        f"a tenant of {RECALL_CHUNKS_PER_USER} rows"
+    )
+
+    async with _scratch_database() as scratch:
+        await _fill_table(scratch, user_ids, RECALL_CHUNKS_PER_USER)
+        measured = await _measure_shipped_path(
+            scratch, user_ids[:3], RECALL_QUERIES
+        )
+
+    mean_recall = _report("many light users", measured)
+    assert measured["paths"] == {"exact"}
+    assert mean_recall >= RECALL_FLOOR, (
+        f"recall@50 {mean_recall:.6f} below {RECALL_FLOOR}: {measured['recalls']}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_recall_heavy_user() -> None:
+    """50k rows in one tenant: the shipped path meets the floor.
+
+    The measurement sets the crossover below 50,000 rows, so this tenant gets
+    its own graph. On the same rows the global graph reaches recall@50 of 0.5612
+    at ef_search 200 and 0.8483 at 1000, because its walk spends its budget on
+    the rows of other tenants. A graph that holds this tenant alone, built with
+    m=32 and ef_construction=200, reaches 0.9796 at ef_search 1000.
+
+    The test first reads the fallback: a tenant above the crossover with no
+    graph gets the exact scan, and that answer is exact. Then it installs the
+    graph, and the shipped path must reach the floor on the graph.
+    """
+    user_ids = [uuid.uuid4()]
+    policy = RetrievalPolicy.from_settings(Settings())
+    assert policy.exact_scan_max_rows < HEAVY_USER_CHUNKS, (
+        "the crossover is at or above the heavy tenant, so the exact scan would "
+        f"answer a tenant of {HEAVY_USER_CHUNKS} rows"
+    )
+
+    async with _scratch_database() as scratch:
+        await _fill_table(
+            scratch, user_ids, HEAVY_USER_CHUNKS, build_global=False
+        )
+
+        # No tenant graph yet: the exact scan answers, and it is exact.
+        fallback = await _measure_shipped_path(scratch, user_ids, 3)
+        fallback_recall = _report("heavy user, no graph", fallback)
+        assert fallback["paths"] == {"exact"}
+        assert fallback_recall == 1.0
+
+        # Install the graph: the maintenance step for a tenant above the
+        # crossover. It also retires the global graph.
+        async with scratch.sessionmaker() as session:
+            await create_tenant_graph_index(session, user_ids[0])
+            await session.commit()
+
+        measured = await _measure_shipped_path(
+            scratch, user_ids, HEAVY_USER_QUERIES
+        )
+
+    mean_recall = _report("heavy user", measured)
+    assert measured["paths"] == {"hnsw"}
+    assert mean_recall >= RECALL_FLOOR, (
+        f"recall@50 {mean_recall:.6f} below {RECALL_FLOOR}: {measured['recalls']}"
+    )

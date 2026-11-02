@@ -25,6 +25,10 @@ class MemorySearchResponse(BaseModel):
     """Outbound collection of retrieved memory chunks."""
     results: list[MemorySearchResultItem] = Field(..., description="Ranked memory results.")
     query: str = Field(..., description="Echoed query.")
+    path: str | None = Field(
+        default=None,
+        description="Retrieval path that answered the query: exact or hnsw.",
+    )
 
 
 class MemoryChunkResponse(BaseModel):

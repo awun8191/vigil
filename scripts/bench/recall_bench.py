@@ -9,13 +9,13 @@ isotropic noise. That is the hard case for a filtered approximate scan: the
 global graph is one crowd, the tenant filter keeps 1 percent of the heap, so a
 plain ef_search window of 200 candidates holds almost no rows of the asked user.
 
-Two paths are measured on the same rows:
-
-* ``planner``: the production statement exactly as written, with the plan the
-  planner chooses. The result records the plan.
-* ``forced-hnsw``: the same statement with the btree tenant indexes removed, so
-  the HNSW index is the only cheap access path. The run asserts the plan before
-  it measures. Both ``hnsw.iterative_scan`` modes run on this path.
+The shipped path is measured on the same rows. ``--path auto`` uses the measured
+crossover from settings, ``--path exact`` forces the exact scan, and ``--path
+hnsw`` forces the graph walk. ``--install-tenant-graph`` builds the graph of each
+measured tenant and retires the global graph, which is the state that a tenant
+above the crossover needs. The graph run asserts the plan before it measures.
+The diagnostic runs drop the two btree tenant indexes, so the HNSW index is the
+only cheap access path, and they measure every ``hnsw.iterative_scan`` mode.
 
 Ids are derived from the seed with uuid5, so a second run with the same seed
 rebuilds the same 100k rows.
@@ -56,7 +56,14 @@ from sqlalchemy.ext.asyncio import (  # noqa: E402
 )
 
 from src.config.settings import Settings  # noqa: E402
-from src.modules.memory.retrieval import RetrievalPolicy  # noqa: E402
+from src.modules.memory.retrieval import (  # noqa: E402
+    GLOBAL_GRAPH_INDEX,
+    RetrievalPolicy,
+    exact_scan_statements,
+    graph_path_statements,
+    plan_retrieval,
+    tenant_graph_ddl,
+)
 from src.modules.memory.service import MemoryService  # noqa: E402
 
 DIMENSIONS = 384
@@ -154,13 +161,25 @@ def plan_summary(plan: list) -> list[str]:
 
 
 def uses_hnsw(nodes: Sequence[str]) -> bool:
-    """Return True when a plan node reads the HNSW index."""
-    return any("ix_memory_chunks_embedding_hnsw" in node for node in nodes)
+    """Return True when a plan node reads an HNSW index, global or per tenant."""
+    return any("hnsw" in node.lower() for node in nodes)
 
 
 async def reset_tables(connection: asyncpg.Connection) -> None:
-    """Empty the two tables the measurement uses, then reclaim the space."""
-    await connection.execute("DROP INDEX IF EXISTS ix_memory_chunks_embedding_hnsw")
+    """Empty the two tables the measurement uses, then reclaim the space.
+
+    Every HNSW index on the table goes first, not only the global one. A tenant
+    graph that an earlier run built stays valid for its tenant, and the planner
+    reads it in a later run, so that run would not measure the path the
+    arguments ask for.
+    """
+    graphs = await connection.fetch(
+        "SELECT indexname FROM pg_indexes "
+        "WHERE tablename = 'memory_chunks' AND indexdef ILIKE '%USING hnsw%'"
+    )
+    for row in graphs:
+        # The name comes from the catalog, not from an argument.
+        await connection.execute(f'DROP INDEX IF EXISTS "{row["indexname"]}"')
     await connection.execute("TRUNCATE memory_chunks, users CASCADE")
     await connection.execute("VACUUM (FULL, ANALYZE) memory_chunks")
 
@@ -208,6 +227,25 @@ async def build_index(connection: asyncpg.Connection) -> float:
         "CREATE INDEX ix_memory_chunks_embedding_hnsw ON memory_chunks "
         "USING hnsw (embedding vector_cosine_ops) WITH (m = 16, ef_construction = 64)"
     )
+    await connection.execute("ANALYZE memory_chunks")
+    return time.perf_counter() - started
+
+
+async def install_tenant_graphs(
+    connection: asyncpg.Connection, users: list[uuid.UUID]
+) -> float:
+    """Build one graph per measured tenant, then retire the global graph.
+
+    This is the maintenance step that the retrieval path expects above the
+    crossover. Use one tenant for the heavy case: a graph per light tenant costs
+    time and gains nothing, because the exact scan answers that size.
+    """
+    started = time.perf_counter()
+    await connection.execute("SET maintenance_work_mem = '512MB'")
+    await connection.execute("SET max_parallel_maintenance_workers = 0")
+    for user_id in users:
+        await connection.execute(tenant_graph_ddl(user_id))
+    await connection.execute(f"DROP INDEX IF EXISTS {GLOBAL_GRAPH_INDEX}")
     await connection.execute("ANALYZE memory_chunks")
     return time.perf_counter() - started
 
@@ -281,9 +319,16 @@ async def plan_for(
     user_id: uuid.UUID,
     query: np.ndarray,
     top_n: int,
+    presets: Sequence[str] = (),
 ) -> list[str]:
-    """Explain the production statement for one user and one query."""
+    """Explain the production statement for one user and one query.
+
+    ``presets`` are the session settings of the measured path. They run in the
+    same transaction as the explain, so the plan shows the path the query takes.
+    """
     async with probe.transaction():
+        for statement in presets:
+            await probe.execute(statement)
         rows = await probe.fetch(
             EXPLAIN_SQL, user_id, ACTIVE_MODEL, vector_text(query), top_n
         )
@@ -346,6 +391,7 @@ async def run_mode(
     recalls: list[float] = []
     latencies: list[float] = []
     returned: list[int] = []
+    paths: dict[str, int] = {}
     async with sessionmaker() as session:
         service = MemoryService(session=session, settings=Settings())
         for user_index, user_id in enumerate(users):
@@ -357,6 +403,8 @@ async def run_mode(
                     user_id, payload, scopes=["global"], policy=policy
                 )
                 latencies.append((time.perf_counter() - started) * 1000.0)
+                path = service.last_retrieval_path or "unknown"
+                paths[path] = paths.get(path, 0) + 1
                 found = {result.id for result in results}
                 expected = exact_ids[(user_index, query_index)]
                 recalls.append(len(expected & found) / len(expected))
@@ -371,6 +419,7 @@ async def run_mode(
         "label": label,
         "ef_search": settings_now["hnsw.ef_search"],
         "iterative_scan": settings_now["hnsw.iterative_scan"],
+        "paths": paths,
         "queries": len(recalls),
         "recall_mean": sum(recalls) / len(recalls),
         "recall_min": min(recalls),
@@ -383,7 +432,9 @@ async def run_mode(
     }
 
 
-def policy_with(top_n: int, ef_search: int, mode: str) -> RetrievalPolicy:
+def policy_with(
+    top_n: int, ef_search: int, mode: str, exact_scan_max_rows: int
+) -> RetrievalPolicy:
     """Return the production policy with one scan setting overridden."""
     base = RetrievalPolicy.from_settings(Settings())
     return RetrievalPolicy(
@@ -395,6 +446,7 @@ def policy_with(top_n: int, ef_search: int, mode: str) -> RetrievalPolicy:
         minimum_similarity=base.minimum_similarity,
         ef_search=ef_search,
         iterative_scan=mode,
+        exact_scan_max_rows=exact_scan_max_rows,
     )
 
 
@@ -408,6 +460,23 @@ async def main() -> int:
     parser.add_argument("--top-n", type=int, default=50)
     parser.add_argument("--exact-cache", type=Path, default=None)
     parser.add_argument("--planner-only", action="store_true")
+    parser.add_argument(
+        "--path",
+        choices=("auto", "exact", "hnsw"),
+        default="auto",
+        help=(
+            "auto uses the measured crossover from settings, exact forces the "
+            "exact scan, and hnsw forces the graph walk"
+        ),
+    )
+    parser.add_argument(
+        "--install-tenant-graph",
+        action="store_true",
+        help=(
+            "build one graph per measured tenant and retire the global graph; "
+            "use one tenant for the heavy case"
+        ),
+    )
     args = parser.parse_args()
 
     plain = dsn_plain(args.database_url)
@@ -426,31 +495,82 @@ async def main() -> int:
         insert_seconds = await insert_rows(connection, users, args.chunks_per_user)
         total_rows = args.users * args.chunks_per_user
         log(f"inserted {total_rows} rows in {insert_seconds:.1f}s")
-        index_seconds = await build_index(connection)
-        log(f"built HNSW index in {index_seconds:.1f}s")
+        index_seconds = 0.0
+        tenant_graph_seconds = 0.0
+        if args.install_tenant_graph:
+            tenant_graph_seconds = await install_tenant_graphs(connection, users)
+            log(f"built {len(users)} tenant graphs in {tenant_graph_seconds:.1f}s")
+        else:
+            index_seconds = await build_index(connection)
+            log(f"built HNSW index in {index_seconds:.1f}s")
 
         exact_ids, exact_stats = await exact_results(
             probe, users, queries, args.top_n, args.exact_cache
         )
         margin = await neighbour_margin(probe, users, queries)
 
-        planner_plan = await plan_for(probe, users[0], queries[0][0], args.top_n)
-        log(f"planner path: {planner_plan}")
+        threshold = {
+            "auto": RetrievalPolicy.from_settings(Settings()).exact_scan_max_rows,
+            "exact": 1_000_000_000,
+            "hnsw": 0,
+        }[args.path]
+        shipped_policy = policy_with(
+            args.top_n, args.ef_search, "relaxed_order", threshold
+        )
+        presets = (
+            [str(item) for item in graph_path_statements(shipped_policy)]
+            if args.path == "hnsw"
+            else [str(item) for item in exact_scan_statements()]
+            if args.path == "exact"
+            else None
+        )
+        label = f"shipped {args.path}"
+        chosen_path = args.path
+        if presets is None:
+            # The auto path must plan with the settings that the router uses for
+            # this tenant. An empty preset list plans the bare query, and a
+            # leftover graph index then answers it, so the plan line would not
+            # describe the shipped path.
+            async with sessionmaker() as plan_session:
+                planned = await plan_retrieval(
+                    plan_session,
+                    users[0],
+                    queries[0][0],
+                    ["global"],
+                    shipped_policy,
+                    ACTIVE_MODEL,
+                )
+            chosen_path = planned.path
+            presets = [str(item) for item in planned.statements]
+        planner_plan = await plan_for(
+            probe, users[0], queries[0][0], args.top_n, presets
+        )
+        log(f"{label} path ({chosen_path}): {planner_plan}")
+        if chosen_path == "hnsw" and not uses_hnsw(planner_plan):
+            raise SystemExit(
+                "the graph path does not read the HNSW index: " f"{planner_plan}"
+            )
+        if chosen_path == "exact" and uses_hnsw(planner_plan):
+            raise SystemExit(
+                "the exact path reads the HNSW index: " f"{planner_plan}"
+            )
         planner = await run_mode(
             sessionmaker,
             users,
             queries,
-            policy_with(args.top_n, args.ef_search, "relaxed_order"),
+            shipped_policy,
             exact_ids,
-            "planner",
+            label,
         )
         planner["plan"] = planner_plan
         planner["used_hnsw"] = uses_hnsw(planner_plan)
+        planner["path"] = args.path
+        planner["exact_scan_max_rows"] = threshold
         modes = [planner]
 
         forced_plan: list[str] = []
         forced_results = []
-        if not args.planner_only:
+        if not args.planner_only and not args.install_tenant_graph:
             # Remove the btree tenant paths, so the HNSW index is the only
             # cheap access path. The indexes come back in the finally block.
             for name in TENANT_INDEXES:
@@ -477,7 +597,7 @@ async def main() -> int:
                         sessionmaker,
                         users,
                         queries,
-                        policy_with(args.top_n, ef_search, mode),
+                        policy_with(args.top_n, ef_search, mode, 0),
                         exact_ids,
                         label,
                         limit_per_user=limit,
@@ -511,7 +631,16 @@ async def main() -> int:
         "queries_per_user": args.queries_per_user,
         "index": {"m": 16, "ef_construction": 64},
         "index_build_seconds": index_seconds,
+        "tenant_graph": {
+            "installed": bool(args.install_tenant_graph),
+            "tenants": len(users) if args.install_tenant_graph else 0,
+            "m": 32,
+            "ef_construction": 200,
+            "build_seconds": tenant_graph_seconds,
+        },
         "insert_seconds": insert_seconds,
+        "measured_path": args.path,
+        "exact_scan_max_rows": threshold,
         "exact_scan": {
             **exact_stats,
             "top_n": args.top_n,
