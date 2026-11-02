@@ -10,6 +10,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.config.security import encrypt_secret
 from src.config.settings import Settings
 from src.integrations.repositories import MCPHostProtocol
+from src.modules.audit.repository import AuditRepository
+from src.modules.audit.service import (
+    ACTION_CONNECTOR_CONNECT,
+    AuditService,
+    record_event,
+)
 from src.modules.connectors.data import RegisterConnectorRequest, SyncTriggerResponse
 from src.modules.connectors.repository import (
     ConnectorAccountCreateDTO,
@@ -36,10 +42,12 @@ class ConnectorsService:
         session: AsyncSession,
         settings: Settings,
         mcp_host: MCPHostProtocol | None = None,
+        audit: AuditRepository | None = None,
     ) -> None:
         self.session = session
         self.settings = settings
         self.mcp_host = mcp_host
+        self.audit = audit or AuditService(session=session, settings=settings)
 
     async def get_account(self, account_id: UUID) -> ConnectorAccountDTO | None:
         return self._accounts.get(account_id)
@@ -145,7 +153,24 @@ class ConnectorsService:
             encrypted_credentials=encrypted,
             scopes=req.scopes,
         )
-        return await self.save_account(dto)
+        account = await self.save_account(dto)
+
+        # The account is saved now. The audit row names the account and the
+        # connector. It never carries the credentials or the ciphertext.
+        # record_event logs a failure and returns, so the connect still succeeds.
+        await record_event(
+            self.audit,
+            actor="user",
+            action=ACTION_CONNECTOR_CONNECT,
+            subject=str(account.id),
+            details={
+                "user_id": str(user_id),
+                "connector_id": req.connector_id,
+                "account_label": req.account_label,
+                "scopes": list(req.scopes),
+            },
+        )
+        return account
 
     async def trigger_sync(self, account_id: UUID) -> SyncTriggerResponse:
         """Enqueue delta sync background job for connector."""

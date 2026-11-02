@@ -13,6 +13,7 @@ from src.schemas import (
     AgentConfigModel,
     ApprovalModel,
     ArtifactModel,
+    AuditLogModel,
     Base,
     CardActionModel,
     CardModel,
@@ -54,10 +55,11 @@ EXPECTED_TABLES = {
     "jobs",
     "idempotency_records",
     "skills",
+    "audit_log",
 }
 
 
-def test_central_schema_exports_all_twenty_tables() -> None:
+def test_central_schema_exports_all_tables() -> None:
     """Verify that exactly 20 tables are registered in the centralized Base metadata."""
     registered_tables = set(Base.metadata.tables.keys())
     assert registered_tables == EXPECTED_TABLES
@@ -87,6 +89,7 @@ def test_models_map_to_expected_table_names() -> None:
         IdempotencyRecordModel: "idempotency_records",
         AgentConfigModel: "agent_configs",
         SkillModel: "skills",
+        AuditLogModel: "audit_log",
     }
     for model, expected_table in model_table_map.items():
         assert model.__tablename__ == expected_table

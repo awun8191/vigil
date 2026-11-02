@@ -1,4 +1,4 @@
-"""System schemas: background jobs and idempotency records."""
+"""System schemas: background jobs, idempotency records, and the audit log."""
 from __future__ import annotations
 
 from datetime import datetime, timezone
@@ -6,7 +6,16 @@ from typing import Any
 import uuid
 
 import sqlalchemy as sa
-from sqlalchemy import DateTime, Index, Integer, LargeBinary, String, Text, func
+from sqlalchemy import (
+    CheckConstraint,
+    DateTime,
+    Index,
+    Integer,
+    LargeBinary,
+    String,
+    Text,
+    func,
+)
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 from src.schemas.base import Base
@@ -114,4 +123,56 @@ class IdempotencyRecordModel(Base):
     )
     expires_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, index=True
+    )
+
+
+AUDIT_ACTORS = ("user", "system", "worker")
+"""The only actors an audit row can name. The database enforces this set."""
+
+
+class AuditLogModel(Base):
+    """Append-only record of one privileged action.
+
+    There is no update path and no delete path. The table has no ``updated_at``
+    column, and neither the service nor the router can modify a stored row. A
+    correction is a new row, never an edit.
+    """
+
+    __tablename__ = "audit_log"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    actor: Mapped[str] = mapped_column(String(16), nullable=False)
+    action: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    subject: Mapped[str] = mapped_column(String(255), nullable=False)
+    details: Mapped[dict[str, Any]] = mapped_column(
+        JSONB,
+        nullable=False,
+        default=dict,
+        server_default=sa.text("'{}'::jsonb"),
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+        server_default=func.now(),
+        index=True,
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "actor IN ('user', 'system', 'worker')",
+            name="audit_log_actor",
+        ),
+        # The cursor page reads newest first, and it breaks a timestamp tie on
+        # the primary key. This index serves that exact ordering.
+        Index("ix_audit_log_created_id", created_at.desc(), id.desc()),
+        # The optional action filter and the same ordering in one index.
+        Index(
+            "ix_audit_log_action_created_id",
+            "action",
+            created_at.desc(),
+            id.desc(),
+        ),
     )

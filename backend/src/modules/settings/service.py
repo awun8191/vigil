@@ -7,6 +7,12 @@ from uuid import UUID, uuid4
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.config.settings import Settings
+from src.modules.audit.repository import AuditRepository
+from src.modules.audit.service import (
+    ACTION_SETTINGS_CHANGE,
+    AuditService,
+    record_event,
+)
 from src.modules.settings.data import SystemLimitsResponse
 from src.modules.settings.repository import (
     AuditLogCreateDTO,
@@ -24,9 +30,15 @@ class SettingsService:
     _user_settings: ClassVar[dict[UUID, UserSettingsDTO]] = {}
     _audit_logs: ClassVar[list[AuditLogDTO]] = []
 
-    def __init__(self, session: AsyncSession, settings: Settings) -> None:
+    def __init__(
+        self,
+        session: AsyncSession,
+        settings: Settings,
+        audit: AuditRepository | None = None,
+    ) -> None:
         self.session = session
         self.settings = settings
+        self.audit = audit or AuditService(session=session, settings=settings)
 
     async def get_user_settings(self, user_id: UUID) -> UserSettingsDTO | None:
         if user_id in self._user_settings:
@@ -56,6 +68,20 @@ class SettingsService:
             preferred_model_tier=settings.get("preferred_model_tier", current_tier),
         )
         self._user_settings[user_id] = updated
+
+        # The new settings are stored now. The audit row names the user and the
+        # keys that changed. record_event logs a failure and returns, so the
+        # change still succeeds when the log is unavailable.
+        await record_event(
+            self.audit,
+            actor="user",
+            action=ACTION_SETTINGS_CHANGE,
+            subject=str(user_id),
+            details={
+                "changed": sorted(str(key) for key in settings),
+                "values": dict(settings),
+            },
+        )
         return updated
 
     async def record_audit_entry(self, data: AuditLogCreateDTO) -> None:
