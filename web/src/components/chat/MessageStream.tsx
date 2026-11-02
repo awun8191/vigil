@@ -2,6 +2,10 @@ import { useEffect, useMemo, useRef } from 'react';
 import type { ReactNode } from 'react';
 import type { ChatMessage } from '@/types';
 import MessageItem from './MessageItem';
+import {
+  Message,
+} from '@/components/ui/c-message-3-utils/message';
+import { Bubble, BubbleContent } from '@/components/ui/c-message-3-utils/bubble';
 
 interface Props {
   messages: ChatMessage[];
@@ -15,7 +19,7 @@ const STICK_THRESHOLD = 80;
 
 function dayLabel(iso: string): string {
   const d = new Date(iso);
-  return d.toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric' });
+  return d.toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' });
 }
 
 export function MessageStream({ messages, streamedText, streaming, trailing, emptyHint }: Props) {
@@ -65,17 +69,18 @@ export function MessageStream({ messages, streamedText, streaming, trailing, emp
           ))}
 
           {streaming && streamedText ? (
-            <li className="flex gap-3">
-              <div className="relative mt-[5px] flex w-3.5 shrink-0 justify-center">
-                <span className="absolute mt-[7px] h-1.5 w-1.5 animate-pulse rounded-full bg-[var(--accent)]" />
-              </div>
-              <div className="min-w-0 flex-1 text-[15px] leading-relaxed whitespace-pre-wrap">
-                {streamedText}
-                <span
-                  aria-hidden
-                  className="ml-0.5 inline-block h-[1.05em] w-[2px] translate-y-[3px] animate-pulse bg-[var(--accent)]"
-                />
-              </div>
+            <li>
+              <Message>
+                <Bubble variant="muted">
+                  <BubbleContent>
+                    {streamedText}
+                    <span
+                      aria-hidden
+                      className="ml-0.5 inline-block h-[1.05em] w-[2px] translate-y-[3px] animate-pulse bg-[var(--text)]"
+                    />
+                  </BubbleContent>
+                </Bubble>
+              </Message>
             </li>
           ) : null}
         </ul>

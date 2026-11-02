@@ -13,7 +13,7 @@ function applyTheme(theme: Theme): void {
   document.documentElement.setAttribute('data-theme', theme);
   // Keeps the mobile browser chrome and native form controls in step with the surface.
   const meta = document.querySelector('meta[name="theme-color"]');
-  if (meta) meta.setAttribute('content', theme === 'light' ? '#FBF9F5' : '#070A10');
+  if (meta) meta.setAttribute('content', theme === 'light' ? '#FFFFFF' : '#000000');
 }
 
 interface ThemeState {

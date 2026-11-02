@@ -4,7 +4,6 @@ import { ArrowRight, Smartphone } from 'lucide-react';
 import { api, IS_MOCK } from '@/lib/api';
 import { userMessageOf } from '@/lib/errors';
 import { formatPairingCode, platformDeviceName } from '@/lib/format';
-import { SparkMark } from '@/components/layout/SparkMark';
 import { useSession } from '@/store/useSession';
 
 /**
@@ -51,21 +50,19 @@ export default function PairRoute() {
       <div className="w-full max-w-[420px]">
         <div className="mb-8 flex items-center gap-2">
           <span className="text-[20px] font-bold tracking-[-0.02em]">Vigil</span>
-          <SparkMark size={11} className="text-accent" />
         </div>
 
         <div
-          className="rounded-[var(--r-card)] border border-hairline bg-card p-6"
-          style={{ boxShadow: 'var(--shadow-card)' }}
+          className="card rounded-[14px] p-6"
         >
           <h1 className="text-[22px] font-semibold tracking-[-0.015em]">Pair this device</h1>
-          <p className="mt-1.5 text-[14px] leading-relaxed text-ink-3">
+          <p className="mt-1.5 text-[14px] leading-relaxed text-[var(--text-muted)]">
             Enter the code printed by the Vigil backend when it started.
           </p>
 
           <form onSubmit={submit} className="mt-6 space-y-4">
             <div>
-              <label htmlFor="pairing-code" className="mb-1.5 block text-[13px] font-medium text-ink-2">
+              <label htmlFor="pairing-code" className="mb-1.5 block text-[13px] font-medium text-[var(--text)]">
                 Pairing code
               </label>
               <input
@@ -77,12 +74,12 @@ export default function PairRoute() {
                 value={code}
                 onChange={(event) => setCode(formatPairingCode(event.target.value))}
                 placeholder="VIG-000000"
-                className="tabular w-full rounded-[var(--r-control)] border border-hairline-strong bg-raised px-3.5 py-2.5 font-mono text-[15px] tracking-[0.08em] text-ink outline-none placeholder:text-ink-3/70 focus-visible:border-accent"
+                className="tabular w-full rounded-[10px] border border-[var(--border-strong)] bg-transparent px-3.5 py-2.5 font-mono text-[15px] tracking-[0.08em] text-[var(--text)] outline-none placeholder:text-[color-mix(in_srgb,var(--text)_35%,transparent)] focus-visible:border-[color-mix(in_srgb,var(--text)_45%,transparent)]"
               />
             </div>
 
             <div>
-              <label htmlFor="device-name" className="mb-1.5 block text-[13px] font-medium text-ink-2">
+              <label htmlFor="device-name" className="mb-1.5 block text-[13px] font-medium text-[var(--text)]">
                 Device name
               </label>
               <input
@@ -90,12 +87,12 @@ export default function PairRoute() {
                 value={deviceName}
                 onChange={(event) => setDeviceName(event.target.value)}
                 maxLength={100}
-                className="w-full rounded-[var(--r-control)] border border-hairline-strong bg-raised px-3.5 py-2.5 text-[15px] text-ink outline-none placeholder:text-ink-3/70 focus-visible:border-accent"
+                className="w-full rounded-[10px] border border-[var(--border-strong)] bg-transparent px-3.5 py-2.5 text-[15px] text-[var(--text)] outline-none placeholder:text-[color-mix(in_srgb,var(--text)_35%,transparent)] focus-visible:border-[color-mix(in_srgb,var(--text)_45%,transparent)]"
               />
             </div>
 
             {error ? (
-              <p role="alert" className="text-[13px] leading-relaxed text-critical">
+              <p role="alert" className="text-[13px] leading-relaxed text-[var(--text)]">
                 {error}
               </p>
             ) : null}
@@ -103,21 +100,21 @@ export default function PairRoute() {
             <button
               type="submit"
               disabled={!canSubmit}
-              className="inline-flex w-full items-center justify-center gap-2 rounded-[var(--r-pill)] bg-accent px-4 py-2.5 text-[14px] font-medium text-inverse transition-colors duration-[var(--dur-base)] ease-[var(--ease-spring)] hover:bg-accent-hover disabled:opacity-40"
+              className="inline-flex w-full items-center justify-center gap-2 rounded-[10px] bg-[var(--btn-primary-bg)] px-4 py-2.5 text-[14px] font-medium text-[var(--btn-primary-ink)] transition-colors hover:opacity-90 disabled:opacity-40"
             >
               {submitting ? 'Pairing...' : 'Pair device'}
               <ArrowRight size={16} strokeWidth={1.75} aria-hidden="true" />
             </button>
           </form>
 
-          <p className="mt-5 flex items-start gap-2 text-[12px] leading-relaxed text-ink-3">
+          <p className="mt-5 flex items-start gap-2 text-[12px] leading-relaxed text-[var(--text-muted)]">
             <Smartphone size={14} strokeWidth={1.5} aria-hidden="true" className="mt-0.5 shrink-0" />
             The code is single-use and rotates on every backend restart.
           </p>
         </div>
 
         {IS_MOCK ? (
-          <p className="mt-4 text-center text-[12px] text-ink-3">
+          <p className="mt-4 text-center text-[12px] text-[var(--text-muted)]">
             Simulation mode is on. Any code will be accepted.
           </p>
         ) : null}

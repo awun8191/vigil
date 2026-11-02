@@ -1,4 +1,4 @@
-import { ChevronDown, Sparkles } from 'lucide-react';
+import { ChevronDown } from 'lucide-react';
 import { useState } from 'react';
 
 interface Props {
@@ -18,9 +18,8 @@ export function ThinkingCapsule({ active, summary = 'Thinking it through', steps
         type="button"
         onClick={() => setOpen((o) => !o)}
         aria-expanded={open}
-        className="glass inline-flex items-center gap-2 rounded-full py-1.5 pl-3 pr-2.5 text-[13px] font-medium text-[var(--text-muted)] transition-transform duration-300 ease-spring hover:scale-[1.02] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]"
+        className="glass inline-flex items-center gap-2 rounded-[8px] py-1.5 pl-3 pr-2.5 text-[13px] font-medium text-[var(--text-muted)] transition-transform duration-300 ease-spring hover:scale-[1.02]"
       >
-        <Sparkles size={14} strokeWidth={1.5} className="animate-pulse text-[var(--accent)]" />
         {summary}
         {steps.length > 0 ? (
           <ChevronDown

@@ -1,5 +1,3 @@
-import Particles from './Particles';
-
 const GRAIN =
   "url(\"data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='180' height='180'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/><feColorMatrix type='saturate' values='0'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>\")";
 
@@ -21,8 +19,6 @@ export function AmbientBackground() {
         className="animate-drift absolute bottom-[-22%] left-[12%] h-[60vh] w-[86vw] blur-3xl"
         style={{ background: cloud('var(--cloud-3)'), animationDelay: '-12s' }}
       />
-
-      <Particles />
 
       {/* Horizon fade, grounding the lower third */}
       <div

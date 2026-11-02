@@ -2,18 +2,13 @@ import { ArrowUp, Mic, Paperclip, Plus, Square, X } from 'lucide-react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { useEffect, useRef, useState } from 'react';
 import { HandoffBeam, type BeamPhase } from '@/components/ui/handoff-beam';
-import { useBjorkTone } from '@/components/ui/handoff-beam-utils/tone';
 
 const spring = { type: 'spring' as const, stiffness: 400, damping: 30 };
 
 /**
- * Centre, edge, thinking, listening edge, speaking edge. Two sets because the beam multiplies
- * its gain on light surfaces, and a pale sky blue washes out on cream.
+ * Centre, edge, thinking, listening edge, speaking edge. The beam renders in mono so the composer
+ * stays black and white in either theme.
  */
-const BEAM_PALETTE: Record<'dark' | 'light', string[]> = {
-  dark: ['#38bdf8', '#818cf8', '#a5b4fc', '#22d3ee', '#7dd3fc'],
-  light: ['#0284c7', '#6366f1', '#818cf8', '#0891b2', '#0ea5e9'],
-};
 
 interface Props {
   onSend: (text: string) => void;
@@ -40,8 +35,6 @@ export function InputPill({
   const [recording, setRecording] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [analyser, setAnalyser] = useState<AnalyserNode | null>(null);
-
-  const tone = useBjorkTone();
 
   const areaRef = useRef<HTMLTextAreaElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -152,7 +145,7 @@ export function InputPill({
               {files.map((f) => (
                 <span
                   key={f}
-                  className="glass inline-flex items-center gap-1.5 rounded-full py-1 pl-3 pr-1.5 text-xs text-[var(--text-muted)]"
+                  className="glass inline-flex items-center gap-1.5 rounded-[8px] py-1 pl-3 pr-1.5 text-xs text-[var(--text-muted)]"
                 >
                   <Paperclip size={12} strokeWidth={1.5} />
                   {f}
@@ -160,7 +153,7 @@ export function InputPill({
                     type="button"
                     aria-label={`Remove ${f}`}
                     onClick={() => setFiles((fs) => fs.filter((x) => x !== f))}
-                    className="flex h-5 w-5 items-center justify-center rounded-full hover:bg-[color-mix(in_srgb,var(--text)_10%,transparent)]"
+                    className="flex h-5 w-5 items-center justify-center rounded-[5px] hover:bg-[color-mix(in_srgb,var(--text)_10%,transparent)]"
                   >
                     <X size={12} strokeWidth={1.5} />
                   </button>
@@ -179,8 +172,8 @@ export function InputPill({
         <HandoffBeam
           phase={phase}
           analyser={recording ? analyser : null}
-          palette={BEAM_PALETTE[tone]}
-          radius={28}
+          palette="mono"
+          radius={16}
           className="glass"
           phaseLabels={{
             idle: 'Ready',
@@ -206,7 +199,7 @@ export function InputPill({
               aria-label="Attach a file"
               onClick={() => fileRef.current?.click()}
               disabled={disabled}
-              className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-[color-mix(in_srgb,var(--text)_8%,transparent)] text-[var(--text-muted)] transition-transform duration-300 ease-spring hover:scale-105 hover:text-[var(--text)] active:scale-95 disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]"
+              className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-[color-mix(in_srgb,var(--text)_8%,transparent)] text-[var(--text-muted)] transition-transform duration-300 ease-spring hover:scale-105 hover:text-[var(--text)] active:scale-95 disabled:opacity-40"
             >
               <Plus size={18} strokeWidth={1.5} />
             </button>
@@ -215,8 +208,8 @@ export function InputPill({
               {recording ? (
                 <div className="flex items-center gap-3 px-2 text-sm text-[var(--text-muted)]">
                   <span className="relative flex h-2 w-2">
-                    <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-[var(--accent)] opacity-60" />
-                    <span className="relative inline-flex h-2 w-2 rounded-full bg-[var(--accent)]" />
+                    <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-[var(--text)] opacity-60" />
+                    <span className="relative inline-flex h-2 w-2 rounded-full bg-[var(--text)]" />
                   </span>
                   Listening...
                 </div>
@@ -251,12 +244,12 @@ export function InputPill({
               aria-pressed={recording}
               onClick={toggleRecording}
               disabled={disabled}
-              className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-[var(--text-muted)] transition-transform duration-300 ease-spring hover:scale-105 hover:text-[var(--text)] active:scale-95 disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]"
+              className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-[var(--text-muted)] transition-transform duration-300 ease-spring hover:scale-105 hover:text-[var(--text)] active:scale-95 disabled:opacity-40"
               style={
                 recording
                   ? {
-                      color: 'var(--accent)',
-                      background: 'color-mix(in srgb, var(--accent) 14%, transparent)',
+                      color: 'var(--text)',
+                      background: 'color-mix(in srgb, var(--text) 14%, transparent)',
                     }
                   : undefined
               }
@@ -269,13 +262,12 @@ export function InputPill({
               aria-label={streaming ? 'Stop generating' : 'Send'}
               disabled={!streaming && !canSend}
               onClick={streaming ? onStop : submit}
-              className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full transition-all duration-300 ease-spring active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]"
+              className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full transition-all duration-300 ease-spring active:scale-95"
               style={
                 streaming || canSend
                   ? {
                       background: 'var(--accent)',
                       color: 'var(--accent-ink)',
-                      boxShadow: '0 0 24px color-mix(in srgb, var(--accent) 45%, transparent)',
                     }
                   : {
                       background: 'color-mix(in srgb, var(--text) 8%, transparent)',

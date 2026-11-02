@@ -91,7 +91,8 @@ export default function App() {
                 <Route index element={<HomeRoute />} />
                 <Route path="chat" element={<ChatRoute />} />
                 <Route path="chat/:sessionId" element={<ChatRoute />} />
-                <Route path="settings" element={<SettingsRoute />} />
+                <Route path="settings" element={<Navigate to="/settings/appearance" replace />} />
+                <Route path="settings/:section" element={<SettingsRoute />} />
               </Route>
 
               <Route path="*" element={<Navigate to="/" replace />} />
