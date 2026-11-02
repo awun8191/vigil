@@ -121,6 +121,11 @@ class Settings(BaseSettings):
     # 1024 tokens. The peak resident set then stays under 350 MB.
     EMBEDDING_MAX_BATCH: int = 4
     EMBEDDING_MAX_BATCH_TOKENS: int = 1024
+    # A child process holds the ONNX session and exits after the run, so the
+    # pages of the run go back to the operating system and the worker keeps
+    # only the tokenizer. The protocol stays the same: LocalEmbeddingModel
+    # still satisfies EmbeddingModel.
+    EMBEDDING_ENCODE_SUBPROCESS: bool = True
 
     # --- Memory Retrieval (cosine similarity with exponential time decay) ---
     # The override threshold is measured on the local model: correct answers score
