@@ -49,6 +49,7 @@ __all__ = [
     "ApproveDecision",
     "InMemoryRunJournal",
     "InvalidRunTransition",
+    "MaxDepthExceeded",
     "PartitionPolicy",
     "RUN_STATUSES",
     "RUN_TRANSITIONS",
@@ -133,6 +134,18 @@ class InvalidRunTransition(RuntimeError):
         self.run_id = run_id
         where = f" for run {run_id}" if run_id else ""
         super().__init__(f"run status cannot change from {source!r} to {target!r}{where}")
+
+
+class MaxDepthExceeded(ValueError):
+    """Raised when a child run would nest deeper than the allowed maximum."""
+
+    def __init__(self, depth: int, max_depth: int) -> None:
+        self.depth = depth
+        self.max_depth = max_depth
+        super().__init__(
+            f"child run depth {depth} exceeds MAX_RUN_DEPTH {max_depth}: "
+            "a run at the maximum depth cannot spawn a child"
+        )
 
 
 class RunStateMachine:
@@ -385,6 +398,26 @@ class RunJournal(Protocol):
         """Mark one job completed and store its result payload."""
         ...
 
+    async def list_child_runs(self, parent_run_id: UUID) -> list[RunDTO]:
+        """Return the direct children of one run."""
+        ...
+
+    async def get_cost_micros(self, run_id: UUID) -> int:
+        """Return the recorded cost of one run in micro-USD."""
+        ...
+
+    async def add_cost_micros(self, run_id: UUID, amount_micros: int) -> int:
+        """Charge one run and return its new total in micro-USD."""
+        ...
+
+    async def get_workspace_ref(self, run_id: UUID) -> str | None:
+        """Return the workspace ref of one run, or None when it has none."""
+        ...
+
+    async def set_workspace_ref(self, run_id: UUID, workspace_ref: str) -> None:
+        """Assign the workspace ref of one run."""
+        ...
+
 
 # ---------------------------------------------------------------------------
 # In-memory journal: the test double.
@@ -401,6 +434,10 @@ class InMemoryRunJournal:
         self.configs: dict[UUID, AgentConfigDTO] = {}
         self.approvals: dict[UUID, ApprovalDTO] = {}
         self.jobs: dict[UUID, JobDTO] = {}
+        # Sub-agent bookkeeping. Money stays an integer of micro-USD, and
+        # each run owns a workspace ref that a child never shares.
+        self.cost_micros: dict[UUID, int] = {}
+        self.workspaces: dict[UUID, str] = {}
 
     async def get_run(self, run_id: UUID) -> RunDTO | None:
         return self.runs.get(run_id)
@@ -453,6 +490,34 @@ class InMemoryRunJournal:
         )
         self.runs[run_id] = updated
         return updated
+
+    async def list_child_runs(self, parent_run_id: UUID) -> list[RunDTO]:
+        """Return the direct children of one run."""
+        return [
+            run for run in self.runs.values() if run.parent_run_id == parent_run_id
+        ]
+
+    async def get_cost_micros(self, run_id: UUID) -> int:
+        """Return the recorded cost of one run in micro-USD."""
+        return self.cost_micros.get(run_id, 0)
+
+    async def add_cost_micros(self, run_id: UUID, amount_micros: int) -> int:
+        """Charge one run and return its new total in micro-USD."""
+        if run_id not in self.runs:
+            raise KeyError(f"run {run_id} is absent from the journal")
+        total = self.cost_micros.get(run_id, 0) + amount_micros
+        self.cost_micros[run_id] = total
+        return total
+
+    async def get_workspace_ref(self, run_id: UUID) -> str | None:
+        """Return the workspace ref of one run, or None when it has none."""
+        return self.workspaces.get(run_id)
+
+    async def set_workspace_ref(self, run_id: UUID, workspace_ref: str) -> None:
+        """Assign the workspace ref of one run."""
+        if run_id not in self.runs:
+            raise KeyError(f"run {run_id} is absent from the journal")
+        self.workspaces[run_id] = workspace_ref
 
     async def list_messages(self, run_id: UUID) -> list[MessageDTO]:
         return list(self.messages.get(run_id, ()))
@@ -744,6 +809,51 @@ class SqlRunJournal:
         dto = self._run_dto(model)
         await self.session.commit()
         return dto
+
+    # -- sub-agent tree ---------------------------------------------------
+
+    async def list_child_runs(self, parent_run_id: UUID) -> list[RunDTO]:
+        """Return the direct children of one run."""
+        result = await self.session.execute(
+            select(RunModel)
+            .where(RunModel.parent_run_id == parent_run_id)
+            .order_by(RunModel.started_at.asc(), RunModel.id.asc())
+        )
+        return [self._run_dto(row) for row in result.scalars().all()]
+
+    async def get_cost_micros(self, run_id: UUID) -> int:
+        """Return the recorded cost of one run in micro-USD."""
+        model = await self.session.get(RunModel, run_id)
+        if model is None:
+            raise KeyError(f"run {run_id} is absent from the journal")
+        return model.cost_micros or 0
+
+    async def add_cost_micros(self, run_id: UUID, amount_micros: int) -> int:
+        """Charge one run and return its new total in micro-USD."""
+        model = await self.session.get(RunModel, run_id)
+        if model is None:
+            raise KeyError(f"run {run_id} is absent from the journal")
+        model.cost_micros = (model.cost_micros or 0) + amount_micros
+        await self.session.flush()
+        total = model.cost_micros
+        await self.session.commit()
+        return total
+
+    async def get_workspace_ref(self, run_id: UUID) -> str | None:
+        """Return the workspace ref of one run, or None when it has none."""
+        model = await self.session.get(RunModel, run_id)
+        if model is None:
+            raise KeyError(f"run {run_id} is absent from the journal")
+        return model.workspace_ref
+
+    async def set_workspace_ref(self, run_id: UUID, workspace_ref: str) -> None:
+        """Assign the workspace ref of one run."""
+        model = await self.session.get(RunModel, run_id)
+        if model is None:
+            raise KeyError(f"run {run_id} is absent from the journal")
+        model.workspace_ref = workspace_ref
+        await self.session.flush()
+        await self.session.commit()
 
     # -- messages ---------------------------------------------------------
 

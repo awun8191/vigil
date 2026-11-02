@@ -53,8 +53,7 @@ EXPECTED_TABLES = [
 
 def test_alembic_offline_sql_generation(alembic_config: Config, capsys: pytest.CaptureFixture[str]) -> None:
     """Validate that offline SQL DDL generation produces all 22 tables, pgvector extension, and HNSW index."""
-    """Validate that offline SQL DDL generation produces all 22 tables, pgvector extension, and HNSW index."""    output_buffer = io.StringIO()
-    alembic_config.stdout = output_buffer
+    """Validate that offline SQL DDL generation produces all 22 tables, pgvector extension, and HNSW index."""    output_buffer = io.StringIO()    alembic_config.stdout = output_buffer
 
     command.upgrade(alembic_config, "head", sql=True)
     captured = capsys.readouterr()
@@ -64,8 +63,7 @@ def test_alembic_offline_sql_generation(alembic_config: Config, capsys: pytest.C
     assert "CREATE EXTENSION IF NOT EXISTS vector;" in sql_text
 
     # Verify all 22 tables exist in generated SQL
-    # Verify all 22 tables exist in generated SQL    for tbl in EXPECTED_TABLES:
-        assert f"CREATE TABLE {tbl}" in sql_text
+    # Verify all 22 tables exist in generated SQL    for tbl in EXPECTED_TABLES:        assert f"CREATE TABLE {tbl}" in sql_text
 
     # Verify HNSW index and vector_cosine_ops
     assert "ix_memory_chunks_embedding_hnsw" in sql_text
@@ -98,8 +96,7 @@ async def test_alembic_live_upgrade_downgrade_lifecycle(alembic_config: Config) 
     4. Verify all 22 tables are cleanly dropped
     2. Verify 22 tables, vector extension, HNSW index, and the corrected columns
     3. Downgrade to base
-    4. Verify all 22 tables are cleanly dropped    5. Upgrade to head again (verifying idempotency)
-    """
+    4. Verify all 22 tables are cleanly dropped    5. Upgrade to head again (verifying idempotency)    """
     settings = get_settings()
     engine = create_async_engine(settings.DATABASE_URL)
 
@@ -205,8 +202,7 @@ async def test_alembic_live_upgrade_downgrade_lifecycle(alembic_config: Config) 
         command.downgrade(alembic_config, "base")
 
         # 4. Verify all 21 domain tables were dropped
-        # 4. Verify all 20 domain tables were dropped        async with engine.connect() as conn:
-            res_after = await conn.execute(
+        # 4. Verify all 20 domain tables were dropped        async with engine.connect() as conn:            res_after = await conn.execute(
                 sa.text(
                     "SELECT table_name FROM information_schema.tables "
                     "WHERE table_schema = 'public' AND table_type = 'BASE TABLE' AND table_name != 'alembic_version';"
@@ -225,8 +221,7 @@ async def test_alembic_live_upgrade_downgrade_lifecycle(alembic_config: Config) 
                 )
             )
             count = res_reapply.scalar()
-            assert count == 22, f"Expected 22 tables on re-upgrade, found {count}"
-    finally:
+            assert count == 22, f"Expected 22 tables on re-upgrade, found {count}"    finally:
         await engine.dispose()
 
 
