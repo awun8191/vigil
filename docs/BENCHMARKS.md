@@ -7,30 +7,36 @@ memory and speed, and the sandbox flags on a live daemon.
 The document reports the measured value. It does not report an estimate. A target that
 fails is recorded as FAIL, with the number that failed it.
 
-No source code changed for this card. The measurement hooks live in `scripts/bench/`.
-The repository commit is `7400b4c` on branch `verify/phases-4-5`.
+This revision corrects the document after review card t_b9801c40. It corrects the
+migration claim, the peak RSS claim, the environment section, and two small statements.
+It does not change a recall number, because the numbers reproduce in the review. It does
+not change the migration, because the extension must stay (section 2).
+
+The measurement hooks live in `scripts/bench/`. The recall values come from the run at
+commit `7400b4c`. The review reproduced them at commit `6317658` on branch
+`bench/measure`.
 
 ## 1. Environment
 
-| Fact | Value |
-| --- | --- |
-| Host | Debian GNU/Linux 12 (bookworm), kernel 6.1.0-53-cloud-amd64 |
-| CPU | 2 vCPU, Intel Xeon Platinum 8259CL at 2.50 GHz |
-| Memory | 3,960,628 kB total (3.78 GiB) |
-| Docker | 29.9.1 (client and server) |
-| Docker Compose | v5.6.0 |
-| Python | 3.12.15, managed by uv 0.13.1 |
-| PostgreSQL | 16.15 (Debian 16.15-1.pgdg12+2) |
-| pgvector | 0.8.7 |
-| Database image | `pgvector/pgvector:pg16` |
+Each host fact has its command. A reader can run each command again.
 
-Command:
-
-```bash
-docker version --format '{{.Server.Version}}'
-docker exec vigil-bench-pg psql -U postgres -d vigil_bench -tAc "select version()"
-docker exec vigil-bench-pg psql -U postgres -d vigil_bench -tAc "select extversion from pg_extension where extname='vector'"
-```
+| Fact | Value | Command |
+| --- | --- | --- |
+| Host | Debian GNU/Linux 12 (bookworm) | `grep PRETTY_NAME /etc/os-release` |
+| Kernel | 6.1.0-53-cloud-amd64 | `uname -r` |
+| CPU model | Intel(R) Xeon(R) Platinum 8259CL CPU @ 2.50GHz | `grep -m1 'model name' /proc/cpuinfo` |
+| CPU count | 2 vCPU | `nproc` |
+| Memory | 3,960,628 kB (3.78 GiB) | `grep MemTotal /proc/meminfo` |
+| Docker | 29.9.1 (client and server) | `docker version --format '{{.Server.Version}}'` |
+| Docker Compose | v5.6.0 | `docker compose version` |
+| Python | 3.12.15 | `cd backend && env -u PYTHONPATH uv run python -V` |
+| uv | 0.13.1 | `uv --version` |
+| PostgreSQL | 16.15 (Debian 16.15-1.pgdg12+2) | `docker exec vigil-bench-pg psql -U postgres -d vigil_bench -tAc "select version()"` |
+| pgvector | 0.8.7 | `docker exec vigil-bench-pg psql -U postgres -d vigil_bench -tAc "select extversion from pg_extension where extname='vector'"` |
+| Database image | `pgvector/pgvector:pg16` | `docker inspect vigil-bench-pg --format '{{.Config.Image}}'` |
+| Port 5434 | benchmark database, `vigil-bench-pg` | `docker ps --format '{{.Names}} {{.Ports}}'` |
+| Port 5432 | `virgil-v01-pg`, not used | `docker ps --format '{{.Names}} {{.Ports}}'` |
+| Port 5433 | `stotv-pg`, not used | `docker ps --format '{{.Names}} {{.Ports}}'` |
 
 The benchmark database ran in a new container, `vigil-bench-pg`, on port 5434. The two
 older containers, `virgil-v01-pg` on 5432 and `stotv-pg` on 5433, stayed untouched.
@@ -39,54 +45,123 @@ older containers, `virgil-v01-pg` on 5432 and `stotv-pg` on 5433, stayed untouch
 docker run -d --name vigil-bench-pg -p 5434:5432 \
   -e POSTGRES_PASSWORD=bench -e POSTGRES_DB=vigil_bench \
   pgvector/pgvector:pg16
-for i in $(seq 1 60)
-do
-  docker exec vigil-bench-pg pg_isready -U postgres && break
-  sleep 1
-done
 ```
 
-The container answered `pg_isready` after 2 seconds.
+The commands below measure the start delay of the database container. The loop starts a
+cold container on port 5435 and polls `pg_isready` every 0.2 s. It prints the delay in
+seconds, and then it removes the container.
+
+```bash
+start=$(date +%s%N)
+docker run -d --name vigil-bench-timing -p 5435:5432 \
+  -e POSTGRES_PASSWORD=bench -e POSTGRES_DB=vigil_bench \
+  pgvector/pgvector:pg16 > /dev/null
+until docker exec vigil-bench-timing pg_isready -U postgres > /dev/null 2>&1
+do
+  sleep 0.2
+done
+awk -v start="$start" -v end="$(date +%s%N)" \
+  'BEGIN {printf "%.2f s\n", (end - start) / 1e9}'
+docker rm -f vigil-bench-timing > /dev/null
+```
+
+Three runs gave 4.44 s, 3.27 s, and 2.88 s, at a load average of 11.4 to 12.0 from other
+builds on the host. The median is 3.27 s. The first revision gave 2 s from a 1 s poll,
+so that value was coarse.
 
 ## 2. Measurement 1: migration
 
-Target: the schema gets to head, goes back to base, and gets to head again with no error.
+Target: the schema gets to head, goes back to base with no data table left, and gets to
+head again with no error.
 
-| Step | Revision | Tables | vector |
+| Step | Revision | Tables | `vector` extension |
 | --- | --- | --- | --- |
 | `alembic upgrade head` | 0003 | 20 | 0.8.7 |
-| `alembic downgrade base` | none | 1 | absent |
+| `alembic downgrade base` | none | 1 | 0.8.7, not dropped |
 | `alembic upgrade head` | 0003 | 20 | 0.8.7 |
 
 The table count of 20 includes `alembic_version`. The schema has 19 data tables. The
 single table after the downgrade is `alembic_version`, and it holds no row.
 
+The extension stays by design. Revision 0001 runs `CREATE EXTENSION IF NOT EXISTS
+vector` in `upgrade()`, and `downgrade()` drops the 19 tables and nothing else. The
+`IF NOT EXISTS` clause admits that the extension can be present before the migration
+runs, so the migration cannot tell whether it created the extension. A drop would remove
+a database-level object that a database owner or a managed service can provide for
+another use. For that reason the downgrade leaves the extension, and this document does
+not claim a database that is empty after the downgrade.
+
+The first revision of this document said that the downgrade drops the extension, and it
+gave the value `absent`. Both statements were false. Migration 0001 held no drop
+statement, and the extension stayed at 0.8.7 after `alembic downgrade base`. The review
+found the same result (card t_b9801c40).
+
+The round trip ran on an empty database. The command below creates the database and runs
+the three revisions:
+
 ```bash
+docker exec vigil-bench-pg dropdb -U postgres --if-exists vigil_bench_rt
+docker exec vigil-bench-pg createdb -U postgres vigil_bench_rt
 cd backend
-env -u PYTHONPATH DATABASE_URL='postgresql+asyncpg://postgres:bench@127.0.0.1:5434/vigil_bench' \
-  uv run alembic upgrade head
-env -u PYTHONPATH DATABASE_URL='postgresql+asyncpg://postgres:bench@127.0.0.1:5434/vigil_bench' \
-  uv run alembic downgrade base
-env -u PYTHONPATH DATABASE_URL='postgresql+asyncpg://postgres:bench@127.0.0.1:5434/vigil_bench' \
-  uv run alembic upgrade head
+URL='postgresql+asyncpg://postgres:bench@127.0.0.1:5434/vigil_bench_rt'
+env -u PYTHONPATH DATABASE_URL=$URL uv run alembic upgrade head
+env -u PYTHONPATH DATABASE_URL=$URL uv run alembic downgrade base
+env -u PYTHONPATH DATABASE_URL=$URL uv run alembic upgrade head
 ```
 
-Checks:
+The round trip needs an empty database. `0002.downgrade` changes
+`memory_chunks.embedding` from 384 to 1536 dimensions. PostgreSQL refuses that change
+while a row holds a 384-dimension vector. The probe below inserts one row, then runs the
+downgrade:
 
 ```bash
-docker exec vigil-bench-pg psql -U postgres -d vigil_bench -tAc \
-  "select count(*) from information_schema.tables where table_schema='public' and table_type='BASE TABLE'"
-docker exec vigil-bench-pg psql -U postgres -d vigil_bench -tAc \
-  "select extversion from pg_extension where extname='vector'"
-cd backend && env -u PYTHONPATH DATABASE_URL='postgresql+asyncpg://postgres:bench@127.0.0.1:5434/vigil_bench' uv run alembic current
+docker exec vigil-bench-pg psql -U postgres -d vigil_bench_rt -v ON_ERROR_STOP=1 \
+  -c "insert into users (id, display_name, settings) values (gen_random_uuid(), 'probe', '{}'::jsonb)" \
+  -c "insert into memory_chunks (id, user_id, scope, content, embedding, embedding_model, embedding_dim) \
+      select gen_random_uuid(), id, 'user', 'probe', array_fill(0.01::real, ARRAY[384])::vector, \
+      'bge-small-en-v1.5', 384 from users where display_name = 'probe'"
+cd backend
+env -u PYTHONPATH DATABASE_URL=$URL uv run alembic downgrade base
 ```
 
-`alembic current` prints `0003 (head)`. The round trip ran with no error and left no
-extra object. The downgrade drops the `vector` extension. The upgrade creates it again at
-0.8.7.
+```text
+sqlalchemy.exc.DBAPIError: (sqlalchemy.dialects.postgresql.asyncpg.Error) expected 1536 dimensions, not 384
+[SQL: ALTER TABLE memory_chunks ALTER COLUMN embedding TYPE vector(1536)]
+```
 
-**Verdict: PASS.** The upgrade, downgrade, upgrade round trip is clean. The revision is
-0003, the table count is 20, and the vector extension is 0.8.7.
+The benchmark database held 100,000 rows from the recall run, so a downgrade of that
+database stops in the same way. The probe leaves rows in the database. Drop and recreate
+the database before you run the round trip again.
+
+The checks below ran after each step. Run them from `backend/`, in the same shell, so
+`$URL` is set:
+
+```bash
+docker exec vigil-bench-pg psql -U postgres -d vigil_bench_rt -tAc \
+  "select count(*) from information_schema.tables where table_schema='public' and table_type='BASE TABLE'"
+docker exec vigil-bench-pg psql -U postgres -d vigil_bench_rt -tAc \
+  "select extversion from pg_extension where extname='vector'"
+docker exec vigil-bench-pg psql -U postgres -d vigil_bench_rt -tAc \
+  "select count(*) from pg_extension where extname='vector'"
+env -u PYTHONPATH DATABASE_URL=$URL uv run alembic current
+```
+
+Output of this run:
+
+```text
+after upgrade head:    tables 20,  extversion 0.8.7,  extension count 1,  current 0003 (head)
+after downgrade base:  tables 1,   extversion 0.8.7,  extension count 1,  current no revision
+after upgrade head:    tables 20,  extversion 0.8.7,  extension count 1,  current 0003 (head)
+```
+
+`alembic current` printed `0003 (head)` after each upgrade. After the downgrade it
+printed no revision name.
+
+**Verdict: PASS for the tables and the revision.** The upgrade, downgrade, upgrade round
+trip on an empty database is clean. The revision is 0003, the table count is 20, and
+`alembic_version` is the only table at base. The `vector` extension stays at 0.8.7 at
+base, as the table above records. The downgrade does not return the database to an empty
+state, and this document does not claim that it does.
 
 ## 3. Measurement 2: recall at 100k rows
 
@@ -113,8 +188,18 @@ space. So the run uses synthetic vectors. No model output enters this measuremen
 The vectors are one dense crowd near a single direction. That is the hard condition for
 a filtered approximate scan. The tenant filter keeps 1 percent of the heap.
 
-Each query has its own generator, from the root seed. Each row id is a `uuid5` of the
-seed, so a second run rebuilds the same table.
+Each query has its own generator, seeded with the root seed and `1_000_000 + user_index`.
+Each row id is a `uuid5` of the fixed namespace `0f0e0d0c-0b0a-4908-8706-050403020100` and
+the row index (`user/{index}` and `chunk/{user_index}/{row}`). The seed does not enter the
+id. The seed enters the vector values and the query values, so a second run with the same
+seed rebuilds the same table.
+
+```bash
+grep -n "NAMESPACE\|uuid5\|default_rng" scripts/bench/recall_bench.py
+```
+
+The docstring of `recall_bench.py` still says that the id comes from the seed. That
+sentence is wrong, and this card does not change the script.
 
 ### 3.2 What the planner does
 
@@ -196,7 +281,9 @@ That path is also 20 times faster than the forced graph walk at the 50th percent
 (`ef_search=200`, `iterative_scan=relaxed_order`) and 0.585 at the maximum `ef_search` of
 1000. The two values are below the 0.95 target. The production query gets to 0.999993
 only because the planner uses the tenant btree index and an exact sort, not the vector
-index. The target for that query is met, but the vector index does not meet it.
+index. The target for that query is met, but the vector index does not meet it. The
+review measured 0.561791 for the forced HNSW path and 0.999993 for the production
+query, so both recall rows reproduce.
 
 ### 3.5 Reproduction
 
@@ -215,31 +302,159 @@ indexes that it drops. A run takes about 100 minutes on this host.
 Target: peak resident set below 350 MB, and 40 chunks per second or more.
 
 The harness imports `src.worker` first, so the baseline holds the module graph of the
-worker. It builds 1000 chunks with the project chunker from synthetic turns. It encodes
-them with the int8 ONNX artifact through `LocalEmbeddingModel`. It reads the resident set
-from `/proc/self/status` and `getrusage`.
+worker. It builds the requested number of chunks with the project chunker from synthetic
+turns. It encodes them with the int8 ONNX artifact through `LocalEmbeddingModel`. It reads
+the resident set from `/proc/self/status` and `getrusage`.
 
-Chunk size is realistic for a memory window. The mean is 445 tokens, the median is 444,
-the minimum is 327, and the maximum is 512 (the model cap).
+Chunk size is realistic for a memory window. At 1000 chunks the mean is 445 tokens, the
+median is 444, the minimum is 327, and the maximum is 512 (the model cap).
+
+### 4.1 The size of one index job
+
+`INDEX_BATCH_LIMIT` is 200 messages (`backend/src/modules/memory/service.py`). The index
+job reads at most that many unindexed messages in one pass. The specification registers a
+job after 5 to 10 unindexed messages (`README.md`, the batched indexing trigger). So one
+job usually holds 5 to 10 messages, and 200 messages is the cap.
+
+```bash
+grep -rn "INDEX_BATCH_LIMIT" backend/src
+```
+
+The chunker makes a window from 4 to 6 turns, with an overlap of 2 turns. The command
+below counts the windows for a given number of turns. It uses the turn generator of
+`scripts/bench/embed_bench.py` and the same seed:
+
+```bash
+cd backend
+env -u PYTHONPATH uv run python - <<'PY'
+import sys, uuid
+sys.path.insert(0, "../scripts/bench")
+import numpy as np
+from embed_bench import make_turn
+from src.config.settings import Settings
+from src.integrations.embedding.local import LocalEmbeddingModel
+from src.modules.memory.chunker import Chunker, MemoryTurn
+
+settings = Settings()
+chunker = Chunker(LocalEmbeddingModel(settings), max_tokens=settings.EMBEDDING_MAX_TOKENS)
+rng = np.random.default_rng(20261101)
+turns = []
+for index in range(1, 3001):
+    role = "user" if index % 2 == 0 else "assistant"
+    size = int(rng.integers(20, 46)) if role == "user" else int(rng.integers(60, 141))
+    turns.append(MemoryTurn(message_id=uuid.uuid4(), role=role, content=make_turn(rng, role, size)))
+    if index in (5, 10, 200, 3000):
+        print(index, len(chunker.segment(turns)))
+PY
+```
+
+Output:
+
+```text
+5 1
+10 2
+200 50
+3000 750
+```
+
+One job at the cap makes 50 chunks. The usual job of 5 to 10 messages makes 1 to 2
+chunks. A 1000-chunk batch holds 4000 messages. That is 20 jobs at the cap, and 400 to
+800 jobs at the usual size. The 1000-chunk row is a stress value, not a batch that the
+worker sees.
+
+### 4.2 Peak RSS by chunk count
+
+The peak does not have one value. The table gives the values from three runs at each
+chunk count. `VmHWM` and `ru_maxrss` agreed in all nine runs.
+
+| Chunks | Messages | Work | Runs | Min (MB) | Median (MB) | Max (MB) |
+| --- | --- | --- | --- | --- | --- | --- |
+| 50 | 200 | one job at the cap | 3 | 331.5 | 333.1 | 349.4 |
+| 200 | 800 | four jobs | 3 | 335.4 | 342.8 | 352.7 |
+| 1000 | 4000 | twenty jobs | 3 | 243.9 | 300.7 | 367.8 |
+
+The chunk count is not the cause of the spread. The peak follows the resident set after
+the model load, and the host sets that value:
+
+| Chunks | RSS after model load (MB) | Peak (MB) |
+| --- | --- | --- |
+| 50 | 179.0, 189.4, 191.4 | 331.5, 333.1, 349.4 |
+| 200 | 178.5, 181.2, 190.2 | 335.4, 342.8, 352.7 |
+| 1000 | 123.8, 184.4, 196.5 | 243.9, 300.7, 367.8 |
+
+RSS counts resident pages. A page that the kernel removes is not resident, so a run on a
+loaded host reports less memory than the process used. The three runs at 1000 chunks
+built the same chunks from the same seed, and the resident set after the chunk build was
+41.0 MB in one run and 109.4 MB in another. The host held about 3 GB in swap during these
+runs, at a load average of 3.8 to 11.1. For that reason the peak of a run on a loaded
+host is a lower bound.
+
+The review measured 336.5 MB and 289.1 MB at 100 chunks and 362.0 MB at 200 chunks. The
+first revision recorded 395.2 MB at 1000 chunks and gave no chunk count. The five known
+values at 1000 chunks are 243.9, 300.7, 367.8, 395.2, and 434.9 MB.
+
+**Peak RSS at one job: PASS.** The three runs at 50 chunks are 331.5, 333.1, and 349.4
+MB. The worst run is 0.6 MB below the 350 MB target. The margin is very small, and the
+review window is 50 MB, so this result does not show headroom.
+
+**Peak RSS at 200 chunks: FAIL.** The three runs are 335.4, 342.8, and 352.7 MB. The
+worst run is 2.7 MB above the target. The batch is four jobs.
+
+**Peak RSS at 1000 chunks: FAIL.** The three runs are 243.9, 300.7, and 367.8 MB. The
+first revision recorded 395.2 MB and the review measured 434.9 MB. Three of the five
+runs are above the target, and the median of the five is 367.8 MB. The batch is 20 jobs,
+so the value does not describe one job.
+
+### 4.3 Resident set at each stage
+
+| Item | Value (MB) |
+| --- | --- |
+| RSS after core imports | 81.9 to 84.5 |
+| RSS after `src.worker` import | 82.7 to 85.3 |
+| RSS after building 1000 chunks | 41.0 to 109.4 |
+| RSS after model load | 123.8 to 196.5 |
+
+The four values are the range over the three runs at 1000 chunks. Each run built the same
+1000 chunks from the same seed, so the range after the chunk build is the page residency,
+not the data size.
+
+### 4.4 Idle unload
+
+The idle unload worked in every run. `unload_if_idle` returned `True` and the session was
+`None`. The harness reads the value at the end of each run (`scripts/bench/embed_bench.py`,
+the `after_idle_unload` field). The resident set fell from the peak, but it did not fall to
+the 90 MB that the specification claims. Python and the allocator keep the freed pages of
+the process.
+
+| Item | Range (MB) |
+| --- | --- |
+| RSS after idle unload, three runs at 50 chunks | 180.5 to 196.4 |
+| RSS after idle unload, three runs at 200 chunks | 227.3 to 258.0 |
+| RSS after idle unload, three runs at 1000 chunks | 92.6 to 111.8 |
+| RSS after idle unload and `gc.collect()`, nine runs | 152.4 to 257.1 |
+
+The medians of the three sizes are 192.5, 236.2, and 99.5 MB. The nine runs in this
+revision gave 92.6 to 258.0 MB after the unload. The first revision recorded 217.3 MB and
+the review measured 266.3 MB. The range over the eleven measurements is 92.6 to 266.3 MB.
+The lowest value is 92.6 MB, which is 2.6 MB above the 90 MB in the specification. No run
+reached 90 MB, so the claim does not hold at any size.
+
+**Verdict: FAIL.** The best measured value is 92.6 MB, above the 90 MB in the
+specification.
+
+### 4.5 Throughput
 
 | Item | Value |
 | --- | --- |
-| RSS after core imports | 83.4 MB |
-| RSS after `src.worker` import | 86.0 MB |
-| RSS after building 1000 chunks | 108.4 MB |
-| RSS after model load | 174.8 MB |
-| Peak RSS during encoding (`VmHWM`) | 395.2 MB |
-| Peak RSS during encoding (`ru_maxrss`) | 395.2 MB |
-| RSS after idle unload | 217.3 MB |
-| RSS after idle unload and `gc.collect()` | 211.5 MB |
 | Model load time | 0.54 s |
 | Encode time, 1000 chunks | 244.93 s |
 | Throughput | 4.08 chunks/s |
 | Chunk tokens, mean / min / max | 445 / 327 / 512 |
 
-The idle unload worked. `unload_if_idle` returned `True`, the session was `None`, and the
-resident set fell from the 395 MB peak to 217 MB. It did not fall to the 90 MB that the
-specification claims. Python and the allocator keep the freed pages of the process.
+The throughput value comes from the run at commit `7400b4c`. The review reproduced it at
+4.0919 chunks/s. The nine runs in this revision shared the host with other builds. Their
+rate was 0.157 to 1.290 chunks/s, and their model load took 0.67 s to 6.09 s. They do not
+measure throughput.
 
 Model identity:
 
@@ -252,19 +467,59 @@ Model identity:
 | SHA-256 pinned in settings | `bf64d05457cb391fa88d045faf5927a15ea36d96228ddf23ea970087afdc1197` |
 | Match | yes |
 
-**Verdict: FAIL, two targets.**
+**Verdict: PASS at one job by 0.6 MB, FAIL at 200 and 1000 chunks, and FAIL at the
+throughput target.**
 
-* **Peak RSS below 350 MB: FAIL.** The measured peak is 395.2 MB, which is 45 MB above
-  the target and 125 MB above the 270 MB that the specification claims.
+* **Peak RSS below 350 MB at one job: PASS.** The worst of three runs at 50 chunks is
+  349.4 MB. The batch is one job at the 200-message cap. The margin is 0.6 MB.
+* **Peak RSS below 350 MB at 200 chunks: FAIL.** The worst of three runs is 352.7 MB.
+  The batch is four jobs.
+* **Peak RSS below 350 MB at 1000 chunks: FAIL.** Three of the five known runs are above
+  the target, and the median of the five is 367.8 MB. The batch is 20 jobs, not one job.
 * **40 chunks per second or more: FAIL.** The measured rate is 4.08 chunks/s at a mean
   of 445 tokens per chunk. That is 9.8 times below the target. The encoder groups texts
   by equal token length before each ONNX run, so mixed lengths mostly run at a batch of
   one or two rows.
+* **Post-unload RSS near 90 MB: FAIL.** The lowest of eleven measurements is 92.6 MB.
 
-The post-unload resident set is a third finding. The value is 217.3 MB, and not the
-claimed 90 MB.
+### 4.6 Reproduction
 
-### 4.1 Reproduction
+```bash
+cd backend
+env -u PYTHONPATH EMBEDDING_IDLE_UNLOAD_SECONDS=3600 \
+  uv run python ../scripts/bench/embed_bench.py --chunks 1000
+env -u PYTHONPATH EMBEDDING_IDLE_UNLOAD_SECONDS=3600 \
+  uv run python ../scripts/bench/embed_bench.py --chunks 200
+env -u PYTHONPATH EMBEDDING_IDLE_UNLOAD_SECONDS=3600 \
+  uv run python ../scripts/bench/embed_bench.py --chunks 50
+```
+
+Run each command three times. The runs in section 4.2 used these commands. Each run
+starts a new process.
+
+The value `EMBEDDING_IDLE_UNLOAD_SECONDS=3600` stops the idle sweeper from unloading the
+session during one long encode. The default is 300 seconds. On a loaded host an encode of
+1000 chunks takes longer than 300 seconds, and the sweeper unloads the session in the
+middle of the run. The probe below uses a 5 second window to show the failure:
+
+```bash
+cd backend
+env -u PYTHONPATH EMBEDDING_IDLE_UNLOAD_SECONDS=5 \
+  uv run python ../scripts/bench/embed_bench.py --chunks 100
+```
+
+The run stops with this error:
+
+```text
+  File ".../src/integrations/embedding/local.py", line 319, in _encode_batch
+    outputs = self._session.run(None, feeds)
+AttributeError: 'NoneType' object has no attribute 'run'
+```
+
+The idle window does not change the peak resident set. The unload step in the harness
+passes its own future time, so the step still measures the unloaded state. On an idle
+host the command below completes in 245 s at 1000 chunks, below the 300 s window, so the
+variable is not necessary.
 
 ```bash
 cd backend
@@ -399,7 +654,22 @@ the artifact or the host changes.
 
 Target: the sandbox suite runs with no skip, and the daemon shows the documented flags.
 
-### 5.1 Suite
+### 5.1 Image prerequisite
+
+The suite and the flags script need the image `python:3.14-slim` in the local daemon.
+Pull it once:
+
+```bash
+docker pull python:3.14-slim
+```
+
+Without the image the suite skips 8 tests. It reports them as skipped, and it does not
+fail. The flags script prints `python:3.14-slim is not present locally` and exits with
+code 2. The skip comes from the fixture in
+`backend/tests/integration/test_sandbox_runner.py`. The exit code 2 comes from
+`scripts/bench/sandbox_flags.py`.
+
+### 5.2 Suite
 
 ```bash
 cd backend
@@ -414,7 +684,7 @@ env -u PYTHONPATH uv run pytest tests/integration/test_sandbox_runner.py -q
 All 8 tests ran. None skipped. Docker was available, so the suite exercised the live
 daemon and the `python:3.14-slim` image.
 
-### 5.2 Flags by hand
+### 5.3 Flags by hand
 
 The proof created one container through `SandboxRunner.create`, read the flags back with
 `docker inspect`, and removed the container. The command line that the runner builds is:
@@ -468,7 +738,7 @@ removes the container at the end.
 root, all capabilities dropped, no network, 1 GiB of memory, a memory swap limit of 1 GiB,
 256 pids, `no-new-privileges`, UID 1000, and the two tmpfs mounts.
 
-### 5.3 Reproduction
+### 5.4 Reproduction
 
 ```bash
 cd backend
@@ -490,6 +760,8 @@ env -u PYTHONPATH uv run pytest --junitxml=/tmp/b01.xml -q
 
 The XML report reads `tests="603"`, `failures="0"`, `errors="0"`, and `skipped="0"`.
 Docker and Postgres were available for this run, so the sandbox and database tests ran.
+The report is from the run at commit `7400b4c`. This revision changes this document
+only, so the report still applies to the code.
 
 ## 7. Cleanup
 
@@ -502,23 +774,31 @@ docker ps -a --filter name=vigil-bench-pg
 docker volume ls | grep -c vigil_bench
 ```
 
-The filter prints an empty list, and the count is 0. The database volume is anonymous, so
-`docker rm -f` removes it with the container.
+The filter prints an empty list, and the count is 0. This output is from the first
+revision. The container is up again for this revision's measurements. The database volume
+is anonymous, so `docker rm -f` removes it with the container. The database
+`vigil_bench_rt` lives in the same container, so the removal also removes it.
 
 ## 8. Summary
 
 | Measurement | Target | Measured | Verdict |
 | --- | --- | --- | --- |
-| Migration | upgrade, downgrade, upgrade | 0003 to base to 0003, 20 tables, vector 0.8.7 | PASS |
+| Migration | upgrade, downgrade, upgrade, no table left at base | 0003 to base to 0003, 20 tables, vector 0.8.7 stays at base | PASS for tables and revision |
 | Recall@50, HNSW path | 0.95 or more | 0.560 at `ef_search=200`, `relaxed_order` | FAIL |
 | Recall@50, production query | 0.95 or more | 0.999993, tenant btree path, index not used | PASS |
-| Peak RSS | below 350 MB | 395.2 MB | FAIL |
+| Peak RSS, one job (50 chunks) | below 350 MB | 331.5 to 349.4 MB, worst 349.4 | PASS by 0.6 MB |
+| Peak RSS, 200 chunks | below 350 MB | 335.4 to 352.7 MB, worst 352.7 | FAIL |
+| Peak RSS, 1000 chunks | below 350 MB | 243.9 to 434.9 MB across five runs, median 367.8 | FAIL in three runs of five |
 | Throughput | 40 chunks/s or more | 4.08 chunks/s at 445 tokens | FAIL |
-| Post-unload RSS | about 90 MB per the spec | 217.3 MB | FAIL |
+| Post-unload RSS | about 90 MB per the spec | 92.6 to 266.3 MB across eleven measurements | FAIL |
 | Sandbox flags | all documented flags present | all present on the live daemon | PASS |
 
 Each finding below is a defect. Write one repair card for each defect.
 
 * The HNSW path misses the recall target with a 1 percent tenant filter.
-* The indexer is above the memory target.
+* The indexer peak at one job is 349.4 MB, 0.6 MB below the memory target. The margin is
+  too small for a stable pass. At 200 chunks the peak is above the target, and at 1000
+  chunks it is above the target in three runs of five.
 * The indexer is 9.8 times below the throughput target.
+* The resident set after the idle unload is 92.6 MB at best, above the 90 MB in the
+  specification.
