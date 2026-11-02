@@ -146,6 +146,13 @@ class Settings(BaseSettings):
     SANDBOX_IMAGE: str = "vigil-sandbox:latest"
     WORKSPACE_BASE_PATH: str = "/var/vigil/workspaces"
 
+    # --- Sub-agent runs (Phase 6) ---
+    # A child run nests at most this deep. A run at this depth cannot spawn
+    # a child. The value is a setting so a test can lower it.
+    MAX_RUN_DEPTH: int = 2
+    # Key in ``agent_configs.limits`` that holds the budget in micro-USD.
+    RUN_BUDGET_LIMIT_KEY: str = "max_cost_micros"
+
     # --- Logging Configuration ---
     LOG_LEVEL: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
     LOG_FORMAT: Literal["json", "console"] = "json"

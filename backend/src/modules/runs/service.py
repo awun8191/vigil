@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from typing import AsyncIterator
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -37,6 +37,7 @@ from src.modules.runs.repository import (
 from src.modules.runs.state import (
     InMemoryRunJournal,
     InvalidRunTransition,
+    MaxDepthExceeded,
     PartitionPolicy,
     RunJournal,
     RunStateMachine,
@@ -118,7 +119,169 @@ class RunsService:
 
     async def create_run(self, data: RunCreateDTO) -> RunDTO:
         """Insert one run row in its initial status."""
+        if data.parent_run_id is not None:
+            data = await self._child_create_data(data)
+            child = await self.journal.create_run(data)
+            assert data.parent_run_id is not None
+            await self._isolate_child_workspace(data.parent_run_id, child.id)
+            return child
         return await self.journal.create_run(data)
+
+    async def _child_create_data(self, data: RunCreateDTO) -> RunCreateDTO:
+        """Return a child create DTO with the depth the parent dictates.
+
+        The child depth is always one above the parent, so a caller can
+        never hand-craft a depth jump and a cycle is impossible: the child
+        id is minted fresh after the parent row already exists.
+        """
+        parent = await self.journal.get_run(data.parent_run_id)  # type: ignore[arg-type]
+        if parent is None:
+            raise NotFoundError(f"Parent run {data.parent_run_id} not found")
+        depth = parent.depth + 1
+        if depth > self.settings.MAX_RUN_DEPTH:
+            raise MaxDepthExceeded(depth, self.settings.MAX_RUN_DEPTH)
+        return RunCreateDTO(
+            config_id=data.config_id,
+            card_id=data.card_id,
+            parent_run_id=parent.id,
+            depth=depth,
+            status=data.status,
+        )
+
+    async def create_child_run(
+        self,
+        parent_run_id: UUID,
+        config_id: UUID | None = None,
+        card_id: UUID | None = None,
+        initial_prompt: str | None = None,
+    ) -> RunDTO:
+        """Create a sub-agent run under an existing parent run.
+
+        The child nests one level deeper than the parent, owns a fresh
+        workspace ref that it never shares with the parent, and queues an
+        execute job like a top-level run.
+
+        Args:
+            parent_run_id: Run that spawns the child. It must exist.
+            config_id: Agent config of the child. It defaults to the parent.
+            card_id: Optional card of the child. It defaults to the parent.
+            initial_prompt: Optional opening user message of the child.
+
+        Returns:
+            The queued child run.
+
+        Raises:
+            NotFoundError: The parent run has no row.
+            MaxDepthExceeded: The child would nest past MAX_RUN_DEPTH.
+        """
+        parent = await self.journal.get_run(parent_run_id)
+        if parent is None:
+            raise NotFoundError(f"Parent run {parent_run_id} not found")
+        child = await self.create_run(
+            RunCreateDTO(
+                config_id=config_id or parent.config_id,
+                card_id=card_id if card_id is not None else parent.card_id,
+                parent_run_id=parent.id,
+                status="queued",
+            )
+        )
+        if initial_prompt:
+            await self.journal.append_message(
+                MessageCreateDTO(
+                    run_id=child.id,
+                    role="user",
+                    content=initial_prompt,
+                )
+            )
+        await self.journal.enqueue_job(
+            job_type="execute_run",
+            payload={"run_id": str(child.id), "kind": "run"},
+        )
+        return child
+
+    async def _isolate_child_workspace(self, parent_id: UUID, child_id: UUID) -> str:
+        """Give the child a workspace ref that differs from the parent."""
+        parent_ref = await self.journal.get_workspace_ref(parent_id)
+        if parent_ref is None:
+            parent_ref = f"ws_{uuid4().hex}"
+            await self.journal.set_workspace_ref(parent_id, parent_ref)
+        child_ref = f"ws_{uuid4().hex}"
+        while child_ref == parent_ref:
+            child_ref = f"ws_{uuid4().hex}"
+        await self.journal.set_workspace_ref(child_id, child_ref)
+        return child_ref
+
+    async def record_cost_micros(self, run_id: UUID, amount_micros: int) -> RunDTO:
+        """Charge one run and fail any ancestor whose budget is exceeded.
+
+        A child charges its parent: the cost counts toward every ancestor
+        budget up to the root. When the subtree sum of an ancestor exceeds
+        its ``limits.max_cost_micros``, that ancestor fails.
+
+        Args:
+            run_id: Run that spent the amount.
+            amount_micros: Non-negative spend in micro-USD.
+
+        Returns:
+            The charged run.
+
+        Raises:
+            NotFoundError: The run has no row.
+        """
+        run = await self.journal.get_run(run_id)
+        if run is None:
+            raise NotFoundError(f"Run {run_id} not found")
+        await self.journal.add_cost_micros(run_id, amount_micros)
+        for ancestor_id in await self._ancestor_ids(run_id):
+            limit = await self._budget_limit_micros(ancestor_id)
+            if limit <= 0:
+                continue
+            total = await self._subtree_cost_micros(ancestor_id)
+            if total > limit:
+                await self._fail_run(
+                    ancestor_id,
+                    RuntimeError(
+                        f"run budget exceeded: subtree cost {total} micros "
+                        f"is above max_cost_micros {limit}"
+                    ),
+                )
+        updated = await self.journal.get_run(run_id)
+        assert updated is not None
+        return updated
+
+    async def _ancestor_ids(self, run_id: UUID) -> list[UUID]:
+        """Return the ancestor chain from the parent up to the root."""
+        ancestors: list[UUID] = []
+        seen: set[UUID] = {run_id}
+        current = await self.journal.get_run(run_id)
+        while current is not None and current.parent_run_id is not None:
+            parent_id = current.parent_run_id
+            if parent_id in seen:
+                break
+            seen.add(parent_id)
+            ancestors.append(parent_id)
+            current = await self.journal.get_run(parent_id)
+        return ancestors
+
+    async def _budget_limit_micros(self, run_id: UUID) -> int:
+        """Return the budget of one run in micro-USD, or 0 with no limit."""
+        run = await self.journal.get_run(run_id)
+        if run is None:
+            return 0
+        config = await self.journal.get_config(run.config_id)
+        if config is None:
+            return 0
+        try:
+            return int(config.limits.get(self.settings.RUN_BUDGET_LIMIT_KEY, 0))
+        except (TypeError, ValueError):
+            return 0
+
+    async def _subtree_cost_micros(self, run_id: UUID) -> int:
+        """Return the cost of one run plus every descendant in micro-USD."""
+        total = await self.journal.get_cost_micros(run_id)
+        for child in await self.journal.list_child_runs(run_id):
+            total += await self._subtree_cost_micros(child.id)
+        return total
 
     async def update_run_status(
         self,
@@ -323,8 +486,10 @@ class RunsService:
         return await self.process(run_id, observer=observer)
 
     async def cancel_run(self, run_id: UUID) -> RunDTO:
-        """
-        Cancel a run.
+        """Cancel a run and every live descendant under it.
+
+        A child cannot outlive a cancelled parent, so the cancellation
+        walks the tree and fails each non-terminal descendant.
 
         Args:
             run_id: Run UUID.
@@ -336,7 +501,21 @@ class RunsService:
             NotFoundError: The run has no row.
             InvalidRunTransition: The run already stopped.
         """
-        updated = await self.update_run_status(run_id, status="failed")
+        updated = await self._cancel_one(run_id)
+        for descendant_id in await self._descendant_ids(run_id):
+            await self._cancel_one(descendant_id, strict=False)
+        return updated
+
+    async def _cancel_one(self, run_id: UUID, strict: bool = True) -> RunDTO:
+        """Fail one run and record its cancellation step."""
+        try:
+            updated = await self.update_run_status(run_id, status="failed")
+        except (NotFoundError, InvalidRunTransition):
+            if strict:
+                raise
+            current = await self.journal.get_run(run_id)
+            assert current is not None
+            return current
         await self.journal.append_step(
             RunStepCreateDTO(
                 run_id=run_id,
@@ -346,6 +525,23 @@ class RunsService:
             )
         )
         return updated
+
+    async def _descendant_ids(self, run_id: UUID) -> list[UUID]:
+        """Return every descendant id under one run, parents before children."""
+        ordered: list[UUID] = []
+        queue = [child.id for child in await self.journal.list_child_runs(run_id)]
+        seen = {run_id}
+        while queue:
+            current_id = queue.pop(0)
+            if current_id in seen:
+                continue
+            seen.add(current_id)
+            ordered.append(current_id)
+            queue.extend(
+                child.id
+                for child in await self.journal.list_child_runs(current_id)
+            )
+        return ordered
 
     async def stream_steps(
         self,
