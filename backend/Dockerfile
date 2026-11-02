@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1
-FROM python:3.12-slim-bookworm
+FROM python:3.15-slim-bookworm
 
 # Install system dependencies (curl for healthchecks, libpq for PostgreSQL)
 RUN apt-get update && apt-get install -y --no-install-recommends \
