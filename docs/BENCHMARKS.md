@@ -668,41 +668,75 @@ The first run downloads and verifies the artifact. A later run uses the cache.
 ## 4b. Re-measurement after the memory repair
 
 This section repeats the measurement of section 4 after a change to the memory
-model. The script, the seed, and the chunk builder are the same. The two rows
-of the table below came one after the other. The two rows saw the same loaded
-host. The load average was 8.15 for the first row and 8.46 for the second.
+model. The script, the seed, and the chunk builder are the same. The two
+configurations ran one after the other on the same loaded host.
 
-The measurement uses 100 chunks. The loaded host cannot finish 1000 chunks in a
-practical time. The mean chunk has 447 tokens, which is the size of section 4.
+The measurement uses 40 chunks. The loaded host cannot finish 1000 chunks in a
+practical time. The mean chunk has 454 tokens, which is close to the 445 tokens
+of section 4. The commands and the load averages are:
+
+| Configuration | Command | Load average, start / end |
+| --- | --- | --- |
+| In process | `EMBEDDING_ENCODE_SUBPROCESS=0 uv run python ../scripts/bench/embed_bench.py --chunks 40 --seed 20261101` | 5.69 / 6.63 |
+| Subprocess | `uv run python ../scripts/bench/embed_bench.py --chunks 40 --seed 20261101` | 5.17 / 5.90 |
+
+The before column sets `EMBEDDING_ENCODE_SUBPROCESS=0`. The after column uses
+the default value, `EMBEDDING_ENCODE_SUBPROCESS=1`. Both commands start with
+`cd backend` and `env -u PYTHONPATH`.
 
 | Item | Before, in-process | After, subprocess |
 | --- | --- | --- |
-| Peak RSS of the worker during encoding | 320.1 MB | 107.7 MB |
-| Peak RSS of the child | not used | 233.9 MB |
-| RSS after idle unload | 185.7 MB | 22.5 MB |
-| RSS after unload and `gc.collect()` | 185.7 MB | 74.3 MB |
-| Throughput at a mean of 447 tokens | 0.617 chunks per second | 0.506 chunks per second |
+| Peak RSS of the worker during encoding | 304.8 MB | 105.8 MB |
+| Peak RSS of the child | not used | 245.2 MB, from a separate run |
+| Worker plus child peak | 304.8 MB | 347.5 MB, from the separate run |
+| RSS after `unload_if_idle` | 171.5 MB | 105.8 MB |
+| RSS after `unload_if_idle` and `gc.collect()` | 171.5 MB | 105.8 MB |
+| Throughput at a mean of 454 tokens | 0.550 chunks per second | 0.586 chunks per second |
 | ONNX session in the worker after the encode | yes | no |
 
-The before row sets `EMBEDDING_ENCODE_SUBPROCESS=0`. The after row uses the
-default value, `EMBEDDING_ENCODE_SUBPROCESS=1`. The commands are:
+The resident set is volatile on this host. The host has 8 GB of swap, and
+2.6 GB was in use during these runs. The kernel can reclaim the pages of a
+process at any moment. One sample of `VmRSS` can then fall below the heap that
+the process still holds. The import baseline of the script was 90.0 MB in the
+subprocess run and 81.9 MB in the in-process run. A resident set below that
+baseline is not a footprint value. Do not read a value below about 82 to 90 MB
+as a release.
 
-```bash
-cd backend
-env -u PYTHONPATH EMBEDDING_ENCODE_SUBPROCESS=0 uv run python ../scripts/bench/embed_bench.py --chunks 100
-env -u PYTHONPATH uv run python ../scripts/bench/embed_bench.py --chunks 100
-```
-
-The throughput is lower than the 4.08 chunks per second of section 4, because
-the host is loaded. Other agents on the host did benchmarks, test suites, and
-container work at the same time. The two rows are comparable to each other. The
-two rows are not comparable to section 4.
+In subprocess mode the worker holds no ONNX session. `unload_if_idle` returns
+`False`, because there is no session to release. The 105.8 MB after the call is
+the same value as before the call. The worker holds the tokenizer, the chunk
+data, and the Python runtime. The claim of about 90 MB in the specification is
+not met, by 15.8 MB. No unload can release the pages, because the worker never
+loads them.
 
 The bench script reads only the resident set of the worker. The child peak comes
-from a second test of the same 100 chunk set through `LocalEmbeddingModel`,
-which reads `RUSAGE_CHILDREN`. The value after the idle unload is volatile. The
-kernel reclaimed pages at that moment, and the read after `gc.collect()` was
-74.3 MB.
+from a second run of the same 40 chunk set through `LocalEmbeddingModel`, which
+reads `RUSAGE_CHILDREN`. That run had load 6.21 to 6.53. The worker peaked at
+102.2 MB and the child at 245.2 MB, a total of 347.5 MB. Two earlier runs of the
+same configuration gave 333.6 MB and 338.8 MB. The worker plus child total is
+the value to compare against the 350 MB target. The total is inside the target
+by 2.5 to 16.4 MB, so the margin is small.
+
+The throughput is lower than the 4.08 chunks per second of section 4, because
+the host is loaded. The two throughput rows are not distinguishable on this
+host. The in-process row and the subprocess row differ by less than the spread
+of the runs below. The review of this change ran the two configurations in
+turn at 40 chunks:
+
+| Configuration | Run | Chunks per second | Load average |
+| --- | --- | --- | --- |
+| In process | 1 | 0.635 | 7.31 |
+| Subprocess | 1 | 0.586 | 8.91 |
+| Subprocess | 2 | 0.525 | 7.81 |
+| In process | 2 | 0.371 | 9.04 |
+
+One configuration moves by 1.7 times between two of those runs. The runs at
+100 chunks reversed the direction. Subprocess mode gave 0.483 chunks per second
+at load 9.30. In-process mode gave 0.368 chunks per second at load 10.06. The
+earlier record read 0.617 against 0.506 chunks per second, a difference of
+18 percent that is inside this spread. Do not read the repair as a cost of
+18 percent of throughput. Both configurations are far below the 40 chunks per
+second target.
 
 ### 4b.1 What changed
 
@@ -778,14 +812,16 @@ the arithmetic, not the count of batches.
 
 | Target | Before | After | Verdict |
 | --- | --- | --- | --- |
-| Peak RSS below 350 MB | 320.1 MB at 100 chunks, 395.2 MB at 1000 chunks | 107.7 MB in the worker | PASS for the worker, with little margin. The worker and the child together hold about 335 MB at one time. |
-| Idle RSS after unload | 185.7 MB | 22.5 MB | PASS. The subprocess option was used. |
-| 40 chunks per second at a mean of 445 tokens | 4.08 at low load, 0.617 at load 8.15 | 0.506 at load 8.46 | FAIL. The target is 2.8 times the compute peak of this host. |
+| Peak RSS below 350 MB | 304.8 MB in process at 40 chunks, 395.2 MB at 1000 chunks | 105.8 MB in the worker, 347.5 MB for the worker and the child | PASS, with a margin of 2.5 to 16.4 MB over three runs. The worker plus child total is the value to compare, not the worker alone. |
+| Idle RSS after unload | 171.5 MB in process at 40 chunks | 105.8 MB; no session in the worker, so no release | FAIL. The worker is 15.8 MB above the claim of about 90 MB, and no unload releases the pages. |
+| 40 chunks per second | 4.08 at a mean of 445 tokens (section 4), 0.550 at a mean of 454 tokens and load 5.69 to 6.63 | 0.586 at a mean of 454 tokens and load 5.17 to 5.90 | FAIL. The two configurations are not distinguishable under this load, and the target is 2.8 times the compute peak of this host. |
 | A padded batch within 1e-5 of a solo encode | not asserted | 1.4e-02 | FAIL. The artifact does not hold that property. |
 
-The memory target is met. The throughput target is not met, and no batching
-strategy can meet it on this host. The batching strategy stays as it is until
-the artifact or the host changes.
+The peak memory target is met, with a margin of 2.5 to 16.4 MB. The claim of
+about 90 MB after an unload is not met, and the subprocess worker has no session
+to release. The throughput target is not met, and no batching strategy can meet
+it on this host. The batching strategy stays as it is until the artifact or the
+host changes.
 
 ## 5. Measurement 4: sandbox on a live daemon
 
