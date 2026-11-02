@@ -60,52 +60,52 @@
 
 :root,
 [data-theme='dark'] {
-  --bg-from: #070a10;
-  --bg-to: #0a0f1d;
+  --bg-from: #000000;
+  --bg-to: #060606;
   --card: rgba(255, 255, 255, 0.05);
   --card-hover: rgba(255, 255, 255, 0.075);
   --card-strong: rgba(255, 255, 255, 0.08);
-  --border: rgba(255, 255, 255, 0.08);
-  --border-strong: rgba(255, 255, 255, 0.18);
-  --accent: #38bdf8;
-  --accent-ink: #04202e;
-  --text: #f8fafc;
-  --text-muted: #94a3b8;
-  --glass: rgba(15, 22, 38, 0.55);
-  --shadow: 0 20px 50px rgba(0, 0, 0, 0.35), 0 4px 14px rgba(0, 0, 0, 0.25);
-  --btn-primary-bg: #f8fafc;
-  --btn-primary-ink: #0a0f1d;
-  --cloud-1: rgba(56, 189, 248, 0.22);
-  --cloud-2: rgba(99, 102, 241, 0.2);
-  --cloud-3: rgba(148, 163, 184, 0.12);
-  --horizon: rgba(7, 10, 16, 0.92);
+  --border: rgba(255, 255, 255, 0.09);
+  --border-strong: rgba(255, 255, 255, 0.2);
+  --accent: #ffffff;
+  --accent-ink: #000000;
+  --text: #ffffff;
+  --text-muted: rgba(255, 255, 255, 0.55);
+  --glass: rgba(0, 0, 0, 0.55);
+  --surface-solid: #0d0d0d;
+  --shadow: 0 20px 50px rgba(0, 0, 0, 0.45), 0 4px 14px rgba(0, 0, 0, 0.3);
+  --btn-primary-bg: #ffffff;
+  --btn-primary-ink: #000000;
+  --cloud-1: rgba(255, 255, 255, 0.045);
+  --cloud-2: rgba(255, 255, 255, 0.035);
+  --cloud-3: rgba(255, 255, 255, 0.02);
+  --horizon: rgba(0, 0, 0, 0.92);
   --grain-opacity: 0.09;
-  --spark: rgba(226, 240, 255, 0.9);
   color-scheme: dark;
 }
 
 [data-theme='light'] {
-  --bg-from: #fbf9f5;
-  --bg-to: #f7f5ee;
+  --bg-from: #ffffff;
+  --bg-to: #f4f4f4;
   --card: #ffffff;
   --card-hover: #ffffff;
   --card-strong: #ffffff;
-  --border: rgba(0, 0, 0, 0.05);
-  --border-strong: rgba(15, 23, 42, 0.16);
-  --accent: #0284c7;
+  --border: rgba(0, 0, 0, 0.08);
+  --border-strong: rgba(0, 0, 0, 0.22);
+  --accent: #000000;
   --accent-ink: #ffffff;
-  --text: #0f172a;
-  --text-muted: #64748b;
+  --text: #0a0a0a;
+  --text-muted: rgba(0, 0, 0, 0.55);
   --glass: rgba(255, 255, 255, 0.7);
-  --shadow: 0 20px 50px rgba(15, 23, 42, 0.08), 0 4px 14px rgba(15, 23, 42, 0.04);
-  --btn-primary-bg: #0f172a;
-  --btn-primary-ink: #fbf9f5;
-  --cloud-1: rgba(253, 186, 116, 0.42);
-  --cloud-2: rgba(125, 211, 252, 0.34);
-  --cloud-3: rgba(254, 240, 200, 0.7);
-  --horizon: rgba(251, 249, 245, 0.95);
+  --surface-solid: #ffffff;
+  --shadow: 0 20px 50px rgba(0, 0, 0, 0.08), 0 4px 14px rgba(0, 0, 0, 0.04);
+  --btn-primary-bg: #0a0a0a;
+  --btn-primary-ink: #ffffff;
+  --cloud-1: rgba(0, 0, 0, 0.03);
+  --cloud-2: rgba(0, 0, 0, 0.02);
+  --cloud-3: rgba(0, 0, 0, 0.015);
+  --horizon: rgba(255, 255, 255, 0.95);
   --grain-opacity: 0.07;
-  --spark: rgba(217, 119, 6, 0.8);
   color-scheme: light;
 }
 
@@ -129,12 +129,7 @@ body {
 }
 
 ::selection {
-  background: color-mix(in srgb, var(--accent) 30%, transparent);
-}
-
-:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
+  background: color-mix(in srgb, var(--text) 18%, transparent);
 }
 
 .glass {
@@ -165,14 +160,14 @@ body {
   backdrop-filter: blur(24px) saturate(140%);
 }
 
-/* Pill button system: solid primary, tinted soft, outlined ghost, quiet text */
+/* Button system: solid primary, tinted soft, outlined ghost, quiet text */
 .btn {
   display: inline-flex;
   height: 40px;
   align-items: center;
   justify-content: center;
   gap: 8px;
-  border-radius: 9999px;
+  border-radius: 10px;
   padding: 0 20px;
   font-size: 14px;
   font-weight: 600;
@@ -192,8 +187,7 @@ body {
   transform: scale(0.96);
 }
 .btn:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
+  border-color: var(--border-strong);
 }
 .btn:disabled {
   opacity: 0.6;
@@ -224,30 +218,6 @@ body {
 .btn-quiet:hover {
   color: var(--text);
   background: color-mix(in srgb, var(--text) 6%, transparent);
-}
-
-/* Drifting sparks */
-.spark {
-  position: absolute;
-  opacity: var(--o);
-  animation-name: spark-float;
-  animation-timing-function: ease-in-out;
-  animation-iteration-count: infinite;
-  animation-direction: alternate;
-  will-change: transform, opacity;
-}
-@keyframes spark-float {
-  0% {
-    transform: translate3d(0, 0, 0) scale(1);
-    opacity: var(--o);
-  }
-  50% {
-    opacity: calc(var(--o) * 0.3);
-  }
-  100% {
-    transform: translate3d(18px, -46px, 0) scale(0.75);
-    opacity: var(--o);
-  }
 }
 
 .scroll-soft {

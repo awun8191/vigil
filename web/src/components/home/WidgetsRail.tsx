@@ -18,17 +18,17 @@ function iconFor(connectorId: string): IconType {
   return key ? (ICONS[key] as IconType) : Gauge;
 }
 
-/** Backend connector status to a single indicator colour. */
+/** Backend connector status to a single indicator shade: status is verbal, the dot just marks it. */
 function toneFor(status: string): string {
   const s = status.toLowerCase();
-  if (s === 'active' || s === 'connected' || s === 'ok') return '#34d399';
-  if (s === 'error' || s === 'revoked' || s === 'expired') return '#f87171';
-  return '#fbbf24';
+  if (s === 'active' || s === 'connected' || s === 'ok') return 'var(--text)';
+  if (s === 'error' || s === 'revoked' || s === 'expired') return 'color-mix(in srgb, var(--text) 90%, transparent)';
+  return 'color-mix(in srgb, var(--text) 30%, transparent)';
 }
 
 function Stat({ label, value }: { label: string; value: string }) {
   return (
-    <div className="min-w-0 rounded-2xl bg-[color-mix(in_srgb,var(--text)_6%,transparent)] px-3 py-2.5">
+    <div className="min-w-0 rounded-lg bg-[color-mix(in_srgb,var(--text)_6%,transparent)] px-3 py-2.5">
       <div className="truncate text-[11px] text-[var(--text-muted)]">{label}</div>
       <div className="mt-0.5 truncate text-[17px] font-semibold tracking-heading">{value}</div>
     </div>
@@ -44,9 +44,9 @@ export function WidgetsRail() {
 
   return (
     <aside aria-label="Widgets" className="flex flex-col gap-4">
-      <section className="card animate-rise rounded-[28px] p-5" style={{ animationDelay: '0.1s' }}>
+      <section className="card animate-rise rounded-[14px] p-5" style={{ animationDelay: '0.1s' }}>
         <div className="flex items-center gap-2 text-sm font-medium">
-          <Gauge size={16} strokeWidth={1.5} className="text-[var(--accent)]" />
+          <Gauge size={16} strokeWidth={1.5} className="text-[var(--text-muted)]" />
           Limits
         </div>
         <div className="mt-4 grid grid-cols-3 gap-2">
@@ -65,16 +65,16 @@ export function WidgetsRail() {
         </div>
       </section>
 
-      <section className="card animate-rise rounded-[28px] p-5" style={{ animationDelay: '0.18s' }}>
+      <section className="card animate-rise rounded-[14px] p-5" style={{ animationDelay: '0.18s' }}>
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2 text-sm font-medium">
-            <Eye size={16} strokeWidth={1.5} className="text-[var(--accent)]" />
+            <Eye size={16} strokeWidth={1.5} className="text-[var(--text-muted)]" />
             Vigil is watching
           </div>
           <button
             type="button"
             onClick={() => navigate('/settings')}
-            className="rounded-full px-2 py-1 text-xs font-medium text-[var(--text-muted)] transition-colors hover:text-[var(--text)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]"
+            className="rounded-full px-2 py-1 text-xs font-medium text-[var(--text-muted)] transition-colors hover:text-[var(--text)]"
           >
             Manage
           </button>
@@ -87,7 +87,7 @@ export function WidgetsRail() {
               return (
                 <li
                   key={account.id}
-                  className="flex items-center justify-between rounded-2xl bg-[color-mix(in_srgb,var(--text)_5%,transparent)] px-3.5 py-2.5"
+                  className="flex items-center justify-between rounded-lg bg-[color-mix(in_srgb,var(--text)_5%,transparent)] px-3.5 py-2.5"
                 >
                   <span className="flex min-w-0 items-center gap-2.5 text-sm">
                     <Icon
@@ -108,7 +108,7 @@ export function WidgetsRail() {
             })}
           </ul>
         ) : (
-          <p className="mt-3 rounded-2xl bg-[color-mix(in_srgb,var(--text)_5%,transparent)] px-3.5 py-3 text-[13px] leading-relaxed text-[var(--text-muted)]">
+          <p className="mt-3 rounded-lg bg-[color-mix(in_srgb,var(--text)_5%,transparent)] px-3.5 py-3 text-[13px] leading-relaxed text-[var(--text-muted)]">
             {connectors.isLoading ? 'Checking connectors...' : 'No connectors linked yet.'}
           </p>
         )}

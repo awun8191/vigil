@@ -4,7 +4,6 @@ import { RotateCw } from 'lucide-react';
 import { MessageStream } from '@/components/chat/MessageStream';
 import { InputPill } from '@/components/chat/InputPill';
 import { ThinkingCapsule } from '@/components/chat/ThinkingCapsule';
-import { SparkMark } from '@/components/layout/SparkMark';
 import { useCardTitles } from '@/lib/suggestions';
 import { useChatStream, useCreateSession, useMessages, useSessions } from '@/queries/chat';
 
@@ -68,7 +67,7 @@ export default function ChatRoute() {
 
       {stream.connection === 'reconnecting' ? (
         <div className="pointer-events-none fixed inset-x-0 bottom-[10.5rem] z-20 flex justify-center px-4 md:bottom-28 md:pl-20">
-          <p className="glass inline-flex items-center gap-2 rounded-full px-3.5 py-2 text-[12px] text-[var(--text-muted)]">
+          <p className="glass inline-flex items-center gap-2 rounded-[8px] px-3.5 py-2 text-[12px] text-[var(--text-muted)]">
             <RotateCw size={13} strokeWidth={1.5} className="animate-spin" />
             Reconnecting to Vigil...
           </p>
@@ -79,6 +78,7 @@ export default function ChatRoute() {
         onSend={stream.send}
         onStop={stream.stop}
         streaming={stream.streaming}
+        hasReplyTokens={stream.streamedText.length > 0}
         disabled={!activeSessionId}
         {...(seed ? { seed } : {})}
         onSeedConsumed={handleSeedConsumed}
@@ -96,17 +96,7 @@ function EmptyChat({
 }) {
   return (
     <div className="animate-rise flex flex-col items-center px-4 pt-8 text-center">
-      <div
-        className="flex h-16 w-16 items-center justify-center rounded-full"
-        style={{
-          background: 'color-mix(in srgb, var(--accent) 12%, transparent)',
-          boxShadow: '0 0 48px color-mix(in srgb, var(--accent) 28%, transparent)',
-          color: 'var(--accent)',
-        }}
-      >
-        <SparkMark size={22} />
-      </div>
-      <h1 className="mt-6 text-[26px] font-semibold tracking-[-0.03em]">
+      <h1 className="text-[26px] font-semibold tracking-[-0.03em]">
         What are we working on?
       </h1>
       <p className="mt-2 max-w-sm text-[15px] leading-relaxed text-[var(--text-muted)]">
@@ -120,7 +110,7 @@ function EmptyChat({
               <button
                 type="button"
                 onClick={() => onPick(suggestion)}
-                className="card w-full rounded-[20px] px-4 py-3 text-left text-[14px] text-[var(--text)] transition-colors"
+                className="card w-full rounded-[10px] px-4 py-3 text-left text-[14px] text-[var(--text)] transition-colors"
               >
                 {suggestion}
               </button>

@@ -34,7 +34,7 @@ export function FloatingDock() {
   return (
     <nav
       aria-label="Primary"
-      className="glass fixed bottom-6 left-1/2 z-40 flex -translate-x-1/2 flex-row items-center gap-1 rounded-full p-1.5 md:bottom-auto md:left-6 md:top-1/2 md:-translate-y-1/2 md:translate-x-0 md:flex-col"
+      className="glass fixed bottom-6 left-1/2 z-40 flex -translate-x-1/2 flex-row items-center gap-1 rounded-2xl p-1.5 md:bottom-auto md:left-6 md:top-1/2 md:-translate-y-1/2 md:translate-x-0 md:flex-col"
       style={{ paddingBottom: 'max(0.375rem, env(safe-area-inset-bottom))' }}
     >
       {items.map(({ id, label, to, Icon }) => {
@@ -47,8 +47,8 @@ export function FloatingDock() {
             aria-label={label}
             aria-current={active ? 'page' : undefined}
             title={label}
-            className="group relative flex h-11 w-11 items-center justify-center rounded-full outline-none transition-colors focus-visible:ring-2 focus-visible:ring-[var(--accent)]"
-            style={{ color: active ? 'var(--accent)' : 'var(--text-muted)' }}
+            className="group relative flex h-11 w-11 items-center justify-center rounded-full outline-none transition-colors"
+            style={{ color: active ? 'var(--text)' : 'var(--text-muted)' }}
           >
             {active && (
               <motion.span
@@ -56,8 +56,7 @@ export function FloatingDock() {
                 transition={spring}
                 className="absolute inset-0 rounded-full"
                 style={{
-                  background: 'color-mix(in srgb, var(--accent) 14%, transparent)',
-                  boxShadow: '0 0 22px color-mix(in srgb, var(--accent) 38%, transparent)',
+                  background: 'color-mix(in srgb, var(--text) 12%, transparent)',
                 }}
               />
             )}
