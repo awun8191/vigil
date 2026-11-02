@@ -1,4 +1,4 @@
-"""Central re-export of SQLAlchemy Declarative Base and all 18 domain models."""
+"""Central re-export of SQLAlchemy Declarative Base and all 19 domain models."""
 from __future__ import annotations
 
 from src.schemas.base import Base
@@ -19,6 +19,7 @@ from src.schemas.runtime import (
     RunWorkspaceModel,
     ThreadModel,
 )
+from src.schemas.skills import SkillModel
 from src.schemas.system import IdempotencyRecordModel, JobModel
 from src.schemas.triage import CardActionModel, CardModel, TriageDecisionModel
 
@@ -46,6 +47,8 @@ __all__ = [
     "ArtifactModel",
     # memory.py
     "MemoryChunkModel",
+    # skills.py
+    "SkillModel",
     # system.py
     "JobModel",
     "IdempotencyRecordModel",

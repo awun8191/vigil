@@ -1,24 +1,29 @@
-"""Skills router factory providing skill registry, Git installation, and status toggles."""
+"""Skills router factory: registry listing, pinned Git installs, and status changes.
+
+An install requires a pinned commit SHA. Enable and disable change the
+``enabled`` flag. Neither endpoint deletes a row.
+"""
 from uuid import UUID
+
 from fastapi import APIRouter, Depends, Query, status
 
 from src.config.exceptions import NotFoundError
 from src.config.settings import Settings
 from src.dependencies import get_current_device, get_skills_service
 from src.modules.auth.repository import DeviceDTO
-from src.modules.skills.data import SkillInstallRequest, SkillResponse, SkillToggleRequest
-from src.modules.skills.repository import SkillsRepository
+from src.modules.skills.data import SkillInstallRequest, SkillResponse
+from src.modules.skills.service import SkillsService
 
 
 def build_skills_router(settings: Settings) -> APIRouter:
-    """
-    Build and configure skills APIRouter instance.
+    """Build and configure the skills APIRouter.
+
     Endpoints:
-      - GET /api/v1/skills
-      - GET /api/v1/skills/{id}
+      - GET  /api/v1/skills
+      - GET  /api/v1/skills/{skill_id}
       - POST /api/v1/skills/install
-      - PATCH /api/v1/skills/{id}/toggle
-      - DELETE /api/v1/skills/{id}
+      - POST /api/v1/skills/{skill_id}/enable
+      - POST /api/v1/skills/{skill_id}/disable
     """
     router = APIRouter(prefix="/skills", tags=["Skills"])
 
@@ -30,7 +35,7 @@ def build_skills_router(settings: Settings) -> APIRouter:
     )
     async def list_skills(
         enabled_only: bool = Query(default=False),
-        service: SkillsRepository = Depends(get_skills_service),
+        service: SkillsService = Depends(get_skills_service),
         _device: DeviceDTO = Depends(get_current_device),
     ) -> list[SkillResponse]:
         skills = await service.list_skills(enabled_only=enabled_only)
@@ -44,7 +49,7 @@ def build_skills_router(settings: Settings) -> APIRouter:
     )
     async def get_skill(
         skill_id: UUID,
-        service: SkillsRepository = Depends(get_skills_service),
+        service: SkillsService = Depends(get_skills_service),
         _device: DeviceDTO = Depends(get_current_device),
     ) -> SkillResponse:
         skill = await service.get_by_id(skill_id)
@@ -60,39 +65,42 @@ def build_skills_router(settings: Settings) -> APIRouter:
     )
     async def install_skill(
         payload: SkillInstallRequest,
-        service: SkillsRepository = Depends(get_skills_service),
+        service: SkillsService = Depends(get_skills_service),
         _device: DeviceDTO = Depends(get_current_device),
     ) -> SkillResponse:
-        skill = await service.install_from_git(payload.repo_url, payload.commit)  # type: ignore[attr-defined]
+        skill = await service.install_from_git(payload.repo_url, payload.commit)
         return SkillResponse.model_validate(skill)
 
-    @router.patch(
-        "/{skill_id}/toggle",
+    @router.post(
+        "/{skill_id}/enable",
         response_model=SkillResponse,
         status_code=status.HTTP_200_OK,
-        summary="Enable or Disable Skill",
+        summary="Enable Skill",
     )
-    async def toggle_skill(
+    async def enable_skill(
         skill_id: UUID,
-        payload: SkillToggleRequest,
-        service: SkillsRepository = Depends(get_skills_service),
+        service: SkillsService = Depends(get_skills_service),
         _device: DeviceDTO = Depends(get_current_device),
     ) -> SkillResponse:
-        updated = await service.update_status(skill_id, payload.enabled)
+        updated = await service.update_status(skill_id, True)
         if not updated:
             raise NotFoundError(f"Skill {skill_id} not found")
         return SkillResponse.model_validate(updated)
 
-    @router.delete(
-        "/{skill_id}",
-        status_code=status.HTTP_204_NO_CONTENT,
-        summary="Delete Skill",
+    @router.post(
+        "/{skill_id}/disable",
+        response_model=SkillResponse,
+        status_code=status.HTTP_200_OK,
+        summary="Disable Skill",
     )
-    async def delete_skill(
+    async def disable_skill(
         skill_id: UUID,
-        service: SkillsRepository = Depends(get_skills_service),
+        service: SkillsService = Depends(get_skills_service),
         _device: DeviceDTO = Depends(get_current_device),
-    ) -> None:
-        await service.delete_skill(skill_id)
+    ) -> SkillResponse:
+        updated = await service.update_status(skill_id, False)
+        if not updated:
+            raise NotFoundError(f"Skill {skill_id} not found")
+        return SkillResponse.model_validate(updated)
 
     return router

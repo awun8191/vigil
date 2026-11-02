@@ -1,4 +1,4 @@
-"""Unit tests validating all 19 SQLAlchemy 2.0 declarative models and metadata contracts."""
+"""Unit tests validating all 20 SQLAlchemy 2.0 declarative models and metadata contracts."""
 from __future__ import annotations
 
 import uuid
@@ -27,6 +27,7 @@ from src.schemas import (
     MessageModel,
     RunModel,
     RunWorkspaceModel,
+    SkillModel,
     ThreadModel,
     TriageDecisionModel,
     UserModel,
@@ -52,14 +53,15 @@ EXPECTED_TABLES = {
     "memory_chunks",
     "jobs",
     "idempotency_records",
+    "skills",
 }
 
 
-def test_central_schema_exports_all_nineteen_tables() -> None:
-    """Verify that exactly 19 tables are registered in the centralized Base metadata."""
+def test_central_schema_exports_all_twenty_tables() -> None:
+    """Verify that exactly 20 tables are registered in the centralized Base metadata."""
     registered_tables = set(Base.metadata.tables.keys())
     assert registered_tables == EXPECTED_TABLES
-    assert len(registered_tables) == 19
+    assert len(registered_tables) == 20
 
 
 def test_models_map_to_expected_table_names() -> None:
@@ -84,6 +86,7 @@ def test_models_map_to_expected_table_names() -> None:
         JobModel: "jobs",
         IdempotencyRecordModel: "idempotency_records",
         AgentConfigModel: "agent_configs",
+        SkillModel: "skills",
     }
     for model, expected_table in model_table_map.items():
         assert model.__tablename__ == expected_table
@@ -91,7 +94,7 @@ def test_models_map_to_expected_table_names() -> None:
 
 
 def test_primary_keys() -> None:
-    """Verify primary key columns across all 18 models."""
+    """Verify primary key columns across all 20 models."""
     for table_name in EXPECTED_TABLES:
         table = Base.metadata.tables[table_name]
         pk_cols = [c.name for c in table.primary_key.columns]
