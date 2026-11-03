@@ -673,3 +673,15 @@ class RunsService:
                 },
             )
         )
+        # The worker rolls back the job's transaction when the handler raises, so
+        # a failure record that only flushed would vanish and the run would stay
+        # non-terminal forever. Commit it now, and never let a commit error
+        # replace the error that caused the failure.
+        try:
+            await self.journal.checkpoint()
+        except Exception as exc:  # noqa: BLE001 - report the original error
+            get_logger("virgil.runs.service").warning(
+                "Cannot make the failure record durable",
+                run_id=str(run_id),
+                error=str(exc),
+            )
