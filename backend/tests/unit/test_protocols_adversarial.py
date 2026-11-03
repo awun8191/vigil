@@ -407,7 +407,7 @@ class TestProtocolIsolationAndDisjointness:
 
 
 class TestDTOImmutability:
-    """Verifies that all 52 DTOs across all repository files are immutable (frozen)."""
+    """Verifies that every DTO across all repository files is immutable (frozen)."""
 
     def test_all_dtos_are_frozen(self) -> None:
         import inspect
@@ -448,5 +448,9 @@ class TestDTOImmutability:
                     else:
                         raise AssertionError(f"Class {name} in {mod.__name__} is neither dataclass nor BaseModel!")
 
-        assert dto_count == 52, f"Expected 52 DTOs across repository files, found {dto_count}"
+        # A floor, not an exact total. The property under test is that every DTO
+        # is frozen; the count only proves the inspection reached the modules.
+        # An exact number turns a DTO that legitimately moves into a repository
+        # module (MCPServerDTO did) into a red gate for no property.
+        assert dto_count >= 52, f"Expected at least 52 DTOs across repository files, found {dto_count}"
 
