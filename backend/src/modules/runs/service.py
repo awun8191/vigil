@@ -398,20 +398,25 @@ class RunsService:
         """Insert or replace one agent config."""
         return await self.journal.save_config(config)
 
-    async def ensure_default_agent_config(
+    async def get_or_create_default_agent_config(
         self,
         *,
         name: str = "vigil-default",
         custom_instructions: str | None = None,
     ) -> AgentConfigDTO:
-        """Return or create the default Vigil agent configuration.
+        """Return the default Vigil agent configuration, creating it once.
 
-        The default configuration embeds the Karpathy engineering guidelines,
-        streamlined Brainstorming discipline, and ASD-STE100 technical writing
-        and emoji guidelines in its core ``system_prompt``, enables all 11
-        harness tools (including ``skill_load``, ``web_search``, and ``web_fetch``),
-        and provisions the 5 bundled design, coding, and research skills.
+        The read path calls this, so it never rewrites a row that exists: a
+        client that edited the ``approval_policy`` or the ``system_prompt`` of
+        ``vigil-default`` keeps its edit, and a GET has no write side effect.
+        Only an absent row is inserted, with the Karpathy engineering
+        guidelines, the Brainstorming discipline and the ASD-STE100 writing
+        rules in its ``system_prompt``, all 11 harness tools, and the 5 bundled
+        skills.
         """
+        existing = await self.journal.get_config_by_name(name)
+        if existing is not None:
+            return existing
         tools = list(TOOLS.keys())
         skills = list(DEFAULT_BUNDLED_SKILLS)
         expected_prompt = build_core_system_prompt(
@@ -420,26 +425,6 @@ class RunsService:
         )
         approval_policy = {tool_name: "local" for tool_name in tools}
         approval_policy["ask_user"] = "external"
-        existing = await self.journal.get_config_by_name(name)
-        if existing is not None:
-            if (
-                existing.system_prompt == expected_prompt
-                and list(existing.tools) == tools
-                and list(existing.skills) == skills
-            ):
-                return existing
-            updated = AgentConfigDTO(
-                id=existing.id,
-                name=existing.name,
-                system_prompt=expected_prompt,
-                model=self.settings.REASONING_LLM_MODEL,
-                tools=tools,
-                skills=skills,
-                memory_scopes=list(existing.memory_scopes),
-                approval_policy=approval_policy,
-                limits=dict(existing.limits) if existing.limits else {"max_cost_micros": 0},
-            )
-            return await self.journal.save_config(updated)
         config = AgentConfigDTO(
             id=uuid4(),
             name=name,

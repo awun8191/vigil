@@ -50,10 +50,14 @@ def build_runs_router(settings: Settings) -> APIRouter:
     ) -> AgentConfigResponse:
         """Return the pinned ``vigil-default`` config, creating it on first call.
 
+        A GET has no write side effect: the row is inserted only when it is
+        absent, and an existing row (including an ``approval_policy`` or
+        ``system_prompt`` a client saved) comes back unchanged.
+
         Declared before the ``/{run_id}`` route so URL parsing never sends
         ``configs`` to the UUID path handler.
         """
-        config = await service.ensure_default_agent_config()  # type: ignore[attr-defined]
+        config = await service.get_or_create_default_agent_config()  # type: ignore[attr-defined]
         return AgentConfigResponse.model_validate(config)
 
     @router.get(
