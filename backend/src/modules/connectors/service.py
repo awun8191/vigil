@@ -25,30 +25,23 @@ from src.modules.audit.service import (
     record_event,
 )
 from src.modules.connectors.data import RegisterConnectorRequest, SyncTriggerResponse
+from src.modules.connectors.errors import MCPRegistrationError
 from src.modules.connectors.repository import (
     ConnectorAccountCreateDTO,
     ConnectorAccountDTO,
     ItemCreateDTO,
     ItemDTO,
+    MCPServerDTO,
     SyncStateDTO,
 )
+from src.modules.connectors.state import (
+    ConnectorStore,
+    InMemoryConnectorStore,
+    SqlConnectorStore,
+)
 
-
-class MCPRegistrationError(ValueError):
-    """A third party MCP server cannot be registered. The message names the reason."""
-
-
-@dataclass(frozen=True)
-class MCPServerDTO:
-    """A registered third party MCP server."""
-
-    id: UUID
-    name: str
-    transport: str  # "stdio" or "sse"
-    command: str | None
-    url: str | None
-    enabled: bool
-    created_at: datetime
+# MCPRegistrationError is defined in errors.py so the store can raise it without
+# importing this module, and it stays importable from here as it always was.
 
 
 @dataclass(frozen=True)
@@ -66,73 +59,56 @@ class MCPDiscoveredToolDTO:
 class ConnectorsService:
     """
     Connectors service satisfying ConnectorsRepository via duck typing.
-    Constructor injection of session and settings.
+
+    The constructor picks the store: the SQL implementation over
+    ``connected_accounts`` and ``mcp_servers`` on a request database session,
+    the in-memory one when the service is built without a session (tests, the
+    CLI harness). Accounts and MCP servers therefore survive a restart.
+
+    The ClassVar dicts below are a read-through cache, not the source of
+    truth. ``MCPHostClient`` in ``integrations/mcp/mcp.py`` reads
+    ``_mcp_servers_by_name`` and ``_mcp_tools`` directly, so every store read
+    and write refreshes them.
     """
 
-    _accounts: ClassVar[dict[UUID, ConnectorAccountDTO]] = {}
     _sync_states: ClassVar[dict[UUID, SyncStateDTO]] = {}
     _items: ClassVar[dict[UUID, ItemDTO]] = {}
     _items_by_external: ClassVar[dict[tuple[UUID, str], ItemDTO]] = {}
 
     def __init__(
         self,
-        session: AsyncSession,
+        session: AsyncSession | None,
         settings: Settings,
         mcp_host: MCPHostProtocol | None = None,
         audit: AuditRepository | None = None,
+        repository: ConnectorStore | None = None,
     ) -> None:
         self.session = session
         self.settings = settings
         self.mcp_host = mcp_host
         self.audit = audit or AuditService(session=session, settings=settings)
+        if repository is not None:
+            self.repository: ConnectorStore = repository
+        elif session is not None:
+            self.repository = SqlConnectorStore(session)
+        else:
+            self.repository = InMemoryConnectorStore()
 
     async def get_account(self, account_id: UUID) -> ConnectorAccountDTO | None:
-        return self._accounts.get(account_id)
+        return await self.repository.get_account(account_id)
 
     async def list_accounts(self, user_id: UUID) -> list[ConnectorAccountDTO]:
-        return [a for a in self._accounts.values() if a.user_id == user_id]
+        return await self.repository.list_accounts(user_id)
 
     async def save_account(self, data: ConnectorAccountCreateDTO) -> ConnectorAccountDTO:
-        acc_id = uuid4()
-        now = datetime.now(timezone.utc)
-        account = ConnectorAccountDTO(
-            id=acc_id,
-            user_id=data.user_id,
-            connector_id=data.connector_id,
-            account_label=data.account_label,
-            encrypted_credentials=data.encrypted_credentials,
-            scopes=data.scopes,
-            status=data.status,
-            enabled_tools=data.enabled_tools,
-            created_at=now,
-            updated_at=now,
-        )
-        self._accounts[acc_id] = account
-        return account
+        return await self.repository.save_account(data)
 
     async def update_account_status(
         self,
         account_id: UUID,
         status: str,
     ) -> ConnectorAccountDTO | None:
-        account = self._accounts.get(account_id)
-        if not account:
-            return None
-        now = datetime.now(timezone.utc)
-        updated = ConnectorAccountDTO(
-            id=account.id,
-            user_id=account.user_id,
-            connector_id=account.connector_id,
-            account_label=account.account_label,
-            encrypted_credentials=account.encrypted_credentials,
-            scopes=account.scopes,
-            status=status,
-            enabled_tools=account.enabled_tools,
-            created_at=account.created_at,
-            updated_at=now,
-        )
-        self._accounts[account_id] = updated
-        return updated
+        return await self.repository.update_account_status(account_id, status)
 
     async def get_sync_state(self, account_id: UUID) -> SyncStateDTO | None:
         return self._sync_states.get(account_id)
@@ -224,6 +200,32 @@ class ConnectorsService:
     _mcp_servers_by_name: ClassVar[dict[str, MCPServerDTO]] = {}
     _mcp_tools: ClassVar[dict[tuple[UUID, str], MCPDiscoveredToolDTO]] = {}
 
+    @classmethod
+    def _cache_server(cls, server: MCPServerDTO) -> None:
+        """Publish one stored server into the read-through cache mcp.py reads."""
+        cls._mcp_servers[server.id] = server
+        cls._mcp_servers_by_name[server.name] = server
+
+    @classmethod
+    def _forget_server(cls, server: MCPServerDTO) -> None:
+        """Drop one server and its cached tools from the read-through cache."""
+        cls._mcp_servers.pop(server.id, None)
+        cls._mcp_servers_by_name.pop(server.name, None)
+        for key in [key for key in cls._mcp_tools if key[0] == server.id]:
+            del cls._mcp_tools[key]
+
+    @classmethod
+    def reset_mcp_cache(cls) -> None:
+        """Empty the read-through cache mcp.py reads.
+
+        The cache is process-local, so a test that simulates a restart, or one
+        that needs a clean slate, empties it through this call rather than by
+        poking three class attributes.
+        """
+        cls._mcp_servers.clear()
+        cls._mcp_servers_by_name.clear()
+        cls._mcp_tools.clear()
+
     @staticmethod
     def _builtin_tool_names() -> set[str]:
         """Return built-in tool names from the tool registry, not a fixed list."""
@@ -265,7 +267,7 @@ class ConnectorsService:
             raise MCPRegistrationError("a stdio server needs a command")
         if transport == "sse" and not (url or "").strip():
             raise MCPRegistrationError("an SSE server needs a URL")
-        if clean_name in self._mcp_servers_by_name:
+        if await self.get_mcp_server(clean_name) is not None:
             raise MCPRegistrationError(
                 f"an MCP server named {clean_name!r} is already registered"
             )
@@ -277,17 +279,18 @@ class ConnectorsService:
         self._check_tool_collisions(tools)
         server_id = uuid4()
         now = datetime.now(timezone.utc)
-        server = MCPServerDTO(
-            id=server_id,
-            name=clean_name,
-            transport=transport,
-            command=command,
-            url=url,
-            enabled=True,
-            created_at=now,
+        stored = await self.repository.register_server(
+            MCPServerDTO(
+                id=server_id,
+                name=clean_name,
+                transport=transport,
+                command=command,
+                url=url,
+                enabled=True,
+                created_at=now,
+            )
         )
-        self._mcp_servers[server_id] = server
-        self._mcp_servers_by_name[clean_name] = server
+        self._cache_server(stored)
         for tool in tools:
             key = (server_id, tool.name)
             self._mcp_tools[key] = MCPDiscoveredToolDTO(
@@ -298,15 +301,29 @@ class ConnectorsService:
                 input_schema=dict(tool.input_schema),
                 level="external",
             )
-        return server
+        return stored
 
     async def list_mcp_servers(self) -> list[MCPServerDTO]:
         """Return every registered third party MCP server."""
-        return list(self._mcp_servers.values())
+        servers = await self.repository.list_servers()
+        live = {server.id for server in servers}
+        for server in servers:
+            self._cache_server(server)
+        for server_id in [sid for sid in self._mcp_servers if sid not in live]:
+            self._forget_server(self._mcp_servers[server_id])
+        return servers
 
     async def get_mcp_server(self, name: str) -> MCPServerDTO | None:
         """Return the registered server with this name, or None."""
-        return self._mcp_servers_by_name.get((name or "").strip())
+        clean_name = (name or "").strip()
+        server = await self.repository.get_server(clean_name)
+        if server is None:
+            cached = self._mcp_servers_by_name.get(clean_name)
+            if cached is not None:
+                self._forget_server(cached)
+            return None
+        self._cache_server(server)
+        return server
 
     async def list_mcp_tools(self, server_name: str) -> list[MCPDiscoveredToolDTO]:
         """Return the discovered tools of one registered server."""
@@ -321,16 +338,17 @@ class ConnectorsService:
 
     async def unregister_mcp_server(self, name: str) -> bool:
         """Remove a server and its discovered tools. Return True when removed."""
-        server = await self.get_mcp_server(name)
+        clean_name = (name or "").strip()
+        server = await self.repository.get_server(clean_name)
         if server is None:
+            cached = self._mcp_servers_by_name.get(clean_name)
+            if cached is not None:
+                self._forget_server(cached)
             return False
-        del self._mcp_servers[server.id]
-        del self._mcp_servers_by_name[server.name]
-        for key in [
-            key for key in self._mcp_tools if key[0] == server.id
-        ]:
-            del self._mcp_tools[key]
-        return True
+        removed = await self.repository.delete_server(server.name)
+        if removed:
+            self._forget_server(server)
+        return removed
 
     async def refresh_mcp_tools(
         self, server_name: str

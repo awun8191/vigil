@@ -75,6 +75,19 @@ class ItemCreateDTO:
     raw_reference: str | None = None
 
 
+@dataclass(frozen=True)
+class MCPServerDTO:
+    """A registered third party MCP server."""
+
+    id: UUID
+    name: str
+    transport: str  # "stdio" or "sse"
+    command: str | None
+    url: str | None
+    enabled: bool
+    created_at: datetime
+
+
 @runtime_checkable
 class ConnectorsRepository(Protocol):
     """Protocol contract for connector accounts, sync cursors, and ingested items."""

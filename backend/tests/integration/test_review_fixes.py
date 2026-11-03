@@ -255,9 +255,7 @@ async def test_discover_mcp_tools_worker_handler_and_host_execution(tmp_path: Pa
     command = f"{sys.executable} {server_file}"
 
     settings = Settings(APP_ENV="test")
-    ConnectorsService._mcp_servers.clear()
-    ConnectorsService._mcp_servers_by_name.clear()
-    ConnectorsService._mcp_tools.clear()
+    ConnectorsService.reset_mcp_cache()
 
     from datetime import datetime, timezone
 
