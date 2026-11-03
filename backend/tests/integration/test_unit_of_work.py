@@ -42,7 +42,7 @@ from src.modules.jobs.repository import JobDTO
 from src.modules.jobs.service import JobsService
 from src.schemas.connectors import MCPServerModel
 from src.schemas.identity import DeviceModel
-from src.schemas.runtime import ThreadModel
+from src.schemas.runtime import RunModel, ThreadModel
 from src.schemas.system import JobModel
 from src.worker import JobContext, process_job
 
@@ -544,6 +544,7 @@ async def test_a_plain_handler_error_discards_the_partial_write(
 @pytest.mark.asyncio
 async def test_a_failed_commit_raises_and_reports_no_completion(
     session_factory: async_sessionmaker[AsyncSession],
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     """A commit failure must not be logged as a completed job."""
     suffix = uuid4().hex[:8]
@@ -574,6 +575,8 @@ async def test_a_failed_commit_raises_and_reports_no_completion(
                     handlers={"cleanup_sandbox": handler},
                 )
 
+        assert "Completed job" not in caplog.text
+
         # The real session was never committed, so closing it rolled everything
         # back: no completed job, no thread.
         async with session_factory() as check:
@@ -597,3 +600,85 @@ async def test_a_failed_commit_raises_and_reports_no_completion(
                 text("delete from jobs where id = :id"), {"id": job_id}
             )
             await cleanup.commit()
+
+
+@pytest.mark.asyncio
+async def test_a_failed_run_keeps_its_terminal_record_through_the_worker_rollback(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """A failed run survives the rollback the worker does after the handler raises.
+
+    The run's terminal status and its ``run_failed`` step are written inside the
+    handler. A record that only flushed would be discarded by the worker's
+    rollback, and the run would stay non-terminal while the job retried the same
+    broken history.
+    """
+    from src.config.logging import get_logger
+    from src.modules.runs.loop import LoopDependencyMissing
+    from src.modules.runs.repository import AgentConfigDTO, RunCreateDTO
+    from src.modules.runs.service import RunsService
+    from src.modules.runs.state import SqlRunJournal
+    from src.worker import rollback_failed_job
+
+    run_id: UUID | None = None
+    config_id: UUID | None = None
+    try:
+        async with session_factory() as session:
+            journal = SqlRunJournal(session)
+            config = await journal.save_config(
+                AgentConfigDTO(
+                    id=uuid4(),
+                    name=f"uow-fail-{uuid4().hex[:8]}",
+                    system_prompt="Failure probe.",
+                    model="test-model",
+                    tools=[],
+                    skills=[],
+                    memory_scopes=[],
+                    approval_policy={},
+                    limits={"max_cost_micros": 0},
+                )
+            )
+            config_id = config.id
+            run = await journal.create_run(
+                RunCreateDTO(config_id=config.id, status="queued")
+            )
+            run_id = run.id
+
+            # No model and no tools: the loop raises before it can call one.
+            service = RunsService(
+                session=session,
+                settings=Settings(APP_ENV="test"),
+                journal=journal,
+            )
+            with pytest.raises(LoopDependencyMissing):
+                await service.process(run.id)
+
+            # This is what process_job does when the handler raises.
+            await rollback_failed_job(session, get_logger("uow.test"))
+
+        async with session_factory() as check:
+            status = await check.scalar(
+                select(RunModel.status).where(RunModel.id == run_id)
+            )
+            steps = await SqlRunJournal(check).list_steps(run_id)
+
+        assert status == "failed", "the terminal record must survive the rollback"
+        assert [step.event_type for step in steps].count("run_failed") == 1
+    finally:
+        cleanup = create_async_engine(Settings(APP_ENV="test").DATABASE_URL)
+        try:
+            async with cleanup.begin() as connection:
+                if run_id is not None:
+                    for statement in (
+                        "delete from run_steps where run_id = :id",
+                        "delete from messages where run_id = :id",
+                        "delete from runs where id = :id",
+                    ):
+                        await connection.execute(text(statement), {"id": run_id})
+                if config_id is not None:
+                    await connection.execute(
+                        text("delete from agent_configs where id = :id"),
+                        {"id": config_id},
+                    )
+        finally:
+            await cleanup.dispose()
