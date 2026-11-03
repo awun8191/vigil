@@ -1,0 +1,11 @@
+Review the agents code
+
+---
+
+Implement the fixes and fir the test you can use this model from the meta model api:
+
+
+muse-spark-1.3-contributor
+
+This is the api key. Put it in a .env and gitignore it:
+REDACTED
