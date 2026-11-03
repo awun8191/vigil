@@ -326,3 +326,89 @@ async def test_a_single_owner_resolves_and_runs(tmp_path: Path) -> None:
         "notifications/initialized",
         "tools/call",
     ]
+
+
+# ---------------------------------------------------------------------------
+# SSE transport: an unparseable reply and a reply with no result both fail.
+# ---------------------------------------------------------------------------
+
+
+def mock_sse_reply(monkeypatch: pytest.MonkeyPatch, handler: Any) -> None:
+    """Route every httpx client the module builds through a mock transport."""
+    import httpx
+
+    from src.integrations.mcp import mcp as mcp_module
+
+    real_client = httpx.AsyncClient
+
+    def factory(*args: Any, **kwargs: Any) -> Any:
+        kwargs.pop("timeout", None)
+        return real_client(transport=httpx.MockTransport(handler))
+
+    monkeypatch.setattr(mcp_module.httpx, "AsyncClient", factory)
+
+
+async def test_sse_unparseable_reply_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A 200 whose body is not JSON and not an event is an error, not success."""
+
+    def handler(request: Any) -> Any:
+        import httpx
+
+        return httpx.Response(200, text="<html>not a protocol reply</html>")
+
+    mock_sse_reply(monkeypatch, handler)
+    inject_sse_server("sse-garbled", "sse_tool")
+
+    result = await make_host().execute_tool(
+        "sse-garbled", "sse_tool", {}, tool_call_id="call-sse-1"
+    )
+
+    assert result.is_error is True
+    assert "was not run" in str(result.output)
+
+
+async def test_sse_reply_without_a_result_fails_closed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A reply with no result object proves nothing, so it is an error."""
+
+    def handler(request: Any) -> Any:
+        import httpx
+
+        return httpx.Response(200, json={"jsonrpc": "2.0", "id": 1})
+
+    mock_sse_reply(monkeypatch, handler)
+    inject_sse_server("sse-empty", "sse_tool")
+
+    result = await make_host().execute_tool(
+        "sse-empty", "sse_tool", {}, tool_call_id="call-sse-2"
+    )
+
+    assert result.is_error is True
+    assert "no result" in str(result.output)
+
+
+async def test_sse_result_still_succeeds(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A real result is still a success: the fail-closed guards are not blanket."""
+
+    def handler(request: Any) -> Any:
+        import httpx
+
+        return httpx.Response(
+            200,
+            json={
+                "jsonrpc": "2.0",
+                "id": 1,
+                "result": {"content": [{"type": "text", "text": "SSE-OK"}], "isError": False},
+            },
+        )
+
+    mock_sse_reply(monkeypatch, handler)
+    inject_sse_server("sse-good", "sse_tool")
+
+    result = await make_host().execute_tool(
+        "sse-good", "sse_tool", {}, tool_call_id="call-sse-3"
+    )
+
+    assert result.is_error is False, result.output
+    assert result.output == "SSE-OK"

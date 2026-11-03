@@ -485,7 +485,12 @@ async def _call_sse_tool(
     arguments: dict[str, Any],
     timeout: float = HANDSHAKE_TIMEOUT_SECONDS,
 ) -> tuple[str, bool]:
-    """Invoke tools/call on an SSE / StreamMCP server URL and return (output, is_error)."""
+    """Invoke tools/call on an SSE / StreamMCP server URL and return (output, is_error).
+
+    The method fails closed. A reply it cannot parse, and a reply that carries
+    no ``result`` object, both return ``is_error=True``: neither proves the
+    server ran the tool, and a success would hand the model an invented result.
+    """
     payload = {
         "jsonrpc": "2.0",
         "id": 1,
@@ -518,10 +523,27 @@ async def _call_sse_tool(
             try:
                 data = resp.json()
             except ValueError:
-                return body[:1000], False
+                return (
+                    "SSE tools/call failed: the reply body is neither a JSON "
+                    f"object nor an SSE event; tool {tool_name!r} was not run: "
+                    f"{body[:300]!r}",
+                    True,
+                )
+        if not isinstance(data, dict):
+            return (
+                f"SSE tools/call failed: the reply is not a JSON object; "
+                f"tool {tool_name!r} was not run",
+                True,
+            )
         if "error" in data:
             return f"MCP server error: {data['error']}", True
-        result = data.get("result", {})
+        result = data.get("result")
+        if not isinstance(result, dict):
+            return (
+                f"SSE tools/call failed: the reply carries no result object; "
+                f"tool {tool_name!r} was not run",
+                True,
+            )
         is_error = bool(result.get("isError", False))
         content = result.get("content")
         if isinstance(content, list):
