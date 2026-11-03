@@ -125,6 +125,9 @@ class _SessionWithoutTheRow:
     async def commit(self) -> None:
         return None
 
+    async def flush(self) -> None:
+        return None
+
     async def get(self, model, key):  # noqa: ANN001 - mirrors AsyncSession.get
         return None
 

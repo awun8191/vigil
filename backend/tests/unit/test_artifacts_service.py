@@ -45,6 +45,10 @@ class _BrokenSession:
         self.calls.append("commit")
         raise RuntimeError("database is gone")
 
+    async def flush(self) -> None:
+        self.calls.append("flush")
+        raise RuntimeError("database is gone")
+
     async def delete(self, *args: object, **kwargs: object) -> None:
         self.calls.append("delete")
         raise RuntimeError("database is gone")

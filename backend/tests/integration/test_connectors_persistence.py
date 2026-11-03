@@ -115,6 +115,9 @@ async def test_account_and_mcp_server_survive_a_new_session(
                 name=server_name, transport="stdio", command=command
             )
             account_id = account.id
+            # The store flushes and the boundary commits; this test is its own
+            # boundary, so closing the session without this would discard both.
+            await first.commit()
 
         # A restart loses the process-local cache. Only the rows can answer now.
         ConnectorsService.reset_mcp_cache()
@@ -248,6 +251,8 @@ async def test_saving_the_same_account_twice_replaces_that_row(
                 )
             )
             account_id = original.id
+            # The store flushes, so the test commits its own unit of work.
+            await first.commit()
 
         # Long enough that the second write stamps a strictly later updated_at.
         await asyncio.sleep(0.01)
@@ -264,6 +269,7 @@ async def test_saving_the_same_account_twice_replaces_that_row(
                     scopes=second_scopes,
                 )
             )
+            await second.commit()
             row_count = await second.scalar(
                 select(func.count())
                 .select_from(ConnectedAccountModel)
@@ -310,8 +316,10 @@ async def test_a_second_registration_of_one_name_is_a_domain_error(
     """A lost race on the unique name is an MCPRegistrationError, not a 500.
 
     Two workers can both pass the service's "is it registered" pre-check. The
-    unique index on ``mcp_servers.name`` rejects the loser, and the store has to
-    roll the transaction back and raise the same error the pre-check raises.
+    unique index on ``mcp_servers.name`` rejects the loser, and the flush turns
+    that IntegrityError into the same domain error the pre-check raises. The
+    store does not roll back: the boundary that owns the transaction does, and
+    the committed first row survives the loser's aborted transaction.
     """
     name = f"dup-mcp-{uuid.uuid4().hex[:8]}"
     now = datetime.now(timezone.utc)
@@ -333,12 +341,25 @@ async def test_a_second_registration_of_one_name_is_a_domain_error(
                 session=session, settings=Settings(APP_ENV="test")
             )
             stored = await service.repository.register_server(candidate())
+            # The boundary commits the winner before the race is lost.
+            await session.commit()
 
+        async with session_factory() as loser:
+            loser_service = ConnectorsService(
+                session=loser, settings=Settings(APP_ENV="test")
+            )
             with pytest.raises(MCPRegistrationError, match="already registered"):
-                await service.repository.register_server(candidate())
+                await loser_service.repository.register_server(candidate())
+            # The store leaves the aborted transaction to the boundary.
+            await loser.rollback()
 
-            # The rollback left the session usable and the first row untouched.
-            still_stored = await service.repository.get_server(name)
+        # The winner's row is still there, read through a session that never
+        # touched the losing transaction.
+        async with session_factory() as reader:
+            reader_service = ConnectorsService(
+                session=reader, settings=Settings(APP_ENV="test")
+            )
+            still_stored = await reader_service.repository.get_server(name)
             assert still_stored is not None
             assert still_stored.id == stored.id
     finally:

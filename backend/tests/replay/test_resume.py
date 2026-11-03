@@ -399,6 +399,9 @@ async def test_resume_after_restart_in_database() -> None:
             await first.process(run.id, observer=observer)
 
         assert len(tools.local) == 1
+        # The journal flushes; this test owns the session and is about to
+        # simulate a restart, so it commits the rows the process wrote.
+        await session.commit()
         await session.close()
         await engine.dispose()
 

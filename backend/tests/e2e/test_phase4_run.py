@@ -371,6 +371,9 @@ async def test_run_with_approval_completes(phase4: Harness) -> None:
                 },
                 headers=AUTH_HEADERS,
             )
+        # The request that created the run owned the transaction; this test owns
+        # the session, so it commits the queued run before the session closes.
+        await api_session.commit()
     assert created.status_code == 201, created.text
     body = created.json()
     run_id = UUID(body["id"])
@@ -518,6 +521,9 @@ async def test_background_tool_resumes_the_run(phase4: Harness) -> None:
             config_id=config_id, card_id=card_id, initial_prompt="Write the report."
         )
         run_id = run.id
+        # The service flushes; the test owns this session, so it commits the
+        # queued run and its job before the session closes.
+        await api_session.commit()
     assert run.status == "queued"
 
     # Worker A runs the loop, which enqueues the background tool call.
