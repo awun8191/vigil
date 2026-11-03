@@ -255,6 +255,13 @@ async def test_a_worker_job_commits_its_rows_at_the_job_boundary(
                 await SqlChatRepository(context.session).create_session(
                     user_id=DEFAULT_USER_ID, title=title
                 )
+                # The store must not commit mid-job: a reader outside this
+                # transaction sees nothing until the boundary commits.
+                async with session_factory() as mid_job:
+                    seen = await mid_job.scalar(
+                        select(ThreadModel.id).where(ThreadModel.title == title)
+                    )
+                assert seen is None, "a store committed inside the job"
 
             await process_job(
                 job,
@@ -392,6 +399,11 @@ async def test_a_step_checkpoint_reaches_a_reader_mid_run(
                     payload={"delta": "live"},
                 )
             )
+
+            # Uncommitted, so the live reader cannot see it yet.
+            async with session_factory() as before_checkpoint:
+                assert await SqlRunJournal(before_checkpoint).list_steps(run.id) == []
+
             await journal.checkpoint()
 
             # The writer is still open, exactly like a run in progress.
@@ -418,3 +430,170 @@ async def test_a_step_checkpoint_reaches_a_reader_mid_run(
                     )
         finally:
             await cleanup.dispose()
+
+
+async def _seed_locked_job(
+    session_factory: async_sessionmaker[AsyncSession], job_id: UUID, now: datetime
+) -> None:
+    """Insert one job row in the locked state a worker would hold."""
+    async with session_factory() as setup:
+        setup.add(
+            JobModel(
+                id=job_id,
+                type="cleanup_sandbox",
+                payload={},
+                run_at=now,
+                attempts=1,
+                max_attempts=5,
+                status="locked",
+                locked_by="uow-worker",
+                locked_at=now,
+                created_at=now,
+                updated_at=now,
+            )
+        )
+        await setup.commit()
+
+
+def _locked_job(job_id: UUID, now: datetime) -> JobDTO:
+    """Return the DTO the dispatcher hands to a handler for that row."""
+    return JobDTO(
+        id=job_id,
+        type="cleanup_sandbox",
+        payload={},
+        run_at=now,
+        attempts=1,
+        max_attempts=5,
+        status="locked",
+        locked_by="uow-worker",
+        locked_at=now,
+        last_error=None,
+        created_at=now,
+        updated_at=now,
+        priority=0,
+        heartbeat_at=None,
+    )
+
+
+class _FailingCommitSession:
+    """A session whose commit fails, to prove no completion is reported."""
+
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    def __getattr__(self, name: str):
+        return getattr(self._session, name)
+
+    async def commit(self) -> None:
+        raise RuntimeError("commit refused")
+
+
+@pytest.mark.asyncio
+async def test_a_plain_handler_error_discards_the_partial_write(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """A failed job keeps only what it checkpointed, not a half-applied write."""
+    suffix = uuid4().hex[:8]
+    title = f"uow-error-{suffix}"
+    job_id = uuid4()
+    now = datetime.now(timezone.utc)
+    settings = Settings(APP_ENV="test")
+
+    try:
+        await _seed_locked_job(session_factory, job_id, now)
+
+        async with session_factory() as session:
+            jobs = JobsService(session=session, settings=settings)
+
+            async def handler(claimed: JobDTO, context: JobContext) -> None:
+                await SqlChatRepository(context.session).create_session(
+                    user_id=DEFAULT_USER_ID, title=title
+                )
+                raise RuntimeError("handler exploded")
+
+            await process_job(
+                _locked_job(job_id, now),
+                jobs,
+                JobContext(settings=settings, session=session),
+                handlers={"cleanup_sandbox": handler},
+            )
+
+        async with session_factory() as check:
+            partial = await check.scalar(
+                select(func.count())
+                .select_from(ThreadModel)
+                .where(ThreadModel.title == title)
+            )
+            status = await check.scalar(
+                select(JobModel.status).where(JobModel.id == job_id)
+            )
+
+        assert partial == 0, "the failed job's uncommitted write must not survive"
+        assert status == "pending", "the job is retried, not completed"
+    finally:
+        async with session_factory() as cleanup:
+            await cleanup.execute(
+                text("delete from threads where title = :title"), {"title": title}
+            )
+            await cleanup.execute(
+                text("delete from jobs where id = :id"), {"id": job_id}
+            )
+            await cleanup.commit()
+
+
+@pytest.mark.asyncio
+async def test_a_failed_commit_raises_and_reports_no_completion(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """A commit failure must not be logged as a completed job."""
+    suffix = uuid4().hex[:8]
+    title = f"uow-commit-{suffix}"
+    job_id = uuid4()
+    now = datetime.now(timezone.utc)
+    settings = Settings(APP_ENV="test")
+
+    try:
+        await _seed_locked_job(session_factory, job_id, now)
+
+        async with session_factory() as session:
+            jobs = JobsService(session=session, settings=settings)
+
+            async def handler(claimed: JobDTO, context: JobContext) -> None:
+                await SqlChatRepository(context.session).create_session(
+                    user_id=DEFAULT_USER_ID, title=title
+                )
+
+            with pytest.raises(RuntimeError, match="commit refused"):
+                await process_job(
+                    _locked_job(job_id, now),
+                    jobs,
+                    JobContext(
+                        settings=settings,
+                        session=_FailingCommitSession(session),  # type: ignore[arg-type]
+                    ),
+                    handlers={"cleanup_sandbox": handler},
+                )
+
+        # The real session was never committed, so closing it rolled everything
+        # back: no completed job, no thread.
+        async with session_factory() as check:
+            status = await check.scalar(
+                select(JobModel.status).where(JobModel.id == job_id)
+            )
+            partial = await check.scalar(
+                select(func.count())
+                .select_from(ThreadModel)
+                .where(ThreadModel.title == title)
+            )
+
+        assert status == "locked", "a failed commit must leave the outcome unrecorded"
+        assert partial == 0
+    finally:
+        async with session_factory() as cleanup:
+            await cleanup.execute(
+                text("delete from threads where title = :title"), {"title": title}
+            )
+            await cleanup.execute(
+                text("delete from jobs where id = :id"), {"id": job_id}
+            )
+            await cleanup.commit()
