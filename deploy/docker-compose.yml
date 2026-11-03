@@ -32,6 +32,9 @@ services:
       # No default. A missing key fails the compose command, not the boot.
       SECRET_KEY: ${SECRET_KEY:?SECRET_KEY must be set. Generate one with openssl rand -hex 32}
       PORT: 8000
+      # The api service must NOT poll the job queue: it has no Docker socket, so
+      # every sandbox it tries to create fails. The worker service below polls.
+      EMBED_WORKER: "false"
     volumes:
       - vigil_workspaces:/var/vigil/workspaces
       - vigil_skills:/var/vigil/skills
@@ -46,6 +49,9 @@ services:
       retries: 3
       start_period: 20s
 
+  # The only job poller in this deployment. Keep this service: it holds the
+  # Docker socket that sandbox runs need, and the api service keeps
+  # EMBED_WORKER=false so two pollers never claim the same queue.
   worker:
     build:
       context: ../backend
