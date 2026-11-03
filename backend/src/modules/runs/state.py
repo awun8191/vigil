@@ -778,8 +778,10 @@ class SqlRunJournal:
 
     Every write flushes into the caller's transaction and returns. The boundary
     that owns the session (a request, a worker job, a test) commits, so one unit
-    of work either lands whole or not at all. Steps are rows, so a restart keeps
-    the history and the SSE resume point.
+    of work lands whole or not at all up to the next checkpoint. ``checkpoint()``
+    is the exception: the step feed is read live by the SSE endpoint, so the loop
+    commits the steps written so far and a later failure keeps them. Steps are
+    rows, so a restart keeps the history and the SSE resume point.
     """
 
     def __init__(self, session: AsyncSession) -> None:
