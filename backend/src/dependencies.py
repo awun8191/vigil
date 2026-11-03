@@ -527,7 +527,12 @@ class RunToolExecutor:
     The class satisfies :class:`src.modules.runs.loop.ToolExecutor`.
     """
 
-    HOST_ONLY_TOOLS: frozenset[str] = frozenset({"web_search", "web_fetch", "manage_tasks"})
+    #: Tools that need no run container. They run on the host, or, for
+    #: ``ask_user``, only return a pending marker. ``execute`` gives them the
+    #: ``host-only`` container id so no sandbox is created for them.
+    HOST_ONLY_TOOLS: frozenset[str] = frozenset(
+        {"web_search", "web_fetch", "manage_tasks", "ask_user"}
+    )
 
     def __init__(
         self,
@@ -626,7 +631,19 @@ class RunToolExecutor:
     async def execute_external(
         self, name: str, arguments: Mapping[str, Any]
     ) -> Mapping[str, Any]:
-        """Run one approved external tool through the connector host."""
+        """Run one approved external tool.
+
+        A tool the harness declares itself runs through the harness, so its own
+        handler answers. ``ask_user`` is the only such tool today: its contract
+        is a pending marker, and sending it to the connector host would run it
+        on whichever third party server happened to own the name, or fail
+        closed for a name no server owns. Only a name the harness does not
+        declare goes to the connector host.
+        """
+        from src.modules.runs.tools import TOOLS
+
+        if name in TOOLS:
+            return await self.execute(name, dict(arguments))
         result = await self.mcp_host.execute_tool(
             self.connector_id, name, dict(arguments)
         )

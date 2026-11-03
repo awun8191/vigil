@@ -574,3 +574,113 @@ async def test_tool_never_raises(tmp_path: Path) -> None:
     assert result.ok is False
     assert "RuntimeError" in (result.error or "")
     assert "daemon down" in (result.error or "")
+
+
+# --- external routing -----------------------------------------------------------
+
+
+class RecordingMCPHost:
+    """A connector host stub. It records every call and never runs a tool."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, str, dict[str, Any]]] = []
+
+    async def list_tools(self, connector_id: str) -> list[Any]:
+        return []
+
+    async def execute_tool(
+        self,
+        connector_id: str,
+        tool_name: str,
+        arguments: dict[str, Any],
+        tool_call_id: str = "",
+    ) -> Any:
+        from src.integrations.repositories import MCPToolResultDTO
+
+        self.calls.append((connector_id, tool_name, dict(arguments)))
+        return MCPToolResultDTO(
+            tool_call_id=tool_call_id, output="host ran it", is_error=False
+        )
+
+    async def get_tool_approval_policy(self, connector_id: str, tool_name: str) -> str:
+        return "external"
+
+    async def is_healthy(self, connector_id: str) -> bool:
+        return True
+
+
+class NoSandbox:
+    """A sandbox stub that fails the test if a container is ever asked for."""
+
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+
+    async def create_container(self, *args: Any, **kwargs: Any) -> Any:
+        self.calls.append("create_container")
+        raise AssertionError("ask_user must not need a sandbox container")
+
+
+def make_executor(
+    tmp_path: Path,
+    host: Any,
+    sandbox: Any | None = None,
+) -> Any:
+    """Build a RunToolExecutor over the recording stubs."""
+    from uuid import uuid4
+
+    from src.config.settings import Settings
+    from src.dependencies import RunToolExecutor
+
+    return RunToolExecutor(
+        session=None,
+        settings=Settings(APP_ENV="test"),
+        run_id=uuid4(),
+        sandbox=sandbox if sandbox is not None else NoSandbox(),
+        mcp_host=host,
+        delivery_dir=tmp_path,
+    )
+
+
+async def test_execute_external_runs_ask_user_through_the_harness(tmp_path: Path) -> None:
+    """ask_user is a declared external tool: its own handler answers, not the host."""
+    host = RecordingMCPHost()
+    sandbox = NoSandbox()
+    executor = make_executor(tmp_path, host, sandbox)
+
+    result = await executor.execute_external("ask_user", {"question": "hi"})
+
+    assert result["ok"] is True
+    assert result["error"] is None
+    assert result["content"]["status"] == "pending_user_input"
+    assert result["content"]["question"] == "hi"
+    assert host.calls == []
+    assert sandbox.calls == []
+    assert executor.container_id is None
+
+
+async def test_execute_external_validates_a_declared_tool_before_it_runs(
+    tmp_path: Path,
+) -> None:
+    """A bad ask_user call fails on its schema and still never reaches the host."""
+    host = RecordingMCPHost()
+    executor = make_executor(tmp_path, host)
+
+    result = await executor.execute_external("ask_user", {})
+
+    assert result["ok"] is False
+    assert "invalid arguments" in str(result["error"])
+    assert host.calls == []
+
+
+async def test_execute_external_sends_an_undeclared_tool_to_the_host(
+    tmp_path: Path,
+) -> None:
+    """A name the harness does not declare is a third party tool: the host runs it."""
+    host = RecordingMCPHost()
+    executor = make_executor(tmp_path, host)
+
+    result = await executor.execute_external("third_party_lookup", {"q": "x"})
+
+    assert host.calls == [("default", "third_party_lookup", {"q": "x"})]
+    assert result["ok"] is True
+    assert result["content"] == "host ran it"
