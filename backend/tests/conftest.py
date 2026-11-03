@@ -1,6 +1,13 @@
 """Root test configuration and fixtures for vigil-backend."""
 import sys
+
 import pytest
+
+# Tests must not read a developer .env. Without this, a local file changes what
+# the suite asserts about defaults, and a key in it reaches a real provider.
+from src.config.settings import Settings
+
+Settings.model_config["env_file"] = None
 
 # Deterministic device tokens owned by the test suite. No source module knows
 # these values any more. AuthService.seed_test_devices() writes them into the
