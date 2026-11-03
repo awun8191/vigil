@@ -48,11 +48,13 @@ EXPECTED_TABLES = [
     "idempotency_records",
     "skills",
     "audit_log",
-    "mcp_servers",]
+    "mcp_servers",
+    "run_steps",
+]
 
 
 def test_alembic_offline_sql_generation(alembic_config: Config, capsys: pytest.CaptureFixture[str]) -> None:
-    """Validate that offline SQL DDL generation produces all 22 tables, pgvector extension, and HNSW index."""
+    """Validate that offline SQL DDL generation produces all 23 tables, pgvector extension, and HNSW index."""
     output_buffer = io.StringIO()
     alembic_config.stdout = output_buffer
 
@@ -63,8 +65,9 @@ def test_alembic_offline_sql_generation(alembic_config: Config, capsys: pytest.C
     # Verify pgvector extension
     assert "CREATE EXTENSION IF NOT EXISTS vector;" in sql_text
 
-    # Verify all 22 tables exist in generated SQL
-    # Verify all 22 tables exist in generated SQL    for tbl in EXPECTED_TABLES:        assert f"CREATE TABLE {tbl}" in sql_text
+    # Verify all tables exist in generated SQL
+    for tbl in EXPECTED_TABLES:
+        assert f"CREATE TABLE {tbl}" in sql_text
 
     # Verify HNSW index and vector_cosine_ops
     assert "ix_memory_chunks_embedding_hnsw" in sql_text
@@ -92,12 +95,12 @@ async def test_alembic_live_upgrade_downgrade_lifecycle(alembic_config: Config) 
     """
     Test live database migration lifecycle against PostgreSQL container:
     1. Upgrade to head
-    2. Verify 22 tables, vector extension, HNSW index, and the corrected columns
+    2. Verify 23 tables, vector extension, HNSW index, and the corrected columns
     3. Downgrade to base
-    4. Verify all 22 tables are cleanly dropped
-    2. Verify 22 tables, vector extension, HNSW index, and the corrected columns
+    4. Verify all 23 tables are cleanly dropped
+    2. Verify 23 tables, vector extension, HNSW index, and the corrected columns
     3. Downgrade to base
-    4. Verify all 22 tables are cleanly dropped    5. Upgrade to head again (verifying idempotency)    """
+    4. Verify all 23 tables are cleanly dropped    5. Upgrade to head again (verifying idempotency)    """
     settings = get_settings()
     engine = create_async_engine(settings.DATABASE_URL)
 
@@ -202,7 +205,7 @@ async def test_alembic_live_upgrade_downgrade_lifecycle(alembic_config: Config) 
         # 3. Downgrade to base
         command.downgrade(alembic_config, "base")
 
-        # 4. Verify all 22 domain tables were dropped
+        # 4. Verify all 23 domain tables were dropped
         async with engine.connect() as conn:
             res_after = await conn.execute(
                 sa.text(
@@ -223,7 +226,7 @@ async def test_alembic_live_upgrade_downgrade_lifecycle(alembic_config: Config) 
                 )
             )
             count = res_reapply.scalar()
-            assert count == 22, f"Expected 22 tables on re-upgrade, found {count}"
+            assert count == 23, f"Expected 23 tables on re-upgrade, found {count}"
     finally:
         await engine.dispose()
 

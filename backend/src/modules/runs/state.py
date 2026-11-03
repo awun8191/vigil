@@ -27,6 +27,8 @@ from typing import Any, Literal, Protocol, runtime_checkable
 from uuid import UUID, uuid4
 
 from sqlalchemy import select
+
+from src.config.exceptions import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.modules.approvals.repository import ApprovalDTO
@@ -41,7 +43,13 @@ from src.modules.runs.repository import (
     RunStepCreateDTO,
     RunStepDTO,
 )
-from src.schemas.runtime import AgentConfigModel, ApprovalModel, MessageModel, RunModel
+from src.schemas.runtime import (
+    AgentConfigModel,
+    ApprovalModel,
+    MessageModel,
+    RunModel,
+    RunStepModel,
+)
 from src.schemas.system import JobModel
 
 __all__ = [
@@ -268,13 +276,27 @@ class PartitionPolicy:
         ``approval_policy`` maps a tool name to one of the three partitions. A
         tool in ``tools`` that has no explicit level is local. Any other tool is
         external, so it needs an approval row.
+
+        The mapping fails closed on the value. A level the code does not know
+        raises, because the alternative is a silent drop that lets an external
+        tool run without a decision. A key may name a tool outside ``tools``,
+        since an explicit level is still an explicit decision.
+
+        Raises:
+            ValidationError: The policy gives a tool an unknown partition.
         """
-        levels = {
-            str(name): str(level)
-            for name, level in (config.approval_policy or {}).items()
-            if level in TOOL_PARTITIONS
-        }
-        return cls(levels=levels, local_tools=frozenset(config.tools or ()))
+        declared = frozenset(config.tools or ())
+        levels: dict[str, str] = {}
+        for name, level in (config.approval_policy or {}).items():
+            tool_name = str(name)
+            partition = str(level)
+            if partition not in TOOL_PARTITIONS:
+                raise ValidationError(
+                    f"approval_policy gives {tool_name!r} the unknown partition "
+                    f"{partition!r}. Use one of {sorted(TOOL_PARTITIONS)}"
+                )
+            levels[tool_name] = partition
+        return cls(levels=levels, local_tools=declared)
 
     def partition_for(self, tool_name: str) -> ToolPartition:
         """
@@ -670,13 +692,12 @@ class InMemoryRunJournal:
 class SqlRunJournal:
     """A journal over the application database session.
 
-    Every write commits, so a killed process loses no completed write. The steps
-    stay in a process buffer, because the schema has no step table.
+    Every write commits, so a killed process loses no completed write. Steps are
+    rows, so a restart keeps the history and the SSE resume point.
     """
 
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
-        self._steps: dict[UUID, list[RunStepDTO]] = {}
 
     # -- helpers ----------------------------------------------------------
 
@@ -693,6 +714,17 @@ class SqlRunJournal:
             ended_at=_as_utc(model.ended_at) if model.ended_at is not None else None,
             token_usage=dict(model.token_usage or {}),
             cost_usd=(model.cost_micros or 0) / 1_000_000,
+        )
+
+    @staticmethod
+    def _step_dto(model: RunStepModel) -> RunStepDTO:
+        return RunStepDTO(
+            id=model.id,
+            run_id=model.run_id,
+            step_number=model.step_number,
+            event_type=model.event_type,
+            payload=dict(model.payload or {}),
+            created_at=_as_utc(model.created_at),
         )
 
     @staticmethod
@@ -885,22 +917,28 @@ class SqlRunJournal:
         await self.session.commit()
         return dto
 
-    # -- steps (process local) --------------------------------------------
+    # -- steps (durable) ---------------------------------------------------
 
     async def list_steps(self, run_id: UUID) -> list[RunStepDTO]:
-        return list(self._steps.get(run_id, ()))
+        result = await self.session.execute(
+            select(RunStepModel)
+            .where(RunStepModel.run_id == run_id)
+            .order_by(RunStepModel.step_number.asc())
+        )
+        return [self._step_dto(model) for model in result.scalars().all()]
 
     async def append_step(self, data: RunStepCreateDTO) -> RunStepDTO:
-        step = RunStepDTO(
+        model = RunStepModel(
             id=uuid4(),
             run_id=data.run_id,
             step_number=data.step_number,
             event_type=data.event_type,
-            payload=data.payload,
+            payload=dict(data.payload or {}),
             created_at=_utc_now(),
         )
-        self._steps.setdefault(data.run_id, []).append(step)
-        return step
+        self.session.add(model)
+        await self.session.commit()
+        return self._step_dto(model)
 
     # -- configs ----------------------------------------------------------
 

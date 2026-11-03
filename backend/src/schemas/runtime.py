@@ -204,6 +204,39 @@ class RunModel(Base):
     )
 
 
+class RunStepModel(Base):
+    """Append-only journal of one run, ordered by ``step_number``.
+
+    Every loop stage and every tool event is a row. The SSE endpoint resumes by
+    replaying rows after the last number the client saw, so a restart loses no
+    step and a second worker never renumbers a step.
+    """
+
+    __tablename__ = "run_steps"
+    __table_args__ = (
+        UniqueConstraint("run_id", "step_number", name="uq_run_steps_run_step"),
+        Index("ix_run_steps_run_step", "run_id", "step_number"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    run_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("runs.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    step_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    event_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    payload: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, default=dict
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
 class MessageModel(Base):
     """Unified conversational turn or execution message serving chat threads and runs."""
 

@@ -20,6 +20,7 @@ from src.modules.runs.loop import (
 )
 from src.modules.runs.repository import MessageCreateDTO, RunCreateDTO, RunDTO
 from src.modules.runs.service import RunsService
+from src.config.exceptions import ValidationError
 from src.modules.runs.state import (
     RUN_STATUSES,
     TERMINAL_RUN_STATUSES,
@@ -194,13 +195,21 @@ def test_policy_defaults_to_external_for_an_undeclared_tool() -> None:
     assert policy.partition_for("rm_rf") == "external"
 
 
-def test_policy_ignores_an_unknown_level_value() -> None:
-    """A level outside the three partitions falls back to the safer rule."""
+def test_policy_rejects_an_unknown_level_value() -> None:
+    """A level outside the three partitions is an error, never a silent default."""
+    with pytest.raises(ValidationError):
+        PartitionPolicy.from_config(
+            agent_config(tools=("echo",), approval_policy={"echo": "fast"})
+        )
+
+
+def test_policy_applies_an_explicit_level_outside_the_tool_list() -> None:
+    """An explicit level still counts when the tool is not in the declared list."""
     policy = PartitionPolicy.from_config(
-        agent_config(tools=(), approval_policy={"echo": "fast"})
+        agent_config(tools=("echo",), approval_policy={"gmail_send": "external"})
     )
 
-    assert policy.partition_for("echo") == "external"
+    assert policy.partition_for("gmail_send") == "external"
 
 
 # ---------------------------------------------------------------------------

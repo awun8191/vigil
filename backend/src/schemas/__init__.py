@@ -17,6 +17,7 @@ from src.schemas.runtime import (
     ArtifactModel,
     MessageModel,
     RunModel,
+    RunStepModel,
     RunWorkspaceModel,
     ThreadModel,
 )
@@ -43,6 +44,7 @@ __all__ = [
     "AgentConfigModel",
     "ThreadModel",
     "RunModel",
+    "RunStepModel",
     "RunWorkspaceModel",
     "MessageModel",
     "ApprovalModel",

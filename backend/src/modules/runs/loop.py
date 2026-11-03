@@ -808,12 +808,13 @@ class RunLoop:
     def _usage(run: RunDTO, response: LLMResponseDTO) -> dict[str, int]:
         """Add the usage of one model call to the stored usage."""
         previous = dict(run.token_usage or {})
-        return {
-            "prompt": int(previous.get("prompt", 0)) + int(response.prompt_tokens),
-            "completion": int(previous.get("completion", 0))
-            + int(response.completion_tokens),
-            "total": int(previous.get("total", 0)) + int(response.total_tokens),
-        }
+        prompt = int(previous.get("prompt", 0)) + int(response.prompt_tokens)
+        completion = int(previous.get("completion", 0)) + int(
+            response.completion_tokens
+        )
+        # Some providers leave total_tokens at zero. The total is the sum of the
+        # two counters, so derive it instead of trusting a missing field.
+        return {"prompt": prompt, "completion": completion, "total": prompt + completion}
 
     async def _record_step(
         self, run_id: UUID, event_type: str, payload: dict[str, Any]
