@@ -40,6 +40,7 @@ from src.modules.connectors.service import MCPRegistrationError
 from src.modules.connectors.state import SqlConnectorStore
 from src.modules.jobs.repository import JobDTO
 from src.modules.jobs.service import JobsService
+from src.modules.runs.state import SqlRunJournal
 from src.schemas.connectors import MCPServerModel
 from src.schemas.identity import DeviceModel
 from src.schemas.runtime import RunModel, ThreadModel
@@ -547,6 +548,11 @@ async def test_a_failed_commit_raises_and_reports_no_completion(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     """A commit failure must not be logged as a completed job."""
+    from src.config.logging import configure_logging
+
+    # structlog reaches stdlib logging only after this call, and caplog listens
+    # there. Without it the assertion below is vacuous when this test runs alone.
+    configure_logging()
     suffix = uuid4().hex[:8]
     title = f"uow-commit-{suffix}"
     job_id = uuid4()
@@ -575,6 +581,7 @@ async def test_a_failed_commit_raises_and_reports_no_completion(
                     handlers={"cleanup_sandbox": handler},
                 )
 
+        assert "Cannot commit the job outcome" in caplog.text
         assert "Completed job" not in caplog.text
 
         # The real session was never committed, so closing it rolled everything
@@ -623,9 +630,12 @@ async def test_a_failed_run_keeps_its_terminal_record_through_the_worker_rollbac
     run_id: UUID | None = None
     config_id: UUID | None = None
     try:
-        async with session_factory() as session:
-            journal = SqlRunJournal(session)
-            config = await journal.save_config(
+        # The run exists before the handler runs, exactly as in production: an
+        # earlier unit of work committed it. A mutation that loses the terminal
+        # record must therefore leave a queued run, not no row at all.
+        async with session_factory() as setup:
+            setup_journal = SqlRunJournal(setup)
+            config = await setup_journal.save_config(
                 AgentConfigDTO(
                     id=uuid4(),
                     name=f"uow-fail-{uuid4().hex[:8]}",
@@ -639,10 +649,14 @@ async def test_a_failed_run_keeps_its_terminal_record_through_the_worker_rollbac
                 )
             )
             config_id = config.id
-            run = await journal.create_run(
+            run = await setup_journal.create_run(
                 RunCreateDTO(config_id=config.id, status="queued")
             )
             run_id = run.id
+            await setup.commit()
+
+        async with session_factory() as session:
+            journal = SqlRunJournal(session)
 
             # No model and no tools: the loop raises before it can call one.
             service = RunsService(
@@ -664,6 +678,94 @@ async def test_a_failed_run_keeps_its_terminal_record_through_the_worker_rollbac
 
         assert status == "failed", "the terminal record must survive the rollback"
         assert [step.event_type for step in steps].count("run_failed") == 1
+    finally:
+        cleanup = create_async_engine(Settings(APP_ENV="test").DATABASE_URL)
+        try:
+            async with cleanup.begin() as connection:
+                if run_id is not None:
+                    for statement in (
+                        "delete from run_steps where run_id = :id",
+                        "delete from messages where run_id = :id",
+                        "delete from runs where id = :id",
+                    ):
+                        await connection.execute(text(statement), {"id": run_id})
+                if config_id is not None:
+                    await connection.execute(
+                        text("delete from agent_configs where id = :id"),
+                        {"id": config_id},
+                    )
+        finally:
+            await cleanup.dispose()
+
+
+class _FailingCheckpointJournal(SqlRunJournal):
+    """A journal whose checkpoint fails, to prove the original error wins."""
+
+    async def checkpoint(self) -> None:
+        raise RuntimeError("checkpoint refused")
+
+
+@pytest.mark.asyncio
+async def test_a_failed_failure_checkpoint_keeps_the_original_error(
+    session_factory: async_sessionmaker[AsyncSession],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """When the terminal commit fails, the original error still propagates.
+
+    The commit error must be a warning, not the error the caller sees, and the
+    run must not be reported as failed when nothing became durable.
+    """
+    from src.config.logging import configure_logging, get_logger
+    from src.modules.runs.loop import LoopDependencyMissing
+    from src.modules.runs.repository import AgentConfigDTO, RunCreateDTO
+    from src.modules.runs.service import RunsService
+    from src.modules.runs.state import SqlRunJournal
+    from src.worker import rollback_failed_job
+
+    configure_logging()
+
+    run_id: UUID | None = None
+    config_id: UUID | None = None
+    try:
+        async with session_factory() as setup:
+            setup_journal = SqlRunJournal(setup)
+            config = await setup_journal.save_config(
+                AgentConfigDTO(
+                    id=uuid4(),
+                    name=f"uow-checkpoint-{uuid4().hex[:8]}",
+                    system_prompt="Checkpoint failure probe.",
+                    model="test-model",
+                    tools=[],
+                    skills=[],
+                    memory_scopes=[],
+                    approval_policy={},
+                    limits={"max_cost_micros": 0},
+                )
+            )
+            config_id = config.id
+            run = await setup_journal.create_run(
+                RunCreateDTO(config_id=config.id, status="queued")
+            )
+            run_id = run.id
+            await setup.commit()
+
+        async with session_factory() as session:
+            service = RunsService(
+                session=session,
+                settings=Settings(APP_ENV="test"),
+                journal=_FailingCheckpointJournal(session),
+            )
+            with pytest.raises(LoopDependencyMissing):
+                await service.process(run_id)
+            await rollback_failed_job(session, get_logger("uow.test"))
+
+        async with session_factory() as check:
+            status = await check.scalar(
+                select(RunModel.status).where(RunModel.id == run_id)
+            )
+
+        assert status == "queued", "a failed commit must not claim the run failed"
+        assert "Cannot make the failure record durable" in caplog.text
     finally:
         cleanup = create_async_engine(Settings(APP_ENV="test").DATABASE_URL)
         try:
