@@ -183,3 +183,46 @@ async def test_unknown_transport_rejected() -> None:
         await service.register_mcp_server(
             name="fake-stdio-transport", transport="grpc"
         )
+
+
+async def test_second_sessionless_service_does_not_see_the_first_registration(
+    tmp_path: Path,
+) -> None:
+    """Two sessionless services hold their own servers, so nothing leaks.
+
+    The in-memory store is owned by one service instance. While it was held in
+    class attributes, the second service saw the first one's server and
+    registering the same name again raised MCPRegistrationError - which is how
+    one test poisoned the next.
+    """
+    command = write_fake_server(
+        tmp_path,
+        [
+            {
+                "name": "isolated_probe",
+                "description": "Probe a private store.",
+                "input_schema": {"type": "object"},
+            }
+        ],
+    )
+    name = "fake-stdio-isolated"
+
+    first = make_service()
+    first_server = await first.register_mcp_server(
+        name=name, transport="stdio", command=command
+    )
+
+    second = make_service()
+    assert await second.get_mcp_server(name) is None
+    assert await second.list_mcp_servers() == []
+
+    # The same name registers again instead of colliding with the first store.
+    second_server = await second.register_mcp_server(
+        name=name, transport="stdio", command=command
+    )
+    assert second_server.id != first_server.id
+
+    # And the first service still holds exactly its own server.
+    still_there = await first.get_mcp_server(name)
+    assert still_there is not None
+    assert still_there.id == first_server.id

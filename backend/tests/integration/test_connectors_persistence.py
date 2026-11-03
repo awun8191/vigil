@@ -114,9 +114,7 @@ async def test_account_and_mcp_server_survive_a_new_session(
             account_id = account.id
 
         # A restart loses the process-local cache. Only the rows can answer now.
-        ConnectorsService._mcp_servers.clear()
-        ConnectorsService._mcp_servers_by_name.clear()
-        ConnectorsService._mcp_tools.clear()
+        ConnectorsService.reset_mcp_cache()
 
         # Second session: read both back with a freshly built service.
         async with session_factory() as second:

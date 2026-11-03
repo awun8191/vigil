@@ -45,19 +45,27 @@ class ConnectorStore(Protocol):
 
 
 class InMemoryConnectorStore:
-    """Process-local store with the semantics the ClassVar dicts used to have."""
+    """Process-local store for accounts and MCP servers, owned by one instance.
 
-    accounts: dict[UUID, ConnectorAccountDTO] = {}
-    servers: dict[UUID, MCPServerDTO] = {}
-    servers_by_name: dict[str, MCPServerDTO] = {}
+    Every store owns its own rows. Nothing is held in class attributes, so a
+    service built without a session cannot read a row that another such service
+    wrote, and one test cannot see the registration another test left behind.
+    That is what lets two sessionless services register the same server name
+    without tripping over each other.
+    """
+
+    def __init__(self) -> None:
+        self.accounts: dict[UUID, ConnectorAccountDTO] = {}
+        self.servers: dict[UUID, MCPServerDTO] = {}
+        self.servers_by_name: dict[str, MCPServerDTO] = {}
 
     async def get_account(self, account_id: UUID) -> ConnectorAccountDTO | None:
-        return InMemoryConnectorStore.accounts.get(account_id)
+        return self.accounts.get(account_id)
 
     async def list_accounts(self, user_id: UUID) -> list[ConnectorAccountDTO]:
         return [
             account
-            for account in InMemoryConnectorStore.accounts.values()
+            for account in self.accounts.values()
             if account.user_id == user_id
         ]
 
@@ -75,7 +83,7 @@ class InMemoryConnectorStore:
             created_at=now,
             updated_at=now,
         )
-        InMemoryConnectorStore.accounts[account.id] = account
+        self.accounts[account.id] = account
         return account
 
     async def update_account_status(
@@ -83,7 +91,7 @@ class InMemoryConnectorStore:
         account_id: UUID,
         status: str,
     ) -> ConnectorAccountDTO | None:
-        account = InMemoryConnectorStore.accounts.get(account_id)
+        account = self.accounts.get(account_id)
         if account is None:
             return None
         updated = ConnectorAccountDTO(
@@ -98,25 +106,25 @@ class InMemoryConnectorStore:
             created_at=account.created_at,
             updated_at=_now(),
         )
-        InMemoryConnectorStore.accounts[account_id] = updated
+        self.accounts[account_id] = updated
         return updated
 
     async def register_server(self, server: MCPServerDTO) -> MCPServerDTO:
-        InMemoryConnectorStore.servers[server.id] = server
-        InMemoryConnectorStore.servers_by_name[server.name] = server
+        self.servers[server.id] = server
+        self.servers_by_name[server.name] = server
         return server
 
     async def get_server(self, name: str) -> MCPServerDTO | None:
-        return InMemoryConnectorStore.servers_by_name.get(name)
+        return self.servers_by_name.get(name)
 
     async def list_servers(self) -> list[MCPServerDTO]:
-        return list(InMemoryConnectorStore.servers.values())
+        return list(self.servers.values())
 
     async def delete_server(self, name: str) -> bool:
-        server = InMemoryConnectorStore.servers_by_name.pop(name, None)
+        server = self.servers_by_name.pop(name, None)
         if server is None:
             return False
-        InMemoryConnectorStore.servers.pop(server.id, None)
+        self.servers.pop(server.id, None)
         return True
 
 

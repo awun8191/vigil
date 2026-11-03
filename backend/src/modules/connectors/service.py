@@ -214,6 +214,18 @@ class ConnectorsService:
         for key in [key for key in cls._mcp_tools if key[0] == server.id]:
             del cls._mcp_tools[key]
 
+    @classmethod
+    def reset_mcp_cache(cls) -> None:
+        """Empty the read-through cache mcp.py reads.
+
+        The cache is process-local, so a test that simulates a restart, or one
+        that needs a clean slate, empties it through this call rather than by
+        poking three class attributes.
+        """
+        cls._mcp_servers.clear()
+        cls._mcp_servers_by_name.clear()
+        cls._mcp_tools.clear()
+
     @staticmethod
     def _builtin_tool_names() -> set[str]:
         """Return built-in tool names from the tool registry, not a fixed list."""
