@@ -41,7 +41,16 @@ def _app_for(monkeypatch: pytest.MonkeyPatch, settings: Settings):
 
 def test_embed_worker_defaults_to_false() -> None:
     """A process that sets nothing must not poll the queue."""
-    assert Settings.model_fields["EMBED_WORKER"].default is False
+    assert Settings().EMBED_WORKER is False
+
+
+@pytest.mark.parametrize("raw,expected", [("false", False), ("true", True)])
+def test_embed_worker_parses_the_value_compose_passes(
+    monkeypatch: pytest.MonkeyPatch, raw: str, expected: bool
+) -> None:
+    """The compose pin is a string, so prove the parser turns it into a bool."""
+    monkeypatch.setenv("EMBED_WORKER", raw)
+    assert Settings().EMBED_WORKER is expected
 
 
 async def test_lifespan_does_not_start_worker_by_default(

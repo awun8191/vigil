@@ -29,6 +29,16 @@ uv run alembic upgrade head
 uv run uvicorn src.main:app --reload
 ```
 
+The API does not poll the job queue by default, so a run you start stays queued
+with no error. Run the worker in a second terminal:
+
+```bash
+env -u PYTHONPATH uv run python -m src.worker
+```
+
+For a single-process local setup, set `EMBED_WORKER=true` in `.env` and skip the
+second terminal. Never do both: two pollers on one queue claim the same work.
+
 The `env -u PYTHONPATH` prefix matters on a host that exports a Hermes or system `PYTHONPATH`. Without it, the interpreter loads a foreign `pydantic_core` and the tests fail at import.
 
 ## Rules for a change

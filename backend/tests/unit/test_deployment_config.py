@@ -40,6 +40,9 @@ def test_docker_compose_validity() -> None:
     api = services["api"]
     assert api.get("ports") == ["8000:8000"]
     assert "postgres" in api.get("depends_on", {})
+    # The API has no Docker socket, so it must never poll the job queue. This
+    # pin is the only thing that stops a second poller in the deployment.
+    assert api.get("environment", {}).get("EMBED_WORKER") == "false"
 
     # 3. Background Worker service
     assert "worker" in services
