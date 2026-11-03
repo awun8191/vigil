@@ -92,7 +92,7 @@ mobile/android/local.properties
 # ------------------------------------------
 # Web: Node.js / Next.js / Frontend
 # ------------------------------------------
-web/node_modules/
+web/node_modules
 web/.next/
 web/dist/
 web/build/
