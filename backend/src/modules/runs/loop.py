@@ -20,6 +20,7 @@ call, so the barrier never blocks a bad history into a provider request.
 from __future__ import annotations
 
 import json
+import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Literal, Protocol, runtime_checkable
@@ -102,6 +103,21 @@ USER_REJECTED_RESULT: dict[str, str] = {
     "message": "The user rejected this proposed action.",
 }
 """The tool result that a rejected approval writes. The model then adapts."""
+
+STREAM_DELTA_BATCH_CHARS = 200
+"""Characters of streamed text that force a ``message_delta`` step.
+
+Every step costs one journal commit and one run row lock, so a step per model
+fragment makes the write path quadratic in the length of the reply. The loop
+buffers the text and writes one step per batch instead.
+"""
+
+STREAM_DELTA_BATCH_SECONDS = 0.25
+"""Seconds a streamed batch may stay open before it is flushed.
+
+The character threshold never fires while the model thinks or answers slowly,
+so a second, time based threshold keeps the live view moving.
+"""
 
 
 class LoopDependencyMissing(RuntimeError):
@@ -794,8 +810,15 @@ class RunLoop:
     ) -> LLMResponseDTO:
         """Stage three through the model's stream, recording deltas as they land.
 
-        Every non-empty content fragment becomes one ``message_delta`` step, so a
-        subscribed client renders the reply while the model is still generating.
+        The streamed text is buffered and written as one ``message_delta`` step
+        per batch, so a subscribed client keeps rendering the reply while the
+        model is still generating without paying one journal commit per
+        fragment. A batch closes when it reaches ``STREAM_DELTA_BATCH_CHARS``
+        characters or ``STREAM_DELTA_BATCH_SECONDS`` seconds, whichever comes
+        first, and the remainder always flushes before the stage ends. The
+        steps carry the concatenated text in ``payload["delta"]``, in order, so
+        the SSE reader still rebuilds the reply exactly.
+
         Tool call fragments accumulate to one complete set and are emitted on
         their own steps only inside the summarised ``thought`` payload (the
         assistant row keeps them as ``tool_calls``). Falls back to a
@@ -813,9 +836,28 @@ class RunLoop:
             )
 
         parts: list[str] = []
+        pending: list[str] = []
+        pending_chars = 0
+        pending_since: float | None = None
+        batch = 0
         tool_calls: list[LLMToolCallDTO] = []
         usage: dict[str, Any] = {}
         finish_reason = "stop"
+
+        async def flush() -> None:
+            """Write the buffered fragments as one delta step."""
+            nonlocal pending, pending_chars, pending_since, batch
+            if not pending:
+                return
+            delta = "".join(pending)
+            pending = []
+            pending_chars = 0
+            pending_since = None
+            batch += 1
+            await self._record_step(
+                run.id, "message_delta", {"delta": delta, "index": batch}
+            )
+
         async for chunk in stream_method(
             model_messages,
             tools=self.tool_schemas,
@@ -824,11 +866,16 @@ class RunLoop:
         ):
             if chunk.delta_content:
                 parts.append(chunk.delta_content)
-                await self._record_step(
-                    run.id,
-                    "message_delta",
-                    {"delta": chunk.delta_content, "index": len(parts)},
-                )
+                pending.append(chunk.delta_content)
+                pending_chars += len(chunk.delta_content)
+                now = time.monotonic()
+                if pending_since is None:
+                    pending_since = now
+                if (
+                    pending_chars >= STREAM_DELTA_BATCH_CHARS
+                    or (now - pending_since) >= STREAM_DELTA_BATCH_SECONDS
+                ):
+                    await flush()
             for fragment in chunk.tool_call_chunks or []:
                 call = LLMToolCallDTO(
                     id=str(fragment.get("id") or f"call_{len(tool_calls) + 1}"),
@@ -841,6 +888,8 @@ class RunLoop:
                 finish_reason = chunk.finish_reason or finish_reason
             if chunk.finish_reason:
                 finish_reason = chunk.finish_reason
+
+        await flush()
 
         content = "".join(parts) or None
         prompt_tokens = int(usage.get("prompt_tokens", 0))
