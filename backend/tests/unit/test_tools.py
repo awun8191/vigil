@@ -684,3 +684,17 @@ async def test_execute_external_sends_an_undeclared_tool_to_the_host(
     assert host.calls == [("default", "third_party_lookup", {"q": "x"})]
     assert result["ok"] is True
     assert result["content"] == "host ran it"
+
+
+async def test_stub_mcp_host_fails_closed() -> None:
+    """The import-failure fallback reports an error, never an invented success."""
+    from src.dependencies import _StubMCPHost
+
+    result = await _StubMCPHost().execute_tool(
+        "default", "echo_ext", {"msg": "hi"}, tool_call_id="call-stub-1"
+    )
+
+    assert result.is_error is True
+    assert result.tool_call_id == "call-stub-1"
+    assert "unavailable" in str(result.output)
+    assert "mock" not in str(result.output)

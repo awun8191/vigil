@@ -426,6 +426,14 @@ def get_sandbox_runner(settings: Settings = Depends(get_settings)) -> SandboxRun
 
 
 class _StubMCPHost:
+    """Fail-closed stand-in for the connector host.
+
+    It is the fallback when the MCP module cannot be imported, which is exactly
+    when the host is broken. A call therefore returns an error: a success here
+    would feed the model an invented ``mock tool output`` and it would treat a
+    tool that never ran as done.
+    """
+
     async def list_tools(self, connector_id: str) -> list[MCPToolDefinitionDTO]:
         return []
 
@@ -438,8 +446,11 @@ class _StubMCPHost:
     ) -> MCPToolResultDTO:
         return MCPToolResultDTO(
             tool_call_id=tool_call_id,
-            output="mock tool output",
-            is_error=False,
+            output=(
+                "MCP host is unavailable: the MCP client failed to import, so "
+                f"tool {tool_name!r} was not run"
+            ),
+            is_error=True,
         )
 
     async def get_tool_approval_policy(
