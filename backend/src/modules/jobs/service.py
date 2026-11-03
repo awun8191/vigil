@@ -312,27 +312,24 @@ class JobsService:
         return True
 
     async def mark_completed(self, job_id: UUID) -> None:
-        """Set job status='completed' and clear the lock and the heartbeat."""
+        """Set job status='completed' and clear the lock and the heartbeat.
+
+        The caller commits. The worker owns the job's transaction and commits the
+        outcome once on every path, so this method must not commit or roll back
+        the unit of work it shares with the job's handler.
+        """
         now = self._now()
 
         if self._is_db_session_active():
-            try:
-                stmt = select(JobModel).where(JobModel.id == job_id)
-                result = await self.session.execute(stmt)
-                job_model = result.scalar_one_or_none()
-                if job_model:
-                    job_model.status = "completed"
-                    job_model.locked_by = None
-                    job_model.locked_at = None
-                    job_model.heartbeat_at = None
-                    job_model.updated_at = now
-                    await self.session.commit()
-                    return
-            except Exception:
-                try:
-                    await self.session.rollback()
-                except Exception:
-                    pass
+            stmt = select(JobModel).where(JobModel.id == job_id)
+            job_model = (await self.session.execute(stmt)).scalar_one_or_none()
+            if job_model:
+                job_model.status = "completed"
+                job_model.locked_by = None
+                job_model.locked_at = None
+                job_model.heartbeat_at = None
+                job_model.updated_at = now
+                return
 
         job = self._jobs.get(job_id)
         if job:
@@ -367,27 +364,19 @@ class JobsService:
         now = self._now()
 
         if self._is_db_session_active():
-            try:
-                stmt = select(JobModel).where(JobModel.id == job_id)
-                result = await self.session.execute(stmt)
-                job_model = result.scalar_one_or_none()
-                if job_model:
-                    is_dead = permanent or job_model.attempts >= job_model.max_attempts
-                    job_model.status = "failed" if is_dead else "pending"
-                    job_model.locked_by = None
-                    job_model.locked_at = None
-                    job_model.heartbeat_at = None
-                    job_model.last_error = error
-                    if not is_dead and retry_delay_seconds:
-                        job_model.run_at = now + timedelta(seconds=retry_delay_seconds)
-                    job_model.updated_at = now
-                    await self.session.commit()
-                    return
-            except Exception:
-                try:
-                    await self.session.rollback()
-                except Exception:
-                    pass
+            stmt = select(JobModel).where(JobModel.id == job_id)
+            job_model = (await self.session.execute(stmt)).scalar_one_or_none()
+            if job_model:
+                is_dead = permanent or job_model.attempts >= job_model.max_attempts
+                job_model.status = "failed" if is_dead else "pending"
+                job_model.locked_by = None
+                job_model.locked_at = None
+                job_model.heartbeat_at = None
+                job_model.last_error = error
+                if not is_dead and retry_delay_seconds:
+                    job_model.run_at = now + timedelta(seconds=retry_delay_seconds)
+                job_model.updated_at = now
+                return
 
         job = self._jobs.get(job_id)
         if job:
