@@ -762,8 +762,10 @@ class InMemoryRunJournal:
 class SqlRunJournal:
     """A journal over the application database session.
 
-    Every write commits, so a killed process loses no completed write. Steps are
-    rows, so a restart keeps the history and the SSE resume point.
+    Every write flushes into the caller's transaction and returns. The boundary
+    that owns the session (a request, a worker job, a test) commits, so one unit
+    of work either lands whole or not at all. Steps are rows, so a restart keeps
+    the history and the SSE resume point.
     """
 
     def __init__(self, session: AsyncSession) -> None:
@@ -908,9 +910,7 @@ class SqlRunJournal:
         )
         self.session.add(model)
         await self.session.flush()
-        dto = self._run_dto(model)
-        await self.session.commit()
-        return dto
+        return self._run_dto(model)
 
     async def update_run(
         self,
@@ -940,9 +940,7 @@ class SqlRunJournal:
         if cost_usd is not None:
             model.cost_micros = int(round(cost_usd * 1_000_000))
         await self.session.flush()
-        dto = self._run_dto(model)
-        await self.session.commit()
-        return dto
+        return self._run_dto(model)
 
     # -- sub-agent tree ---------------------------------------------------
 
@@ -969,9 +967,7 @@ class SqlRunJournal:
             raise KeyError(f"run {run_id} is absent from the journal")
         model.cost_micros = (model.cost_micros or 0) + amount_micros
         await self.session.flush()
-        total = model.cost_micros
-        await self.session.commit()
-        return total
+        return model.cost_micros
 
     async def get_workspace_ref(self, run_id: UUID) -> str | None:
         """Return the workspace ref of one run, or None when it has none."""
@@ -987,7 +983,6 @@ class SqlRunJournal:
             raise KeyError(f"run {run_id} is absent from the journal")
         model.workspace_ref = workspace_ref
         await self.session.flush()
-        await self.session.commit()
 
     # -- messages ---------------------------------------------------------
 
@@ -1047,7 +1042,6 @@ class SqlRunJournal:
                 )
             )
         await self.session.flush()
-        await self.session.commit()
 
     async def append_message(self, data: MessageCreateDTO) -> MessageDTO:
         model = MessageModel(
@@ -1065,9 +1059,7 @@ class SqlRunJournal:
         )
         self.session.add(model)
         await self.session.flush()
-        dto = self._message_dto(model)
-        await self.session.commit()
-        return dto
+        return self._message_dto(model)
 
     # -- steps (durable) ---------------------------------------------------
 
@@ -1100,7 +1092,7 @@ class SqlRunJournal:
             created_at=_utc_now(),
         )
         self.session.add(model)
-        await self.session.commit()
+        await self.session.flush()
         return self._step_dto(model)
 
     # -- configs ----------------------------------------------------------
@@ -1130,9 +1122,7 @@ class SqlRunJournal:
         model.approval_policy = dict(config.approval_policy)
         model.limits = dict(config.limits)
         await self.session.flush()
-        dto = self._config_dto(model)
-        await self.session.commit()
-        return dto
+        return self._config_dto(model)
 
     # -- approvals --------------------------------------------------------
 
@@ -1164,9 +1154,7 @@ class SqlRunJournal:
         )
         self.session.add(model)
         await self.session.flush()
-        dto = self._approval_dto(model)
-        await self.session.commit()
-        return dto
+        return self._approval_dto(model)
 
     async def list_approvals(self, run_id: UUID) -> list[ApprovalDTO]:
         result = await self.session.execute(
@@ -1191,9 +1179,7 @@ class SqlRunJournal:
         model.decided_at = decided_at or _utc_now()
         model.decision_note = note
         await self.session.flush()
-        dto = self._approval_dto(model)
-        await self.session.commit()
-        return dto
+        return self._approval_dto(model)
 
     # -- jobs -------------------------------------------------------------
 
@@ -1219,9 +1205,7 @@ class SqlRunJournal:
         )
         self.session.add(model)
         await self.session.flush()
-        dto = self._job_dto(model)
-        await self.session.commit()
-        return dto
+        return self._job_dto(model)
 
     async def list_jobs(self, run_id: UUID) -> list[JobDTO]:
         result = await self.session.execute(
@@ -1240,6 +1224,4 @@ class SqlRunJournal:
         model.locked_by = None
         model.updated_at = _utc_now()
         await self.session.flush()
-        dto = self._job_dto(model)
-        await self.session.commit()
-        return dto
+        return self._job_dto(model)
