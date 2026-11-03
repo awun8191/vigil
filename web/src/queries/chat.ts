@@ -86,7 +86,7 @@ export function useAgentChat(sessionId: string | null): AgentChat {
   const steps = subscription.steps;
   const run = subscription.run;
 
-  // Live typing text: every message_delta frame is one fragment of the reply.
+  // Live typing text: every message_delta frame is one batch of the reply.
   const streamedText = useMemo(
     () =>
       steps
