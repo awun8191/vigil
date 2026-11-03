@@ -19,7 +19,9 @@ call, so the barrier never blocks a bad history into a provider request.
 """
 from __future__ import annotations
 
+import asyncio
 import json
+import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Literal, Protocol, runtime_checkable
@@ -102,6 +104,23 @@ USER_REJECTED_RESULT: dict[str, str] = {
     "message": "The user rejected this proposed action.",
 }
 """The tool result that a rejected approval writes. The model then adapts."""
+
+STREAM_DELTA_BATCH_CHARS = 200
+"""Characters of streamed text that force a ``message_delta`` step.
+
+Every step costs one journal commit and one run row lock, so a step per model
+fragment makes the write path quadratic in the length of the reply. The loop
+buffers the text and writes one step per batch instead.
+"""
+
+STREAM_DELTA_BATCH_SECONDS = 0.25
+"""Seconds a streamed batch may stay open before it is flushed.
+
+The character threshold never fires while the model thinks or answers slowly,
+so a second, time based threshold keeps the live view moving. The bound is real:
+the consumer waits on the stream queue with this timeout, so a batch is written
+when the window elapses even though no fragment arrived to trigger a check.
+"""
 
 
 class LoopDependencyMissing(RuntimeError):
@@ -794,8 +813,25 @@ class RunLoop:
     ) -> LLMResponseDTO:
         """Stage three through the model's stream, recording deltas as they land.
 
-        Every non-empty content fragment becomes one ``message_delta`` step, so a
-        subscribed client renders the reply while the model is still generating.
+        The streamed text is buffered and written as one ``message_delta`` step
+        per batch, so a subscribed client keeps rendering the reply while the
+        model is still generating without paying one journal commit per
+        fragment. A batch closes when it reaches ``STREAM_DELTA_BATCH_CHARS``
+        characters or ``STREAM_DELTA_BATCH_SECONDS`` seconds, whichever comes
+        first, and the remainder always flushes before the stage ends. The
+        steps carry the concatenated text in ``payload["delta"]``, in order, so
+        the SSE reader still rebuilds the reply exactly.
+
+        A producer task pumps the provider stream into a queue and the consumer
+        waits on that queue with the remaining window as its timeout. The time
+        bound therefore holds while the provider sends nothing: a timeout means
+        the open batch is written, not that the stream stalled. The producer is
+        cancelled and awaited on every exit path, and the remainder is flushed
+        from a ``finally`` block so text that arrived before a provider failure
+        still reaches the journal. ``anext`` is never wrapped in ``wait_for``,
+        because cancelling that call throws into the async generator and closes
+        the stream.
+
         Tool call fragments accumulate to one complete set and are emitted on
         their own steps only inside the summarised ``thought`` payload (the
         assistant row keeps them as ``tool_calls``). Falls back to a
@@ -813,34 +849,105 @@ class RunLoop:
             )
 
         parts: list[str] = []
+        pending: list[str] = []
+        pending_chars = 0
+        pending_since: float | None = None
         tool_calls: list[LLMToolCallDTO] = []
         usage: dict[str, Any] = {}
         finish_reason = "stop"
-        async for chunk in stream_method(
-            model_messages,
-            tools=self.tool_schemas,
-            temperature=0.0,
-            tier="reasoning",
-        ):
-            if chunk.delta_content:
-                parts.append(chunk.delta_content)
-                await self._record_step(
-                    run.id,
-                    "message_delta",
-                    {"delta": chunk.delta_content, "index": len(parts)},
-                )
-            for fragment in chunk.tool_call_chunks or []:
-                call = LLMToolCallDTO(
-                    id=str(fragment.get("id") or f"call_{len(tool_calls) + 1}"),
-                    name=str(fragment.get("name") or ""),
-                    arguments=fragment.get("arguments") or {},
-                )
-                tool_calls.append(call)
-            if chunk.usage:
-                usage = chunk.usage
-                finish_reason = chunk.finish_reason or finish_reason
-            if chunk.finish_reason:
-                finish_reason = chunk.finish_reason
+
+        async def flush() -> None:
+            """Write the buffered fragments as one delta step.
+
+            The helper is idempotent: an empty batch is a no-op, so every exit
+            path may call it without checking.
+            """
+            nonlocal pending, pending_chars, pending_since
+            if not pending:
+                return
+            delta = "".join(pending)
+            pending = []
+            pending_chars = 0
+            pending_since = None
+            await self._record_step(run.id, "message_delta", {"delta": delta})
+
+        def batch_timeout() -> float:
+            """Return the seconds left before the open batch must be flushed."""
+            if pending_since is None:
+                return STREAM_DELTA_BATCH_SECONDS
+            elapsed = time.monotonic() - pending_since
+            return max(0.0, STREAM_DELTA_BATCH_SECONDS - elapsed)
+
+        # The queue decouples the provider read from the flush clock: the
+        # consumer can time out on an idle stream without cancelling the read.
+        queue: asyncio.Queue[Any] = asyncio.Queue()
+        end_of_stream = object()
+
+        async def produce() -> None:
+            """Pump the provider stream into the queue and always signal the end."""
+            try:
+                async for chunk in stream_method(
+                    model_messages,
+                    tools=self.tool_schemas,
+                    temperature=0.0,
+                    tier="reasoning",
+                ):
+                    # The queue is unbounded, so this never blocks and never
+                    # needs cancellation handling of its own.
+                    queue.put_nowait(chunk)
+            finally:
+                queue.put_nowait(end_of_stream)
+
+        producer = asyncio.create_task(produce())
+        try:
+            while True:
+                try:
+                    item = await asyncio.wait_for(
+                        queue.get(), timeout=batch_timeout()
+                    )
+                except TimeoutError:
+                    # No fragment arrived inside the window, so the open batch
+                    # closes on time. A timeout on an empty batch is a no-op.
+                    await flush()
+                    continue
+                if item is end_of_stream:
+                    break
+                chunk = item
+                if chunk.delta_content:
+                    parts.append(chunk.delta_content)
+                    pending.append(chunk.delta_content)
+                    pending_chars += len(chunk.delta_content)
+                    if pending_since is None:
+                        pending_since = time.monotonic()
+                    if pending_chars >= STREAM_DELTA_BATCH_CHARS:
+                        await flush()
+                for fragment in chunk.tool_call_chunks or []:
+                    call = LLMToolCallDTO(
+                        id=str(fragment.get("id") or f"call_{len(tool_calls) + 1}"),
+                        name=str(fragment.get("name") or ""),
+                        arguments=fragment.get("arguments") or {},
+                    )
+                    tool_calls.append(call)
+                if chunk.usage:
+                    usage = chunk.usage
+                    finish_reason = chunk.finish_reason or finish_reason
+                if chunk.finish_reason:
+                    finish_reason = chunk.finish_reason
+        finally:
+            # Every exit path stops the producer: normal end, provider failure
+            # and outer cancellation all leave the task cancelled and awaited.
+            producer.cancel()
+            producer_error: BaseException | None = None
+            try:
+                await producer
+            except asyncio.CancelledError:
+                pass
+            except BaseException as exc:  # noqa: BLE001 - re-raised after the flush
+                producer_error = exc
+            # The text produced before the failure is still the reply prefix.
+            await flush()
+            if producer_error is not None:
+                raise producer_error
 
         content = "".join(parts) or None
         prompt_tokens = int(usage.get("prompt_tokens", 0))
@@ -967,12 +1074,16 @@ class RunLoop:
     async def _record_step(
         self, run_id: UUID, event_type: str, payload: dict[str, Any]
     ) -> None:
-        """Append one step event to the journal."""
-        steps = await self.journal.list_steps(run_id)
+        """Append one step event to the journal.
+
+        The step number is left to the journal. ``append_step`` reads the
+        highest number of the run under its own row lock, so the loop does not
+        load every step row of the run only to count them.
+        """
         await self.journal.append_step(
             RunStepCreateDTO(
                 run_id=run_id,
-                step_number=len(steps) + 1,
+                step_number=0,
                 event_type=event_type,
                 payload=payload,
             )

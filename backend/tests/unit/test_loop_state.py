@@ -18,7 +18,12 @@ from src.modules.runs.loop import (
     RunLoop,
     estimate_tokens,
 )
-from src.modules.runs.repository import MessageCreateDTO, RunCreateDTO, RunDTO
+from src.modules.runs.repository import (
+    MessageCreateDTO,
+    RunCreateDTO,
+    RunDTO,
+    RunStepCreateDTO,
+)
 from src.modules.runs.service import RunsService
 from src.config.exceptions import ValidationError
 from src.modules.runs.state import (
@@ -409,3 +414,36 @@ def test_token_estimate_grows_with_the_history() -> None:
         created_at=datetime.now(timezone.utc),
     )
     assert estimate_tokens([message]) >= 100
+
+
+@pytest.mark.asyncio
+async def test_in_memory_steps_allocate_above_a_sparse_history() -> None:
+    """A gap in the stored numbers must not hand out a decreasing one.
+
+    Steps 1 and 5 exist, so the next free number is 6. Counting the rows would
+    answer 3, and the step stream drops a number below its cursor.
+    """
+    journal = InMemoryRunJournal()
+    run = await journal.create_run(RunCreateDTO(config_id=uuid4()))
+    for number in (1, 5):
+        await journal.append_step(
+            RunStepCreateDTO(
+                run_id=run.id,
+                step_number=number,
+                event_type="thought",
+                payload={"note": f"step {number}"},
+            )
+        )
+
+    allocated = await journal.append_step(
+        RunStepCreateDTO(
+            run_id=run.id,
+            step_number=0,
+            event_type="thought",
+            payload={"note": "allocated"},
+        )
+    )
+
+    assert allocated.step_number == 6
+    numbers = [step.step_number for step in await journal.list_steps(run.id)]
+    assert numbers == [1, 5, 6]
