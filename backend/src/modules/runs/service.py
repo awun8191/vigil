@@ -631,7 +631,7 @@ class RunsService:
         await self.journal.append_step(
             RunStepCreateDTO(
                 run_id=run_id,
-                step_number=len(await self.journal.list_steps(run_id)) + 1,
+                step_number=0,
                 event_type="run_failed",
                 payload={"reason": "cancelled"},
             )
@@ -679,7 +679,7 @@ class RunsService:
         await self.journal.append_step(
             RunStepCreateDTO(
                 run_id=run_id,
-                step_number=len(await self.journal.list_steps(run_id)) + 1,
+                step_number=0,
                 event_type="run_failed",
                 payload={
                     "error": type(error).__name__,

@@ -90,7 +90,13 @@ class RunStepDTO:
 
 @dataclass(frozen=True)
 class RunStepCreateDTO:
-    """Payload for recording a step event."""
+    """Payload for recording a step event.
+
+    ``step_number`` is the number to store, or ``0`` for the sentinel that means
+    "let the journal allocate": the stored number is then one above the highest
+    number the run already has. A caller that passes a positive number keeps it
+    unless the journal has already gone past it.
+    """
     run_id: UUID
     step_number: int
     event_type: str
