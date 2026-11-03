@@ -1,15 +1,14 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/lib/api';
 import { userMessageOf } from '@/lib/errors';
 import { releaseIdempotencyKey } from '@/lib/idempotency';
-import type { ChatMessage, ChatSession, StreamState } from '@/types';
+import type { ChatSession, Run, RunStepEvent, StreamMessage, StreamState } from '@/types';
+import { runKey, useCancelRun, useDefaultAgentConfig, useRun } from './runs';
 
 export const SESSIONS_KEY = ['chat', 'sessions'] as const;
 export const messagesKey = (sessionId: string) =>
   ['chat', 'sessions', sessionId, 'messages'] as const;
-
-const DONE_SENTINEL = '[DONE]';
 
 export function useSessions() {
   return useQuery<ChatSession[]>({
@@ -32,7 +31,7 @@ export function useCreateSession() {
 }
 
 export function useMessages(sessionId: string | null) {
-  return useQuery<ChatMessage[]>({
+  return useQuery<StreamMessage[]>({
     queryKey: messagesKey(sessionId ?? 'none'),
     queryFn: () => api.listMessages(sessionId as string),
     enabled: Boolean(sessionId),
@@ -40,11 +39,26 @@ export function useMessages(sessionId: string | null) {
   });
 }
 
-export interface ChatStream {
+/* -------------------------------------------------------------------------------------------
+   The chat transport. A sent message IS one agent run: the message posts to POST /runs against
+   the server's default agent config, ThinkingCapsule renders the run's step events, and the
+   reply arrives in the run_completed frame payload (`{"content": ...}`,
+   backend/src/modules/runs/loop.py). Stop posts POST /runs/{id}/cancel. History persists
+   server-side: run messages carry the thread, GET /chat/sessions/{id}/messages returns the
+   user prompts and assistant replies of the whole conversation.
+   ------------------------------------------------------------------------------------------- */
+
+export interface AgentChat {
+  /** True while the head run is queued, running, awaiting approval or a background job. */
   streaming: boolean;
+  /** Always empty: the agent reply arrives as a completed run, not token frames. */
   streamedText: string;
   connection: StreamState;
   error: string | null;
+  /** Step events of the active run, oldest first, fed straight to the ThinkingCapsule. */
+  steps: RunStepEvent[];
+  /** True when the run parked on an approval, the Approvals page holds the decision. */
+  awaitingApproval: boolean;
   lastPrompt: string | null;
   send: (prompt: string) => void;
   retry: () => void;
@@ -52,144 +66,235 @@ export interface ChatStream {
 }
 
 /**
- * Owns the assistant reply stream for one session.
- *
- * The backend's stream carries the prompt itself (`?q=`), so the client must not also POST the
- * same text to `/messages`: that would process the turn twice. Sending therefore means appending
- * the user message locally, then opening the stream.
- *
- * The stream emits bare `data: <token>` frames and terminates with `data: [DONE]`. It does not
- * emit event ids, so `Last-Event-ID` resume is inert until the backend adds them; reconnects
- * still work through the backoff in `lib/sse.ts`.
+ * One chat turn = one run. Each send has its own prompt and its own run; multi-turn context
+ * replays like the CLI harness performs are a backend feature, not yet over HTTP, so every
+ * turn stands alone.
  */
-export function useChatStream(sessionId: string | null): ChatStream {
+export function useAgentChat(sessionId: string | null): AgentChat {
   const queryClient = useQueryClient();
+  const defaultConfig = useDefaultAgentConfig();
+  const cancelRunMutation = useCancelRun();
 
-  const [streaming, setStreaming] = useState(false);
-  const [streamedText, setStreamedText] = useState('');
-  const [connection, setConnection] = useState<StreamState>('idle');
+  const [activeRunId, setActiveRunId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [lastPrompt, setLastPrompt] = useState<string | null>(null);
+  const [finalisedRunId, setFinalisedRunId] = useState<string | null>(null);
+  const optimisticIdRef = useRef<string | null>(null);
+  const sessionIdRef = useRef<string | null>(sessionId);
 
-  const closeRef = useRef<(() => void) | null>(null);
-  const textRef = useRef('');
-  const promptRef = useRef<string | null>(null);
-  const sessionRef = useRef<string | null>(sessionId);
+  const subscription = useRun(activeRunId);
+  const steps = subscription.steps;
+  const run = subscription.run;
 
-  const teardown = useCallback(() => {
-    closeRef.current?.();
-    closeRef.current = null;
-  }, []);
+  // Live typing text: every message_delta frame is one fragment of the reply.
+  const streamedText = useMemo(
+    () =>
+      steps
+        .filter((s) => s.event_type === 'message_delta')
+        .map((s) => (typeof s.payload['delta'] === 'string' ? (s.payload['delta'] as string) : ''))
+        .join(''),
+    [steps],
+  );
 
-  const finalise = useCallback(() => {
-    teardown();
-    const text = textRef.current;
-    textRef.current = '';
-    setStreaming(false);
-    setStreamedText('');
+  // Rehydrate after a reload: the newest session run may still be live. One attempt per
+  // session; terminal runs stay for history instead of a re-subscription.
+  const rehydratedRef = useRef<string | null>(null);
+  useEffect(() => {
+    const target = sessionId;
+    if (!target || rehydratedRef.current === target) return undefined;
+    rehydratedRef.current = target;
+    let cancelled = false;
+    void api
+      .getLatestRun(target)
+      .then((run) => {
+        if (cancelled || !run) return;
+        const isTerminal = run.status === 'completed' || run.status === 'failed';
+        if (isTerminal) return;
+        setActiveRunId(run.id);
+        queryClient.setQueryData(runKey(run.id), run);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [sessionId, queryClient]);
 
-    if (!text) return;
-    const activeSession = sessionRef.current;
-    if (!activeSession) return;
+  const streaming =
+    activeRunId !== null &&
+    run !== null &&
+    !['completed', 'failed'].includes(run.status);
+  const awaitingApproval = run?.status === 'awaiting_approval';
 
-    // The stream is not guaranteed to persist the reply, so keep the assembled text locally and
-    // refresh the session list (not the message list, which would drop the local copy).
-    const localReply: ChatMessage = {
-      id: `local-${Date.now()}`,
-      session_id: activeSession,
-      role: 'assistant',
-      content: text,
-      created_at: new Date().toISOString(),
+  // Swallow a stale reader's writes into a different session.
+  useEffect(() => {
+    if (sessionIdRef.current !== sessionId) {
+      sessionIdRef.current = sessionId;
+      setActiveRunId(null);
+      setFinalisedRunId(null);
+      setError(null);
+      setLastPrompt(null);
+    }
+  }, [sessionId]);
+
+  const clearOptimisticFlag = useCallback(
+    (id: string) => {
+      const target = sessionIdRef.current;
+      if (!target) return;
+      queryClient.setQueryData<StreamMessage[]>(messagesKey(target), (current) =>
+        current ? current.map((m) => (m.id === id ? { ...m, local_state: undefined } : m)) : current,
+      );
+    },
+    [queryClient],
+  );
+
+  // The reply lands here: the run_completed frame payload carries the final text directly
+  // (loop.py `{"content": final}`), falling back to the last thought text. A failed or
+  // cancelled run marks the optimistic user message instead of inventing a reply.
+  useEffect(() => {
+    if (!activeRunId || finalisedRunId === activeRunId) return;
+    const terminal = [...steps]
+      .reverse()
+      .find((s) => s.event_type === 'run_completed' || s.event_type === 'run_failed');
+    if (!run || !terminal || !['completed', 'failed'].includes(run.status)) return;
+
+    setFinalisedRunId(activeRunId);
+    const target = sessionIdRef.current;
+    const optimisticId = optimisticIdRef.current;
+
+    const appendAnswer = (patch: Partial<StreamMessage>) => {
+      if (!target) return;
+      const answer: StreamMessage = {
+        id: `local-run-${activeRunId}`,
+        session_id: target,
+        role: 'assistant',
+        content: '',
+        created_at: new Date().toISOString(),
+        ...patch,
+      };
+      if (!answer.content && !answer.local_state) return;
+      queryClient.setQueryData<StreamMessage[]>(messagesKey(target), (current) =>
+        current ? [...current, answer] : [answer],
+      );
     };
 
-    queryClient.setQueryData<ChatMessage[]>(messagesKey(activeSession), (current) =>
-      current ? [...current, localReply] : [localReply],
-    );
-    void queryClient.invalidateQueries({ queryKey: SESSIONS_KEY });
-  }, [queryClient, teardown]);
-
-  const begin = useCallback(
-    (prompt: string) => {
-      if (!sessionId) return;
-
-      teardown();
-      textRef.current = '';
-      promptRef.current = prompt;
-      setStreamedText('');
-      setError(null);
-      setStreaming(true);
-      setLastPrompt(prompt);
-
-      closeRef.current = api.openStream(sessionId, prompt, {
-        onEvent(event) {
-          if (event.data === DONE_SENTINEL) {
-            finalise();
-            return;
-          }
-          textRef.current += event.data;
-          setStreamedText(textRef.current);
-        },
-        onStateChange(state) {
-          setConnection(state);
-          if (state === 'closed' && textRef.current.length === 0) {
-            setStreaming(false);
-          }
-        },
-      });
-    },
-    [sessionId, teardown, finalise],
-  );
+    if (run.status === 'completed') {
+      const finalContent =
+        typeof terminal.payload['content'] === 'string' && terminal.payload['content'].length > 0
+          ? (terminal.payload['content'] as string)
+          : (([...steps]
+              .reverse()
+              .find(
+                (s) =>
+                  s.event_type === 'thought' &&
+                  typeof s.payload['content'] === 'string' &&
+                  s.payload['content'].length > 0,
+              )?.payload['content'] as string | undefined) ?? '');
+      if (optimisticId) clearOptimisticFlag(optimisticId);
+      appendAnswer({ content: finalContent || 'The run finished without producing a reply.' });
+    } else {
+      const reason =
+        typeof terminal.payload['reason'] === 'string' ? (terminal.payload['reason'] as string) : 'The run failed.';
+      if (reason === 'cancelled') {
+        // Stopped on purpose: no reply, no failure notice.
+        if (optimisticId) clearOptimisticFlag(optimisticId);
+      } else if (optimisticId && target) {
+        queryClient.setQueryData<StreamMessage[]>(messagesKey(target), (current) =>
+          current
+            ? current.map((m) =>
+                m.id === optimisticId
+                  ? { ...m, local_state: 'failed', failure_class: 'network', failure_reason: reason }
+                  : m,
+              )
+            : current,
+        );
+      }
+    }
+    optimisticIdRef.current = null;
+  }, [activeRunId, finalisedRunId, steps, run, queryClient, clearOptimisticFlag]);
 
   const send = useCallback(
     (prompt: string) => {
       const trimmed = prompt.trim();
-      if (!trimmed || !sessionId) return;
+      const target = sessionIdRef.current;
+      if (!trimmed || !target) return;
 
-      queryClient.setQueryData<ChatMessage[]>(messagesKey(sessionId), (current) => {
-        const optimistic: ChatMessage = {
-          id: `local-user-${Date.now()}`,
-          session_id: sessionId,
+      const configId = defaultConfig.data?.id;
+      if (!configId) {
+        setError('The agent configuration is not ready yet. Try again in a moment.');
+        return;
+      }
+
+      const localId = `local-user-${Date.now()}`;
+      optimisticIdRef.current = localId;
+      setLastPrompt(trimmed);
+      setError(null);
+      queryClient.setQueryData<StreamMessage[]>(messagesKey(target), (current) => {
+        const optimistic: StreamMessage = {
+          id: localId,
+          session_id: target,
           role: 'user',
           content: trimmed,
           created_at: new Date().toISOString(),
+          local_state: 'sending',
         };
         return current ? [...current, optimistic] : [optimistic];
       });
 
-      begin(trimmed);
+      void api
+        .createRun(
+          {
+            config_id: configId,
+            session_id: target,
+            initial_prompt: trimmed,
+          },
+          `chat:send:${target}:${Date.now()}`,
+        )
+        .then((run: Run) => {
+          setActiveRunId(run.id);
+          queryClient.setQueryData(runKey(run.id), run);
+          if (optimisticIdRef.current) {
+            clearOptimisticFlag(optimisticIdRef.current);
+          }
+        })
+        .catch((cause: unknown) => {
+          optimisticIdRef.current = null;
+          if (target) {
+            const reason = userMessageOf(cause);
+            queryClient.setQueryData<StreamMessage[]>(messagesKey(target), (current) =>
+              current
+                ? current.map((m) =>
+                    m.id === localId
+                      ? { ...m, local_state: 'failed', failure_class: 'network', failure_reason: reason }
+                      : m,
+                  )
+                : current,
+            );
+          }
+          setError(userMessageOf(cause));
+        });
     },
-    [begin, queryClient, sessionId],
+    [defaultConfig.data, queryClient, clearOptimisticFlag],
   );
 
-  const retry = useCallback(() => {
-    const prompt = promptRef.current;
-    if (!prompt) return;
-    begin(prompt);
-  }, [begin]);
-
   const stop = useCallback(() => {
-    try {
-      finalise();
-    } catch (cause) {
-      setError(userMessageOf(cause));
-    }
-  }, [finalise]);
+    if (!activeRunId) return;
+    cancelRunMutation.mutate({ runId: activeRunId, scope: `run:cancel:${activeRunId}` });
+  }, [activeRunId, cancelRunMutation]);
 
-  // A stale reader must never write into a different session.
-  useEffect(() => {
-    if (sessionRef.current !== sessionId) {
-      teardown();
-      textRef.current = '';
-      promptRef.current = null;
-      setStreaming(false);
-      setStreamedText('');
-      setError(null);
-      setLastPrompt(null);
-      sessionRef.current = sessionId;
-    }
-  }, [sessionId, teardown]);
+  const retry = useCallback(() => {
+    if (lastPrompt) send(lastPrompt);
+  }, [lastPrompt, send]);
 
-  useEffect(() => teardown, [teardown]);
-
-  return { streaming, streamedText, connection, error, lastPrompt, send, retry, stop };
+  return {
+    streaming,
+    streamedText,
+    connection: subscription.connection,
+    error,
+    steps,
+    awaitingApproval,
+    lastPrompt,
+    send,
+    retry,
+    stop,
+  };
 }

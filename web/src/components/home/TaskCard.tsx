@@ -1,11 +1,13 @@
+import { useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { ArrowUpRight, Check } from 'lucide-react';
+import { ArrowUpRight, Check, Loader2, Square } from 'lucide-react';
 import { motion, useReducedMotion } from 'framer-motion';
 import { useNavigate } from 'react-router-dom';
 import { api } from '@/lib/api';
 import { userMessageOf } from '@/lib/errors';
 import { relativeTime } from '@/lib/format';
 import { releaseIdempotencyKey } from '@/lib/idempotency';
+import { runKey, stepLabel, useCancelRun, useDefaultAgentConfig, useRun } from '@/queries/runs';
 import { CARDS_KEY, useDismissCard } from '@/queries/cards';
 import NotificationCard from '@/components/ui/NotificationCard';
 import { SourceAvatar, sourceFor } from '@/components/ui/SourceAvatar';
@@ -34,18 +36,57 @@ export function TaskCard({ card, index, onError }: Props) {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const dismissCard = useDismissCard();
+  const cancelRun = useCancelRun();
+  const defaultConfig = useDefaultAgentConfig();
   const reduced = useReducedMotion();
+
+  /** Set when a card-run action POSTs successfully; drives the inline progress strip. */
+  const [runId, setRunId] = useState<string | null>(null);
+  const subscription = useRun(runId);
 
   const source = sourceFor(card.type);
   const due = relativeTime(card.due_at);
 
   const runAction = useMutation({
-    mutationFn: ({ action, scope }: { action: CardAction; scope: string }) =>
-      api.createRun(action.payload, card.id, scope),
-    onSuccess: () => {
+    mutationFn: ({
+      action,
+      cardId,
+      scope,
+    }: {
+      action: CardAction;
+      cardId: string;
+      scope: string;
+    }) => {
+      // POST /runs requires config_id. Card actions carry their own config when the backend
+      // attaches one; otherwise the pinned server-side default config runs the card.
+      const payloadConfigId =
+        typeof action.payload['config_id'] === 'string' ? action.payload['config_id'] : null;
+      const configId = payloadConfigId ?? defaultConfig.data?.id;
+      const prompt = typeof action.payload['initial_prompt'] === 'string' ? action.payload['initial_prompt'] : null;
+      if (!configId) {
+        return Promise.reject(
+          new Error('The agent configuration is not ready yet. Try again in a moment.'),
+        );
+      }
+      return api.createRun(
+        {
+          config_id: configId,
+          card_id: cardId,
+          initial_prompt: prompt,
+        },
+        scope,
+      );
+    },
+
+    onSuccess: (run) => {
+      // The run id is the hook into the events stream, keep it, never drop it.
+      setRunId(run.id);
+      queryClient.setQueryData(runKey(run.id), run);
       void queryClient.invalidateQueries({ queryKey: CARDS_KEY });
     },
+
     onError: (error) => onError(userMessageOf(error)),
+
     onSettled: (_data, _error, variables) => releaseIdempotencyKey(variables.scope),
   });
 
@@ -56,7 +97,7 @@ export function TaskCard({ card, index, onError }: Props) {
 
     switch (action.action_type) {
       case 'run':
-        runAction.mutate({ action, scope });
+        runAction.mutate({ action, cardId: card.id, scope });
         break;
       case 'dismiss':
         dismissCard.mutate({ cardId: card.id, scope });
@@ -72,7 +113,8 @@ export function TaskCard({ card, index, onError }: Props) {
   };
 
   const isKnown = (action: CardAction) =>
-    action.action_type === 'run' ||
+    (action.action_type === 'run' &&
+      (typeof action.payload['config_id'] === 'string' || defaultConfig.data !== undefined)) ||
     action.action_type === 'dismiss' ||
     action.action_type === 'reply';
 
@@ -80,6 +122,7 @@ export function TaskCard({ card, index, onError }: Props) {
   const isBlocking = card.status === 'awaiting_approval';
 
   const statusLabel = isBlocking ? 'Waiting on you' : card.due_at ? 'Gentle reminder' : 'For the record';
+  const finished = subscription.run ? ['completed', 'failed'].includes(subscription.run.status) : false;
 
   return (
     <motion.div
@@ -110,6 +153,43 @@ export function TaskCard({ card, index, onError }: Props) {
       >
         {card.summary ? (
           <p className="text-[14px] leading-relaxed text-[var(--text-muted)]">{card.summary}</p>
+        ) : null}
+
+        {runId && !finished ? (
+          <div className="mt-4 rounded-[8px] border border-[var(--border)] px-3 py-2.5">
+            <div className="flex items-center gap-2 text-[13px] font-medium">
+              <Loader2 size={14} className="animate-spin text-[var(--text-muted)]" strokeWidth={1.75} />
+              <span className="text-[var(--text-muted)]">
+                {subscription.run?.status === 'queued' ? 'Starting' : 'Running'}
+              </span>
+              <button
+                type="button"
+                onClick={() => cancelRun.mutate({ runId, scope: `run:cancel:${runId}` })}
+                disabled={cancelRun.isPending}
+                className="ml-auto inline-flex items-center gap-1 text-[12px] text-[var(--text-muted)] transition-colors hover:text-[var(--text)]"
+              >
+                <Square size={11} strokeWidth={1.75} />
+                Stop
+              </button>
+            </div>
+
+            {subscription.steps.length > 0 ? (
+              <ul className="mt-2 space-y-1.5">
+                {subscription.steps.slice(-3).map((step) => (
+                  <li key={step.step_number} className="flex items-center gap-2 text-[13px] text-[var(--text-muted)]">
+                    <span className="h-1.5 w-1.5 rounded-full bg-[color-mix(in_srgb,var(--text)_25%,transparent)]" />
+                    {stepLabel(step)}
+                  </li>
+                ))}
+              </ul>
+            ) : null}
+          </div>
+        ) : null}
+
+        {runId && finished && subscription.run ? (
+          <p className="mt-4 text-[13px] text-[var(--text-muted)]">
+            {subscription.run.status === 'completed' ? 'Ran to completion.' : 'That run failed.'}
+          </p>
         ) : null}
 
         <div className="mt-4 flex flex-wrap items-center gap-2.5">

@@ -407,6 +407,12 @@ class SandboxRunner:
         self.settings = settings if settings is not None else get_settings()
         self.docker = docker_binary or os.environ.get("DOCKER_BINARY") or "docker"
         base = Path(workspace_base if workspace_base is not None else self.settings.WORKSPACE_BASE_PATH)
+        if workspace_base is None:
+            try:
+                base.mkdir(parents=True, exist_ok=True)
+            except OSError:
+                base = Path("/tmp/vigil/workspaces")
+                base.mkdir(parents=True, exist_ok=True)
         self.workspace_base = base
         self.artifact_dir = Path(artifact_dir) if artifact_dir is not None else base / "artifacts"
         self.allowed_images = resolve_image_allowlist(self.settings)

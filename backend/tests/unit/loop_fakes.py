@@ -75,11 +75,27 @@ class ScriptedModel:
     ):
         """Yield one chunk per scripted response. The loop does not stream."""
         response = await self.complete(messages, tools, temperature, tier, max_tokens)
+        if response.content:
+            yield LLMStreamChunkDTO(
+                delta_content=response.content, tool_call_chunks=None, done=False, finish_reason=None, usage=None
+            )
+        for call in response.tool_calls:
+            yield LLMStreamChunkDTO(
+                delta_content="",
+                tool_call_chunks=[call.model_dump()],
+                done=False,
+                finish_reason=None,
+                usage=None,
+            )
         yield LLMStreamChunkDTO(
-            delta_content=response.content,
+            delta_content="",
             tool_call_chunks=None,
             done=True,
             finish_reason=response.finish_reason,
+            usage={
+                "prompt_tokens": response.prompt_tokens,
+                "completion_tokens": response.completion_tokens,
+            },
         )
 
     async def embed_texts(

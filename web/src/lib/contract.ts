@@ -1,4 +1,5 @@
 import type {
+  AgentConfigResponse,
   Approval,
   ApprovalDecisionRequest,
   ApprovalDecisionResponse,
@@ -10,13 +11,23 @@ import type {
   ChatSession,
   ConnectorAccount,
   HealthStatus,
+  MCPDiscoveryResponse,
+  MCPServerResponse,
   PairingResponse,
+  RegisterMCPServerRequest,
   Run,
+  RunCancelResponse,
+  RunCreateRequest,
+  RunMessageResponse,
+  RunStep,
   SseEvent,
+  SkillInstallRequest,
+  SkillResponse,
   StreamState,
   SyncTrigger,
   SystemLimits,
   UserSettings,
+  UserSettingsUpdateRequest,
 } from '@/types';
 
 export interface StreamHandlers {
@@ -41,11 +52,30 @@ export interface VigilApi {
   cardFeedback(cardId: string, body: CardFeedbackRequest, scope: string): Promise<Card>;
 
   /**
-   * Card actions with `action_type: 'run'` post here. The payload is whatever the server attached
-   * to the action, merged with the card id. The client never invents a `config_id`: if the payload
-   * lacks one the backend rejects it and the UI surfaces that message.
+   * Card actions with `action_type: 'run'` post here. The body is a full `RunCreateRequest`:
+   * the backend requires `config_id` and rejects the request without it, and no backend
+   * entity synthesizes `run` actions that carry one, so callers must guard on the payload
+   * before dispatching.
    */
-  createRun(payload: Record<string, unknown>, cardId: string, scope: string): Promise<Run>;
+  createRun(body: RunCreateRequest, scope: string): Promise<Run>;
+  getRun(runId: string): Promise<Run>;
+  /** Newest run whose messages carry the session, for re-subscription after a reload. */
+  getLatestRun(sessionId: string): Promise<Run | null>;
+  getRunSteps(runId: string, sinceStep?: number): Promise<RunStep[]>;
+  getRunMessages(runId: string): Promise<RunMessageResponse[]>;
+  /** Resolves the pinned server-side default agent config, creating it on the first call. */
+  getDefaultAgentConfig(): Promise<AgentConfigResponse>;
+  cancelRun(runId: string, scope: string): Promise<RunCancelResponse>;
+
+  /**
+   * Subscribe to `GET /runs/{id}/events`. Frames carry `id: <step_number>`,
+   * `event: <event_type>` and a JSON data payload (`RunStepEvent`), and the stream closes
+   * after the run completes or fails. Returns an unsubscribe function.
+   */
+  openRunStream(
+    runId: string,
+    options: { sinceStep?: number; handlers: StreamHandlers },
+  ): () => void;
 
   listApprovals(): Promise<Approval[]>;
   getApproval(approvalId: string): Promise<Approval>;
@@ -60,18 +90,23 @@ export interface VigilApi {
   listMessages(sessionId: string): Promise<ChatMessage[]>;
   sendMessage(sessionId: string, content: string, scope: string): Promise<ChatMessage>;
 
-  /**
-   * Subscribe to the session stream. Returns an unsubscribe function.
-   *
-   * The backend stream is `GET /chat/sessions/{id}/stream?q=<prompt>` and emits bare
-   * `data: <token>` frames terminated by `data: [DONE]`. The prompt travels in the query string,
-   * not in a preceding POST.
-   */
-  openStream(sessionId: string, prompt: string, handlers: StreamHandlers): () => void;
-
   health(): Promise<HealthStatus>;
   getSettings(): Promise<UserSettings>;
+  updateSettings(body: UserSettingsUpdateRequest, scope: string): Promise<UserSettings>;
   getLimits(): Promise<SystemLimits>;
   listConnectors(): Promise<ConnectorAccount[]>;
   syncConnector(accountId: string, scope: string): Promise<SyncTrigger>;
+
+  /* Skills. Mirrors the backend verbs: install and enable/disable are POST routes that take
+     no toggle body, so the caller passes the desired state and the hook picks the route. */
+  listSkills(): Promise<SkillResponse[]>;
+  installSkill(body: SkillInstallRequest, scope: string): Promise<SkillResponse>;
+  enableSkill(skillId: string, scope: string): Promise<SkillResponse>;
+  disableSkill(skillId: string, scope: string): Promise<SkillResponse>;
+
+  /* MCP servers. Registration returns 202 with a discovery job id; unregistration is DELETE
+     by name and returns 204. */
+  listMCPServers(): Promise<MCPServerResponse[]>;
+  registerMCPServer(body: RegisterMCPServerRequest, scope: string): Promise<MCPDiscoveryResponse>;
+  unregisterMCPServer(name: string, scope: string): Promise<void>;
 }

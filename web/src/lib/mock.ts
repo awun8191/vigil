@@ -1,4 +1,5 @@
 import type {
+  AgentConfigResponse,
   Approval,
   Card,
   CardListResponse,
@@ -6,10 +7,19 @@ import type {
   ChatSession,
   ConnectorAccount,
   HealthStatus,
+  MCPDiscoveryResponse,
+  MCPServerResponse,
   PairingResponse,
+  Run,
+  RunCancelResponse,
+  RunCreateRequest,
+  RunMessageResponse,
+  RunStep,
+  SkillResponse,
   SyncTrigger,
   SystemLimits,
   UserSettings,
+  UserSettingsUpdateRequest,
 } from '@/types';
 import type { VigilApi } from './contract';
 
@@ -40,7 +50,9 @@ let cards: Card[] = [
     due_at: iso(126),
     status: 'awaiting_approval',
     actions: [
-      { id: 'review', label: 'Review and send', action_type: 'run', payload: {} },
+      // `run` actions reach POST /runs, which requires a config_id in the payload. The mock
+      // carries one so the guarded button is exercisable in simulation.
+      { id: 'review', label: 'Review and send', action_type: 'run', payload: { config_id: 'cfg-1', initial_prompt: 'Send the drafted reply to Sarah' } },
       { id: 'dismiss', label: 'Dismiss', action_type: 'dismiss', payload: {} },
     ],
     feedback: null,
@@ -207,8 +219,127 @@ const limits: SystemLimits = {
   docker_memory_limit: '1024m',
 };
 
+let settings = userSettings;
+
+const skills: SkillResponse[] = [
+  {
+    id: 'skl-1',
+    name: 'Expense reconciliation',
+    description: 'Matches receipts against statements and drafts a monthly reconciliation summary.',
+    version: '1.4.0',
+    source: 'builtin',
+    commit: null,
+    enabled: true,
+    storage_path: '/skills/builtin/expense-reconciliation',
+    created_at: iso(-43_200),
+    updated_at: iso(-10_080),
+  },
+  {
+    id: 'skl-2',
+    name: 'Linear triage',
+    description: 'Reads issue streams and drafts assignments, priorities and labels.',
+    version: '2.0.1',
+    source: 'git',
+    commit: '1f4b9c7d0a2e',
+    enabled: false,
+    storage_path: '/skills/git/linear-triage',
+    created_at: iso(-10_080),
+    updated_at: iso(-4_320),
+  },
+];
+
+let mcpServers: MCPServerResponse[] = [
+  {
+    id: 'mcp-1',
+    name: 'atlassian',
+    transport: 'sse',
+    command: null,
+    url: 'https://mcp.atlassian.com/v1/sse',
+    enabled: true,
+    created_at: iso(-5_760),
+  },
+];
+
 const replyDraft =
   'Both connectors are quiet right now. The draft reply to Sarah is still the only thing actually waiting on you, everything else is informational.';
+
+/* Mock run state. createRun seeds one run and openRunStream replays a fixed step script
+   against it, so the run surface is exercisable in simulation mode. */
+
+interface MockRun {
+  run: Run;
+  cancelled: boolean;
+  prompt: string | null;
+  sessionId: string | null;
+  createdAt: string;
+}
+
+let runs = new Map<string, MockRun>();
+let runCounter = 0;
+
+const defaultAgentTools = [
+  'read',
+  'write',
+  'edit',
+  'bash',
+  'deliver_file',
+  'generate_document',
+  'ask_user',
+  'manage_tasks',
+  'skill_load',
+];
+
+const defaultAgentSkills = [
+  'high-end-visual-design',
+  'emil-design-eng',
+  'design-taste-frontend',
+  'literature-search-arxiv',
+  'literature-search-openalex',
+];
+
+const mockRunRun = (runId: string, cardId: string | null): Run => ({
+  id: runId,
+  config_id: 'cfg-1',
+  card_id: cardId,
+  parent_run_id: null,
+  depth: 0,
+  status: 'completed',
+  started_at: iso(0),
+  ended_at: null,
+  token_usage: {},
+  cost_micros: 0,
+  cost_usd: 0,
+});
+
+/** The mock's final assistant reply for a run, keyed off the prompt when there is one. */
+function mockRunFinal(entry: MockRun): string {
+  if (entry.prompt) {
+    return `Here is what the run produced for "${entry.prompt.slice(0, 80)}": the reply draft still stands, both figures match what you confirmed, and the message is approved for sending.`;
+  }
+  return replyDraft;
+}
+
+const stepScript: Array<{ event_type: RunStep['event_type']; payload: Record<string, unknown> }> = [
+  { event_type: 'thought', payload: { text: 'Reading the drafted reply and the two confirmed figures.' } },
+  { event_type: 'thought', payload: { text: 'Checking the thread history for anything the draft missed.' } },
+  { event_type: 'tool_call', payload: { tool_name: 'gmail_send', arguments: { to: 'sarah@example.com', subject: 'Q4 budget, revised line items' } } },
+  { event_type: 'tool_result', payload: { tool_name: 'gmail_send', ok: true, message_id: 'g-8841' } },
+  { event_type: 'run_completed', payload: { summary: 'Reply sent to Sarah with both revised figures.' } },
+];
+
+function mockStepRecord(runId: string, index: number): RunStep {
+  const step = stepScript[index];
+  if (!step) throw new Error(`No mock step ${index}`);
+  const created = new Date(Date.parse(iso(0)) + index * 400).toISOString();
+  return {
+    id: `step-${runId}-${index}`,
+    run_id: runId,
+    step_number: index + 1,
+    event_type: step.event_type,
+    payload: step.payload,
+    created_at: created,
+  };
+}
 
 export const mockApi: VigilApi = {
   mode: 'mock',
@@ -264,19 +395,164 @@ export const mockApi: VigilApi = {
     return later(updated);
   },
 
-  createRun(_payload: Record<string, unknown>, cardId: string) {
-    return later({
-      id: 'r-1',
-      config_id: 'cfg-1',
-      card_id: cardId,
-      parent_run_id: null,
-      depth: 0,
-      status: 'queued' as const,
-      started_at: new Date().toISOString(),
-      ended_at: null,
-      token_usage: {},
-      cost_usd: 0,
+  createRun(body: RunCreateRequest) {
+    runCounter += 1;
+    const runId = `r-${runCounter}`;
+    runs.set(runId, {
+      run: { ...mockRunRun(runId, body.card_id ?? null), status: 'queued' },
+      cancelled: false,
+      prompt: body.initial_prompt ?? null,
+      sessionId: body.session_id ?? null,
+      createdAt: new Date().toISOString(),
     });
+    return later({
+      ...mockRunRun(runId, body.card_id ?? null),
+      status: 'queued',
+      started_at: new Date().toISOString(),
+    });
+  },
+
+  getRun(runId): Promise<Run> {
+    const entry = runs.get(runId);
+    if (!entry) return Promise.reject(new Error('Run not found'));
+    return later({ ...entry.run });
+  },
+
+  getLatestRun(sessionId): Promise<Run | null> {
+    let latest: { run: Run; createdAt: string } | null = null;
+    for (const entry of runs.values()) {
+      if (entry.sessionId !== sessionId) continue;
+      const createdAt = entry.createdAt;
+      if (!latest || createdAt > latest.createdAt) latest = { run: entry.run, createdAt };
+    }
+    return latest ? later({ ...latest.run }) : Promise.resolve(null);
+  },
+
+  getRunMessages(runId): Promise<RunMessageResponse[]> {
+    const entry = runs.get(runId);
+    if (!entry) return Promise.reject(new Error('Run not found'));
+    const body = entry.prompt ?? replyDraft;
+    return later([
+      {
+        id: `msg-${runId}-u`,
+        run_id: runId,
+        role: 'user',
+        content: body,
+        created_at: entry.run.started_at,
+      },
+      {
+        id: `msg-${runId}-a`,
+        run_id: runId,
+        role: 'assistant',
+        content: mockRunFinal(entry),
+        created_at: new Date().toISOString(),
+      },
+    ]);
+  },
+
+  getDefaultAgentConfig(): Promise<AgentConfigResponse> {
+    return later({
+      id: 'cfg-1',
+      name: 'vigil-default',
+      model: 'reasoning-model',
+      tools: [...defaultAgentTools],
+      skills: [...defaultAgentSkills],
+      memory_scopes: ['global'],
+      limits: {},
+    });
+  },
+
+  getRunSteps(runId, sinceStep = 0) {
+    const entry = runs.get(runId);
+    if (!entry) return Promise.reject(new Error('Run not found'));
+    const total = stepScript.length;
+    const steps: RunStep[] = [];
+    for (let i = sinceStep; i < total; i += 1) steps.push(mockStepRecord(runId, i));
+    return later(steps);
+  },
+
+  cancelRun(runId): Promise<RunCancelResponse> {
+    const entry = runs.get(runId);
+    if (!entry) return Promise.reject(new Error('Run not found'));
+    entry.cancelled = true;
+    entry.run = { ...entry.run, status: 'failed', ended_at: new Date().toISOString() };
+    return later({
+      run_id: runId,
+      status: entry.run.status,
+      cancelled_at: entry.run.ended_at ?? new Date().toISOString(),
+    });
+  },
+
+  openRunStream(runId, { sinceStep = 0, handlers }) {
+    const entry = runs.get(runId);
+    if (!entry) {
+      handlers.onStateChange?.('closed');
+      return () => undefined;
+    }
+    handlers.onStateChange?.('connecting');
+
+    const total = stepScript.length;
+    const timers: Array<ReturnType<typeof setTimeout>> = [];
+    const status = entry.cancelled ? 'failed' : 'completed';
+    const terminal = status === 'failed' ? 'run_failed' : 'run_completed';
+
+    for (let index = Math.max(0, sinceStep); index < total; index += 1) {
+      const step = mockStepRecord(runId, index);
+      timers.push(
+        setTimeout(
+          () =>
+            handlers.onEvent({
+              type: step.event_type,
+              id: String(step.step_number),
+              data: JSON.stringify({
+                run_id: runId,
+                step_number: step.step_number,
+                event_type: step.event_type,
+                payload: step.payload,
+                created_at: step.created_at,
+              }),
+            }),
+          200 + index * 500,
+        ),
+      );
+    }
+
+    const terminalStep = mockStepRecord(runId, total - 1);
+    terminalStep.event_type = terminal;
+    terminalStep.step_number = total;
+    timers.push(
+      setTimeout(() => {
+        handlers.onEvent({
+          type: terminal,
+          id: String(total),
+          data: JSON.stringify({
+            run_id: runId,
+            step_number: total,
+            event_type: terminal,
+            payload:
+              terminal === 'run_completed'
+                ? { content: mockRunFinal(entry) }
+                : { reason: 'cancelled' },
+            created_at: new Date().toISOString(),
+          }),
+        });
+        handlers.onStateChange?.('closed');
+      }, 200 + total * 500),
+    );
+
+    entry.run = {
+      ...entry.run,
+      status,
+      ended_at: new Date(Date.now() + (200 + total * 500)).toISOString(),
+      token_usage: { prompt: 1_412, completion: 903 },
+      cost_micros: 9_417,
+      cost_usd: 0.009_417,
+    };
+
+    return () => {
+      for (const timer of timers) clearTimeout(timer);
+      handlers.onStateChange?.('closed');
+    };
   },
 
   listApprovals() {
@@ -340,46 +616,17 @@ export const mockApi: VigilApi = {
     return later(message);
   },
 
-  openStream(sessionId, prompt, handlers) {
-    handlers.onStateChange?.('connecting');
-    const openTimer = setTimeout(() => handlers.onStateChange?.('open'), 120);
-
-    // Mirrors the backend: bare `data: <token>` frames, terminated by `data: [DONE]`.
-    const words = replyDraft.split(' ');
-    const chunkTimers: Array<ReturnType<typeof setTimeout>> = [];
-
-    words.forEach((word, index) => {
-      chunkTimers.push(
-        setTimeout(
-          () => handlers.onEvent({ type: 'message', data: index === 0 ? word : ` ${word}` }),
-          380 + index * 55,
-        ),
-      );
-    });
-
-    chunkTimers.push(
-      setTimeout(
-        () => handlers.onEvent({ type: 'message', data: '[DONE]' }),
-        380 + words.length * 55 + 80,
-      ),
-    );
-
-    void sessionId;
-    void prompt;
-
-    return () => {
-      clearTimeout(openTimer);
-      for (const timer of chunkTimers) clearTimeout(timer);
-      handlers.onStateChange?.('closed');
-    };
-  },
-
   health() {
     return later({ ...health, timestamp: new Date().toISOString() });
   },
 
   getSettings() {
-    return later(userSettings);
+    return later({ ...settings });
+  },
+
+  updateSettings(body: UserSettingsUpdateRequest) {
+    settings = { ...settings, ...body };
+    return later({ ...settings });
   },
 
   getLimits() {
@@ -392,5 +639,79 @@ export const mockApi: VigilApi = {
 
   syncConnector(accountId): Promise<SyncTrigger> {
     return later({ account_id: accountId, job_id: 'job-1', status: 'dispatched' });
+  },
+
+  listSkills() {
+    return later([...skills]);
+  },
+
+  installSkill(body) {
+    if (!/^[0-9a-f]{7,40}$/i.test(body.commit)) {
+      return Promise.reject(new Error('Commit must be a hexadecimal SHA'));
+    }
+    const skill: SkillResponse = {
+      id: `skl-${skills.length + 1}`,
+      name: body.repo_url.split('/').pop()?.replace(/\.git$/, '') ?? 'untitled skill',
+      description: 'Installed from a Git repository, awaiting its first run.',
+      version: 'unknown',
+      source: 'git',
+      commit: body.commit,
+      enabled: false,
+      storage_path: `/skills/git/${body.repo_url}`,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    };
+    skills.push(skill);
+    return later(skill);
+  },
+
+  enableSkill(skillId) {
+    const skill = skills.find((entry) => entry.id === skillId);
+    if (!skill) return Promise.reject(new Error('Skill not found'));
+    skill.enabled = true;
+    skill.updated_at = new Date().toISOString();
+    return later({ ...skill });
+  },
+
+  disableSkill(skillId) {
+    const skill = skills.find((entry) => entry.id === skillId);
+    if (!skill) return Promise.reject(new Error('Skill not found'));
+    skill.enabled = false;
+    skill.updated_at = new Date().toISOString();
+    return later({ ...skill });
+  },
+
+  listMCPServers() {
+    return later([...mcpServers]);
+  },
+
+  registerMCPServer(body): Promise<MCPDiscoveryResponse> {
+    if (mcpServers.some((server) => server.name === body.name)) {
+      return Promise.reject(new Error(`An MCP server named ${body.name} already exists`));
+    }
+    const server: MCPServerResponse = {
+      id: `mcp-${mcpServers.length + 1}`,
+      name: body.name,
+      transport: body.transport,
+      command: body.command ?? null,
+      url: body.url ?? null,
+      enabled: false,
+      created_at: new Date().toISOString(),
+    };
+    mcpServers.push(server);
+    const jobId = `job-${mcpServers.length}`;
+    setTimeout(() => {
+      // Discovery completes in the background and the next list refresh sees it enabled.
+      server.enabled = true;
+    }, 3_000);
+    return later({ server_name: server.name, job_id: jobId, status: 'queued' }, 260);
+  },
+
+  unregisterMCPServer(name) {
+    if (!mcpServers.some((server) => server.name === name)) {
+      return Promise.reject(new Error(`MCP server ${name} not found`));
+    }
+    mcpServers = mcpServers.filter((server) => server.name !== name);
+    return later(undefined);
   },
 };

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef } from 'react';
 import { motion } from 'framer-motion';
 import type { ReactNode } from 'react';
-import type { ChatMessage } from '@/types';
+import type { StreamMessage } from '@/types';
 import MessageItem from './MessageItem';
 import {
   Message,
@@ -17,7 +17,7 @@ const enterSpring = {
 };
 
 interface Props {
-  messages: ChatMessage[];
+  messages: StreamMessage[];
   streamedText: string;
   streaming: boolean;
   trailing?: ReactNode;

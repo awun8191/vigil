@@ -183,6 +183,10 @@ class Settings(BaseSettings):
     NTFY_TOPIC: str = "vigil-notifications"
     NTFY_AUTH_TOKEN: str = ""
 
+    # --- Exa Web Search MCP ---
+    EXA_MCP_URL: str = "https://mcp.exa.ai/mcp"
+    EXA_API_KEY: str = ""
+
 
 @lru_cache
 def get_settings() -> Settings:

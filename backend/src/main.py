@@ -63,7 +63,20 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         except Exception as exc:
             logger.warning("Failed to render startup pairing QR code", error=str(exc))
 
+    import asyncio
+    worker_stop = asyncio.Event()
+    worker_task: asyncio.Task[None] | None = None
+    if settings.APP_ENV != "test":
+        from src.worker import run_worker
+        worker_task = asyncio.create_task(
+            run_worker(stop_event=worker_stop, install_signal_handlers=False)
+        )
+
     yield
+    worker_stop.set()
+    if worker_task is not None:
+        worker_task.cancel()
+        await asyncio.gather(worker_task, return_exceptions=True)
     logger.info("Shutting down Vigil application")
 
 

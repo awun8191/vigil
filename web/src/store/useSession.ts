@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import type { AuthMe, PairingResponse } from '@/types';
 import { getBearerToken, IS_MOCK, setBearerToken } from '@/lib/api';
+import { AuthError } from '@/lib/errors';
 
 /**
  * Session state.
@@ -122,11 +123,26 @@ export const useSession = create<SessionState>((set) => ({
     try {
       const device = await me();
       set({ status: 'authed', device });
-    } catch {
-      // A stored token that no longer works is worthless. Clear it rather than retrying forever.
-      await clearStoredSession();
-      setBearerToken(null);
-      set({ status: 'unauthed', device: null });
+    } catch (cause) {
+      if (cause instanceof AuthError) {
+        // A stored token that the server explicitly rejected (401) is revoked or invalid.
+        await clearStoredSession();
+        setBearerToken(null);
+        set({ status: 'unauthed', device: null });
+        return;
+      }
+      // Transient network or server restart: preserve the stored token and session.
+      set({
+        status: 'authed',
+        device: {
+          device_id: stored.deviceId,
+          device_name: stored.deviceName,
+          user_id: '',
+          user_display_name: '',
+          created_at: new Date().toISOString(),
+          last_seen_at: new Date().toISOString(),
+        },
+      });
     }
   },
 
@@ -142,6 +158,13 @@ export const useSession = create<SessionState>((set) => ({
       const device = await me();
       set({ status: 'authed', device });
     } catch {
+      // Restore token in case a 401 race triggered expire() before the pair transaction settled.
+      setBearerToken(pairing.device_token);
+      await writeStoredSession({
+        token: pairing.device_token,
+        deviceId: pairing.device_id,
+        deviceName: pairing.device_name,
+      });
       set({
         status: 'authed',
         device: {

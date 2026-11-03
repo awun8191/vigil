@@ -192,7 +192,40 @@ async def _discover_stdio(command: str, timeout: float) -> list[dict[str, Any]]:
 
 
 async def _discover_sse(server_url: str, timeout: float) -> list[dict[str, Any]]:
-    """Run the handshake against an SSE server URL and return raw tools."""
+    """Run the handshake against an SSE / StreamMCP server URL and return raw tools."""
+    # First attempt: modern HTTP StreamMCP / SSE POST tools/list
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            post_resp = await client.post(
+                server_url,
+                json={"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}},
+                headers={
+                    "Content-Type": "application/json",
+                    "Accept": "application/json, text/event-stream",
+                    "User-Agent": "vigil/1.0",
+                },
+            )
+            if post_resp.status_code == 200:
+                body = post_resp.text
+                for line in body.splitlines():
+                    trimmed = line.strip()
+                    if trimmed.startswith("data:"):
+                        try:
+                            payload = json.loads(trimmed[len("data:"):].strip())
+                            if isinstance(payload, dict) and "result" in payload and "tools" in payload["result"]:
+                                return _normalize_tools(payload["result"]["tools"])
+                        except ValueError:
+                            pass
+                try:
+                    payload = post_resp.json()
+                    if isinstance(payload, dict) and "result" in payload and "tools" in payload["result"]:
+                        return _normalize_tools(payload["result"]["tools"])
+                except ValueError:
+                    pass
+    except (httpx.HTTPError, OSError):
+        pass
+
+    # Fallback attempt: classic GET event-stream handshake
     try:
         async with httpx.AsyncClient(timeout=timeout) as client:
             async with client.stream(
@@ -215,6 +248,8 @@ async def _discover_sse(server_url: str, timeout: float) -> list[dict[str, Any]]
                         ) from exc
                     if isinstance(payload, dict) and "tools" in payload:
                         return _normalize_tools(payload.get("tools"))
+                    if isinstance(payload, dict) and "result" in payload and "tools" in payload["result"]:
+                        return _normalize_tools(payload["result"]["tools"])
                 raise MCPHandshakeError(
                     "SSE handshake failed: "
                     "the stream closed without a tools event"
@@ -332,6 +367,62 @@ async def _call_stdio_tool(
                     pass
 
 
+async def _call_sse_tool(
+    server_url: str,
+    tool_name: str,
+    arguments: dict[str, Any],
+    timeout: float = HANDSHAKE_TIMEOUT_SECONDS,
+) -> tuple[str, bool]:
+    """Invoke tools/call on an SSE / StreamMCP server URL and return (output, is_error)."""
+    payload = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/call",
+        "params": {"name": tool_name, "arguments": arguments},
+    }
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        resp = await client.post(
+            server_url,
+            json=payload,
+            headers={
+                "Content-Type": "application/json",
+                "Accept": "application/json, text/event-stream",
+                "User-Agent": "vigil/1.0",
+            },
+        )
+        if resp.status_code != 200:
+            return f"HTTP error {resp.status_code}: {resp.text[:300]}", True
+        body = resp.text
+        data: dict[str, Any] | None = None
+        for line in body.splitlines():
+            trimmed = line.strip()
+            if trimmed.startswith("data:"):
+                try:
+                    data = json.loads(trimmed[len("data:"):].strip())
+                    break
+                except ValueError:
+                    pass
+        if data is None:
+            try:
+                data = resp.json()
+            except ValueError:
+                return body[:1000], False
+        if "error" in data:
+            return f"MCP server error: {data['error']}", True
+        result = data.get("result", {})
+        is_error = bool(result.get("isError", False))
+        content = result.get("content")
+        if isinstance(content, list):
+            parts = [
+                str(item.get("text", item)) if isinstance(item, dict) else str(item)
+                for item in content
+            ]
+            return "\n".join(parts), is_error
+        if isinstance(content, str):
+            return content, is_error
+        return json.dumps(result), is_error
+
+
 class MCPHostClient:
     """Host client satisfying MCPHostProtocol for registered MCP servers."""
 
@@ -375,6 +466,18 @@ class MCPHostClient:
             try:
                 output, is_error = await _call_stdio_tool(
                     server.command, tool_name, dict(arguments)
+                )
+                return MCPToolResultDTO(
+                    tool_call_id=tool_call_id, output=output, is_error=is_error
+                )
+            except Exception as exc:  # noqa: BLE001
+                return MCPToolResultDTO(
+                    tool_call_id=tool_call_id, output=str(exc), is_error=True
+                )
+        if server is not None and server.transport == "sse" and server.url:
+            try:
+                output, is_error = await _call_sse_tool(
+                    server.url, tool_name, dict(arguments)
                 )
                 return MCPToolResultDTO(
                     tool_call_id=tool_call_id, output=output, is_error=is_error

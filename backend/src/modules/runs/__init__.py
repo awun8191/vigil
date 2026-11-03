@@ -1,4 +1,10 @@
 """Runs domain module."""
+from src.modules.runs.core_context import (
+    CORE_PHILOSOPHY_AND_BRAINSTORMING,
+    DEFAULT_BASE_IDENTITY,
+    DEFAULT_BUNDLED_SKILLS,
+    build_core_system_prompt,
+)
 from src.modules.runs.data import (
     RunCancelResponse,
     RunCreateRequest,
@@ -21,6 +27,9 @@ from src.modules.runs.service import RunsService
 
 __all__ = [
     "AgentConfigDTO",
+    "CORE_PHILOSOPHY_AND_BRAINSTORMING",
+    "DEFAULT_BASE_IDENTITY",
+    "DEFAULT_BUNDLED_SKILLS",
     "MessageCreateDTO",
     "MessageDTO",
     "RunCancelResponse",
@@ -33,6 +42,7 @@ __all__ = [
     "RunStepResponse",
     "RunsRepository",
     "RunsService",
+    "build_core_system_prompt",
     "build_runs_router",
     "get_runs_service",
 ]

@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useLocation, useNavigate, useParams } from 'react-router-dom';
-import { RotateCw } from 'lucide-react';
+import { AlertCircle, RotateCw } from 'lucide-react';
 import { MessageStream } from '@/components/chat/MessageStream';
 import { InputPill } from '@/components/chat/InputPill';
 import { ThinkingCapsule } from '@/components/chat/ThinkingCapsule';
 import { useCardTitles } from '@/lib/suggestions';
-import { useChatStream, useCreateSession, useMessages, useSessions } from '@/queries/chat';
+import { stepLabel } from '@/queries/runs';
+import { useAgentChat, useCreateSession, useMessages, useSessions } from '@/queries/chat';
 
 interface ChatLocationState {
   seed?: string;
@@ -30,7 +31,7 @@ export default function ChatRoute() {
     routeSessionId ?? createdSessionId ?? sessions.data?.[0]?.session_id ?? null;
 
   const messagesQuery = useMessages(activeSessionId);
-  const stream = useChatStream(activeSessionId);
+  const chat = useAgentChat(activeSessionId);
 
   // A first-run user with no sessions gets one, silently.
   useEffect(() => {
@@ -51,21 +52,38 @@ export default function ChatRoute() {
   }, [navigate, state.cardId]);
 
   const messages = messagesQuery.data ?? [];
-  const showThinking = stream.streaming && stream.streamedText.length === 0;
+  const showThinking = chat.streaming;
+  // The empty hint only renders once the history query has settled: while loading, an empty
+  // array means "not fetched yet", and painting EmptyChat then displaces real history in a
+  // visible flash when the query resolves.
+  const historySettled = messagesQuery.isSuccess || messagesQuery.isError;
 
   return (
     <div className="flex h-dvh flex-col">
       <div className="min-h-0 flex-1">
         <MessageStream
           messages={messages}
-          streamedText={stream.streamedText}
-          streaming={stream.streaming}
-          trailing={showThinking ? <ThinkingCapsule active /> : null}
-          emptyHint={<EmptyChat suggestions={suggestions} onPick={stream.send} />}
+          streamedText={chat.streamedText}
+          streaming={chat.streaming}
+          trailing={
+            showThinking && !chat.awaitingApproval ? (
+              <ThinkingCapsule
+                active
+                {...(chat.steps.length > 0
+                  ? {
+                      steps: chat.steps.slice(-6).map((step) => ({ label: stepLabel(step) })),
+                    }
+                  : {})}
+              />
+            ) : null
+          }
+          emptyHint={
+            historySettled ? <EmptyChat suggestions={suggestions} onPick={chat.send} /> : null
+          }
         />
       </div>
 
-      {stream.connection === 'reconnecting' ? (
+      {chat.connection === 'reconnecting' ? (
         <div className="pointer-events-none fixed inset-x-0 bottom-[11.5rem] z-20 flex justify-center px-4 md:bottom-[7.5rem] md:pl-20">
           <p className="glass inline-flex items-center gap-2 rounded-[8px] px-3.5 py-2 text-[12px] text-[var(--text-muted)]">
             <RotateCw size={13} strokeWidth={1.5} className="animate-spin" />
@@ -74,11 +92,32 @@ export default function ChatRoute() {
         </div>
       ) : null}
 
+      {chat.awaitingApproval ? (
+        <div className="pointer-events-auto fixed inset-x-0 bottom-[11.5rem] z-20 flex justify-center px-4 md:bottom-[7.5rem] md:pl-20">
+          <button
+            type="button"
+            onClick={() => navigate('/agent/approvals')}
+            className="glass cursor-pointer rounded-[8px] px-3.5 py-2 text-[12px] text-[var(--text-muted)] transition-colors hover:text-[var(--text)]"
+          >
+            The agent is waiting on your approval, open Approvals to decide
+          </button>
+        </div>
+      ) : null}
+
+      {chat.error ? (
+        <div className="pointer-events-none fixed inset-x-0 bottom-[11.5rem] z-20 flex justify-center px-4 md:bottom-[10rem] md:pl-20">
+          <p className="glass inline-flex max-w-md items-center gap-2 rounded-[8px] px-3.5 py-2 text-[12px] text-[var(--text)]">
+            <AlertCircle size={13} strokeWidth={1.5} />
+            {chat.error}
+          </p>
+        </div>
+      ) : null}
+
       <InputPill
-        onSend={stream.send}
-        onStop={stream.stop}
-        streaming={stream.streaming}
-        hasReplyTokens={stream.streamedText.length > 0}
+        onSend={chat.send}
+        onStop={chat.stop}
+        streaming={chat.streaming}
+        hasReplyTokens={chat.steps.length > 0}
         disabled={!activeSessionId}
         {...(seed ? { seed } : {})}
         onSeedConsumed={handleSeedConsumed}

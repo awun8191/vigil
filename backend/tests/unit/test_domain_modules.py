@@ -571,9 +571,35 @@ async def test_auth_http_endpoints(test_app) -> None:
         assert "user_id" in data
 
 
+TEST_USER_ID = "00000000-0000-0000-0000-000000000001"
+
+
+async def _ensure_chat_test_user() -> None:
+    """Insert the auth fixture's synthetic test user into the test database.
+    Chat threads now carry a users foreign key, so the synthetic user behind
+    ``vgt_testtoken`` needs a row. The upsert is safe against a database that
+    already holds one from seeding or an earlier run.
+    """
+    from sqlalchemy import text
+    from sqlalchemy.ext.asyncio import create_async_engine
+
+    from src.config.settings import Settings
+
+    engine = create_async_engine(Settings(DEBUG=True).DATABASE_URL)
+    async with engine.begin() as conn:
+        await conn.execute(
+            text(
+                "insert into users (id, display_name) values (cast(:id as uuid), 'Default User') "
+                "on conflict (id) do nothing"
+            ).bindparams(id=TEST_USER_ID)
+        )
+    await engine.dispose()
+
+
 @pytest.mark.asyncio
 async def test_chat_http_endpoints(test_app) -> None:
     auth_headers = {"Authorization": "Bearer vgt_testtoken"}
+    await _ensure_chat_test_user()
     async with httpx.AsyncClient(transport=ASGITransport(app=test_app), base_url="http://test") as client:
         res_session = await client.post(
             "/api/v1/chat/sessions",
@@ -590,6 +616,24 @@ async def test_chat_http_endpoints(test_app) -> None:
         )
         assert res_msg.status_code == 200
         assert "content" in res_msg.json()
+
+        # Leave no thread rows behind, the HTTP tests run against the dev database.
+        from sqlalchemy import text as sql_text
+        from sqlalchemy.ext.asyncio import create_async_engine
+
+        from src.config.settings import Settings as DbSettings
+
+        engine = create_async_engine(DbSettings(DEBUG=True).DATABASE_URL)
+        async with engine.begin() as conn:
+            await conn.execute(
+                sql_text("delete from threads where id = cast(:id as uuid)"),
+                {"id": session_id},
+            )
+        await engine.dispose()
+        res_gone = await client.get(
+            f"/api/v1/chat/sessions/{session_id}/messages", headers=auth_headers
+        )
+        assert res_gone.status_code == 404
 
 
 @pytest.mark.asyncio

@@ -273,8 +273,8 @@ class TestProtocolDuckTypingRobustness:
                 )
                 total_tested += 1
 
-        # Exactly 100 method omission cases across all 19 protocols
-        assert total_tested == 100, f"Expected 100 method omission tests, got {total_tested}"
+        # Exactly 101 method omission cases across all 19 protocols
+        assert total_tested == 101, f"Expected 101 method omission tests, got {total_tested}"
 
     def test_none_valued_attribute_fails_isinstance_for_every_method(self) -> None:
         """Setting any protocol member to None must cause isinstance check to return False."""
@@ -294,7 +294,7 @@ class TestProtocolDuckTypingRobustness:
                 )
                 total_tested += 1
 
-        assert total_tested == 100, f"Expected 100 None-attribute tests, got {total_tested}"
+        assert total_tested == 101, f"Expected 101 None-attribute tests, got {total_tested}"
 
     def test_extra_methods_do_not_break_duck_typing(self) -> None:
         for proto in ALL_19_PROTOCOLS:

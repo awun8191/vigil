@@ -1,15 +1,18 @@
 """Runs router factory providing agent execution harness endpoints and SSE streams."""
+from typing import Any
 from uuid import UUID
 from fastapi import APIRouter, Depends, Header, Query, status
 from fastapi.responses import StreamingResponse
 
 from src.config.exceptions import NotFoundError
 from src.config.settings import Settings
-from src.dependencies import get_current_device, get_runs_service
+from src.dependencies import get_chat_service, get_current_device, get_current_user, get_runs_service
 from src.modules.auth.repository import DeviceDTO
 from src.modules.runs.data import (
+    AgentConfigResponse,
     RunCancelResponse,
     RunCreateRequest,
+    RunMessageResponse,
     RunResponse,
     RunStepResponse,
 )
@@ -26,12 +29,53 @@ def build_runs_router(settings: Settings) -> APIRouter:
     Build and configure runs APIRouter instance.
     Endpoints:
       - POST /api/v1/runs
+      - GET /api/v1/runs/configs/default
       - GET /api/v1/runs/{id}
       - GET /api/v1/runs/{id}/steps
+      - GET /api/v1/runs/{id}/messages
       - GET /api/v1/runs/{id}/events
       - POST /api/v1/runs/{id}/cancel
     """
     router = APIRouter(prefix="/runs", tags=["Runs"])
+
+    @router.get(
+        "/configs/default",
+        response_model=AgentConfigResponse,
+        status_code=status.HTTP_200_OK,
+        summary="Get or Create the Default Agent Config",
+    )
+    async def default_config(
+        service: RunsRepository = Depends(get_runs_service),
+        _device: DeviceDTO = Depends(get_current_device),
+    ) -> AgentConfigResponse:
+        """Return the pinned ``vigil-default`` config, creating it on first call.
+
+        Declared before the ``/{run_id}`` route so URL parsing never sends
+        ``configs`` to the UUID path handler.
+        """
+        config = await service.ensure_default_agent_config()  # type: ignore[attr-defined]
+        return AgentConfigResponse.model_validate(config)
+
+    @router.get(
+        "/latest",
+        response_model=RunResponse,
+        status_code=status.HTTP_200_OK,
+        summary="Get the Newest Run of a Chat Session",
+    )
+    async def latest_run(
+        session_id: UUID = Query(...),
+        service: RunsRepository = Depends(get_runs_service),
+        chat: Any = Depends(get_chat_service),
+        user: Any = Depends(get_current_user),
+    ) -> RunResponse:
+        """Client rehydration: after a reload the chat re-subscribes to the newest run."""
+        thread = await chat.get_session(session_id)
+        if thread is None or thread.user_id != user.id:
+            raise NotFoundError(f"Chat session {session_id} not found")
+        run = await service.latest_run_for_session(session_id)  # type: ignore[attr-defined]
+        if run is None:
+            raise NotFoundError(f"Chat session {session_id} has no runs")
+        return RunResponse.model_validate(run)
 
     @router.post(
         "",
@@ -48,6 +92,7 @@ def build_runs_router(settings: Settings) -> APIRouter:
             config_id=payload.config_id,
             card_id=payload.card_id,
             initial_prompt=payload.initial_prompt,
+            session_id=payload.session_id,
         )
         return RunResponse.model_validate(run)
 
@@ -81,6 +126,23 @@ def build_runs_router(settings: Settings) -> APIRouter:
     ) -> list[RunStepResponse]:
         steps = await service.get_steps_since(run_id, since_step)
         return [RunStepResponse.model_validate(s) for s in steps]
+
+    @router.get(
+        "/{run_id}/messages",
+        response_model=list[RunMessageResponse],
+        status_code=status.HTTP_200_OK,
+        summary="Get Run Transcript",
+    )
+    async def get_messages(
+        run_id: UUID,
+        service: RunsRepository = Depends(get_runs_service),
+        _device: DeviceDTO = Depends(get_current_device),
+    ) -> list[RunMessageResponse]:
+        run = await service.get_run_by_id(run_id)
+        if not run:
+            raise NotFoundError(f"Run {run_id} not found")
+        messages = await service.get_messages_for_run(run_id)  # type: ignore[attr-defined]
+        return [RunMessageResponse.model_validate(m) for m in messages]
 
     @router.get(
         "/{run_id}/events",

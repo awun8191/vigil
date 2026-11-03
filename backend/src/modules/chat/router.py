@@ -1,7 +1,11 @@
-"""Chat router factory providing conversational session endpoints and token streaming."""
+"""Chat router factory providing conversational session endpoints.
+
+The assistant reply does not stream through chat: an in-app message creates a
+run (``POST /runs`` with the thread as ``session_id``) and the RunLoop persists
+the reply into the same ``messages`` table this module reads.
+"""
 from uuid import UUID
 from fastapi import APIRouter, Depends, status
-from fastapi.responses import StreamingResponse
 
 from src.config.settings import Settings
 from src.dependencies import get_chat_service, get_current_user
@@ -23,7 +27,6 @@ def build_chat_router(settings: Settings) -> APIRouter:
       - POST /api/v1/chat/sessions
       - GET /api/v1/chat/sessions/{id}/messages
       - POST /api/v1/chat/sessions/{id}/messages
-      - GET /api/v1/chat/sessions/{id}/stream
     """
     router = APIRouter(prefix="/chat", tags=["Chat"])
 
@@ -63,9 +66,14 @@ def build_chat_router(settings: Settings) -> APIRouter:
     async def get_messages(
         session_id: UUID,
         service: ChatRepository = Depends(get_chat_service),
-        _user: UserDTO = Depends(get_current_user),
+        user: UserDTO = Depends(get_current_user),
     ) -> list[ChatMessageResponse]:
-        messages = await service.get_history(session_id, limit=50)
+        thread = await service.get_session(session_id)
+        if thread is None or thread.user_id != user.id:
+            from src.config.exceptions import NotFoundError
+
+            raise NotFoundError(f"Chat session {session_id} not found")
+        messages = await service.get_history(session_id, limit=200)
         return [ChatMessageResponse.model_validate(m) for m in messages]
 
     @router.post(
@@ -81,22 +89,5 @@ def build_chat_router(settings: Settings) -> APIRouter:
         user: UserDTO = Depends(get_current_user),
     ) -> ChatMessageResponse:
         return await service.send_message(session_id, user.id, payload.content)  # type: ignore[attr-defined]
-
-    @router.get(
-        "/sessions/{session_id}/stream",
-        summary="Stream Assistant Chat Reply via SSE",
-    )
-    async def stream_chat(
-        session_id: UUID,
-        q: str,
-        service: ChatRepository = Depends(get_chat_service),
-        user: UserDTO = Depends(get_current_user),
-    ) -> StreamingResponse:
-        async def stream_generator():
-            async for token in service.stream_reply(session_id, user.id, q):  # type: ignore[attr-defined]
-                yield f"data: {token}\n\n"
-            yield "data: [DONE]\n\n"
-
-        return StreamingResponse(stream_generator(), media_type="text/event-stream")
 
     return router

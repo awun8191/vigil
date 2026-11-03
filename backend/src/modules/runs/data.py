@@ -10,6 +10,41 @@ class RunCreateRequest(BaseModel):
     config_id: UUID = Field(..., description="Target AgentConfig UUID.")
     card_id: UUID | None = Field(default=None, description="Optional initiating Card UUID.")
     initial_prompt: str | None = Field(default=None, description="Optional prompt override.")
+    session_id: UUID | None = Field(
+        default=None,
+        description=(
+            "Optional chat session that owns the run. That session receives a memory index "
+            "job when the run completes."
+        ),
+    )
+
+
+class AgentConfigResponse(BaseModel):
+    """Outbound agent configuration, without the system prompt text."""
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID = Field(..., description="Agent config UUID.")
+    name: str = Field(..., description="Unique config name.")
+    model: str = Field(..., description="Reasoning model name.")
+    tools: list[str] = Field(default_factory=list, description="Enabled tool names.")
+    skills: list[str] = Field(default_factory=list, description="Enabled skill names.")
+    memory_scopes: list[str] = Field(default_factory=list, description="Memory scopes the run indexes.")
+    limits: dict[str, Any] = Field(default_factory=dict, description="Config level limits.")
+
+
+class RunMessageResponse(BaseModel):
+    """Wire representation of one message row of a run's transcript."""
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID = Field(..., description="Message UUID.")
+    run_id: UUID | None = Field(
+        default=None, description="Owning run UUID when this row belongs to a run."
+    )
+    role: str = Field(..., description="user, assistant, system, or tool.")
+    content: str | None = Field(
+        default=None, description="Message text; tool rows carry their result here."
+    )
+    created_at: datetime = Field(..., description="Row creation timestamp.")
 
 
 class RunStepResponse(BaseModel):

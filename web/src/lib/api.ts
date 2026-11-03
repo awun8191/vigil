@@ -10,13 +10,24 @@ import type {
   ChatSession,
   ConnectorAccount,
   HealthStatus,
+  MCPDiscoveryResponse,
+  MCPServerResponse,
   PairingResponse,
+  RegisterMCPServerRequest,
   Run,
+  RunCancelResponse,
+  RunCreateRequest,
+  RunMessageResponse,
+  RunStep,
+  AgentConfigResponse,
+  SkillInstallRequest,
+  SkillResponse,
   SyncTrigger,
   SystemLimits,
   UserSettings,
+  UserSettingsUpdateRequest,
 } from '@/types';
-import type { StreamHandlers, VigilApi } from './contract';
+import type { VigilApi } from './contract';
 import { ApiError, AuthError, NetworkError } from './errors';
 import { idempotencyKey } from './idempotency';
 import { createEventStream } from './sse';
@@ -96,10 +107,13 @@ async function request<T>(path: string, init: RequestInit_ = {}): Promise<T> {
   if (bearerToken) headers['Authorization'] = `Bearer ${bearerToken}`;
 
   if (isMutating) {
+    // Frontend policy, not a backend contract: the idempotency middleware only manages requests
+    // that carry the header, it never rejects a request for missing one. The backend enforces
+    // replay, lock conflicts (409) and key validation (422) for managed requests only.
     if (!init.scope) {
       throw new Error(
         `Mutating request ${method} ${path} requires an idempotency scope. ` +
-          'The backend rejects it otherwise.',
+          'The frontend refuses to send an untracked mutation.',
       );
     }
     headers['Idempotency-Key'] = idempotencyKey(init.scope);
@@ -178,11 +192,59 @@ const liveApi: VigilApi = {
     return request<Card>(`/cards/${cardId}/feedback`, { method: 'POST', body, scope });
   },
 
-  createRun(payload: Record<string, unknown>, cardId: string, scope: string) {
+  createRun(body: RunCreateRequest, scope: string) {
     return request<Run>('/runs', {
       method: 'POST',
-      body: { ...payload, card_id: cardId },
+      body,
       scope,
+    });
+  },
+
+  getRun(runId) {
+    return request<Run>(`/runs/${runId}`);
+  },
+
+  async getLatestRun(sessionId) {
+    // The newest run 404s on a session with no runs; that is "none", not a failure.
+    try {
+      return await request<Run>('/runs/latest', { query: { session_id: sessionId } });
+    } catch (cause) {
+      if (cause instanceof ApiError && cause.status === 404) return null;
+      throw cause;
+    }
+  },
+
+  getRunSteps(runId, sinceStep) {
+    return request<RunStep[]>(`/runs/${runId}/steps`, {
+      query: sinceStep && sinceStep > 0 ? { since_step: sinceStep } : undefined,
+    });
+  },
+
+  getRunMessages(runId) {
+    return request<RunMessageResponse[]>(`/runs/${runId}/messages`);
+  },
+
+  getDefaultAgentConfig() {
+    return request<AgentConfigResponse>('/runs/configs/default');
+  },
+
+  cancelRun(runId, scope) {
+    return request<RunCancelResponse>(`/runs/${runId}/cancel`, {
+      method: 'POST',
+      scope,
+    });
+  },
+
+  openRunStream(runId, { sinceStep, handlers }) {
+    if (!bearerToken) {
+      handlers.onStateChange?.('closed');
+      return () => undefined;
+    }
+    return createEventStream({
+      url: buildUrl(`/runs/${runId}/events`, sinceStep && sinceStep > 0 ? { since_step: sinceStep } : undefined),
+      token: bearerToken,
+      onEvent: handlers.onEvent,
+      ...(handlers.onStateChange ? { onStateChange: handlers.onStateChange } : {}),
     });
   },
 
@@ -226,25 +288,20 @@ const liveApi: VigilApi = {
     });
   },
 
-  openStream(sessionId: string, prompt: string, handlers: StreamHandlers) {
-    if (!bearerToken) {
-      handlers.onStateChange?.('closed');
-      return () => undefined;
-    }
-    return createEventStream({
-      url: buildUrl(`/chat/sessions/${sessionId}/stream`, { q: prompt }),
-      token: bearerToken,
-      onEvent: handlers.onEvent,
-      ...(handlers.onStateChange ? { onStateChange: handlers.onStateChange } : {}),
-    });
-  },
-
   health() {
     return request<HealthStatus>('/health');
   },
 
   getSettings() {
     return request<UserSettings>('/settings');
+  },
+
+  updateSettings(body: UserSettingsUpdateRequest, scope: string) {
+    return request<UserSettings>('/settings', {
+      method: 'PATCH',
+      body,
+      scope,
+    });
   },
 
   getLimits() {
@@ -258,6 +315,51 @@ const liveApi: VigilApi = {
   syncConnector(accountId, scope) {
     return request<SyncTrigger>(`/connectors/accounts/${accountId}/sync`, {
       method: 'POST',
+      scope,
+    });
+  },
+
+  listSkills() {
+    return request<SkillResponse[]>('/skills');
+  },
+
+  installSkill(body: SkillInstallRequest, scope: string) {
+    return request<SkillResponse>('/skills/install', {
+      method: 'POST',
+      body,
+      scope,
+    });
+  },
+
+  enableSkill(skillId, scope) {
+    return request<SkillResponse>(`/skills/${skillId}/enable`, {
+      method: 'POST',
+      scope,
+    });
+  },
+
+  disableSkill(skillId, scope) {
+    return request<SkillResponse>(`/skills/${skillId}/disable`, {
+      method: 'POST',
+      scope,
+    });
+  },
+
+  listMCPServers() {
+    return request<MCPServerResponse[]>('/connectors/mcp-servers');
+  },
+
+  registerMCPServer(body: RegisterMCPServerRequest, scope: string) {
+    return request<MCPDiscoveryResponse>('/connectors/mcp-servers', {
+      method: 'POST',
+      body,
+      scope,
+    });
+  },
+
+  unregisterMCPServer(name, scope) {
+    return request<void>(`/connectors/mcp-servers/${encodeURIComponent(name)}`, {
+      method: 'DELETE',
       scope,
     });
   },

@@ -25,7 +25,11 @@ from dataclasses import dataclass, field
 from typing import Any, Literal, Protocol, runtime_checkable
 from uuid import UUID
 
-from src.integrations.repositories import LLMClientProtocol, LLMResponseDTO
+from src.integrations.repositories import (
+    LLMClientProtocol,
+    LLMResponseDTO,
+    LLMToolCallDTO,
+)
 from src.modules.runs.barrier import assert_run_barrier, tool_call_ids
 from src.modules.runs.repository import (
     AgentConfigDTO,
@@ -407,9 +411,15 @@ class RunLoop:
         self._session_id = next(
             (row.session_id for row in messages if row.session_id is not None), None
         )
+        prior_history: list[MessageDTO] = []
+        list_session_fn = getattr(self.journal, "list_session_history", None)
+        if self._session_id is not None and callable(list_session_fn):
+            prior_history = await list_session_fn(
+                self._session_id, exclude_run_id=run_id
+            )
 
         # Stage 1: assemble.
-        assembled = self._assemble(config, messages)
+        assembled = self._assemble(config, messages, prior_history=prior_history)
         stages.append("assemble")
         await self.observer.on_stage(run_id, "assemble")
 
@@ -417,7 +427,7 @@ class RunLoop:
         compacted_messages = await self._compact_check(run, assembled, messages)
         if list(compacted_messages) != list(messages):
             messages = compacted_messages
-            assembled = self._assemble(config, messages)
+            assembled = self._assemble(config, messages, prior_history=prior_history)
         stages.append("compact_check")
         await self.observer.on_stage(run_id, "compact_check")
 
@@ -448,12 +458,7 @@ class RunLoop:
         # The stage ends only after the assistant message is a row, so a kill
         # after this stage never loses a paid model response.
         assert_run_barrier(messages)
-        response = await self.model.complete(
-            assembled.model_messages,
-            tools=self.tool_schemas,
-            temperature=0.0,
-            tier="reasoning",
-        )
+        response = await self._infer_streaming(run, assembled.model_messages)
         assistant = await self._record_assistant(run, response)
         stages.append("infer")
         await self.observer.on_stage(run_id, "infer")
@@ -533,7 +538,11 @@ class RunLoop:
         return await self.journal.update_run(run.id, status="running")
 
     def _assemble(
-        self, config: AgentConfigDTO, messages: Sequence[MessageDTO]
+        self,
+        config: AgentConfigDTO,
+        messages: Sequence[MessageDTO],
+        *,
+        prior_history: Sequence[MessageDTO] = (),
     ) -> AssembledContext:
         """Stage one: build the context and locate the last assistant turn."""
         assistant: MessageDTO | None = None
@@ -546,11 +555,12 @@ class RunLoop:
             tool_rows = [
                 row for row in messages if row.role == "tool" and row.tool_call_id
             ]
+        combined = [*prior_history, *messages]
         return AssembledContext(
-            model_messages=build_model_messages(config.system_prompt, messages),
+            model_messages=build_model_messages(config.system_prompt, combined),
             assistant=assistant,
             tool_rows=tool_rows,
-            tokens=estimate_tokens(messages),
+            tokens=estimate_tokens(combined),
             terminal_turn=bool(messages)
             and messages[-1].role == "assistant"
             and not messages[-1].tool_calls,
@@ -778,6 +788,72 @@ class RunLoop:
             {"tool_call_id": call.id, "tool_name": call.name},
         )
         return row
+
+    async def _infer_streaming(
+        self, run: RunDTO, model_messages: list[dict[str, Any]]
+    ) -> LLMResponseDTO:
+        """Stage three through the model's stream, recording deltas as they land.
+
+        Every non-empty content fragment becomes one ``message_delta`` step, so a
+        subscribed client renders the reply while the model is still generating.
+        Tool call fragments accumulate to one complete set and are emitted on
+        their own steps only inside the summarised ``thought`` payload (the
+        assistant row keeps them as ``tool_calls``). Falls back to a
+        non-streaming ``complete`` for model clients without a stream.
+        """
+        if self.model is None:
+            raise LoopDependencyMissing("the loop has no model client")
+        stream_method = getattr(self.model, "stream_complete", None)
+        if stream_method is None:
+            return await self.model.complete(
+                model_messages,
+                tools=self.tool_schemas,
+                temperature=0.0,
+                tier="reasoning",
+            )
+
+        parts: list[str] = []
+        tool_calls: list[LLMToolCallDTO] = []
+        usage: dict[str, Any] = {}
+        finish_reason = "stop"
+        async for chunk in stream_method(
+            model_messages,
+            tools=self.tool_schemas,
+            temperature=0.0,
+            tier="reasoning",
+        ):
+            if chunk.delta_content:
+                parts.append(chunk.delta_content)
+                await self._record_step(
+                    run.id,
+                    "message_delta",
+                    {"delta": chunk.delta_content, "index": len(parts)},
+                )
+            for fragment in chunk.tool_call_chunks or []:
+                call = LLMToolCallDTO(
+                    id=str(fragment.get("id") or f"call_{len(tool_calls) + 1}"),
+                    name=str(fragment.get("name") or ""),
+                    arguments=fragment.get("arguments") or {},
+                )
+                tool_calls.append(call)
+            if chunk.usage:
+                usage = chunk.usage
+                finish_reason = chunk.finish_reason or finish_reason
+            if chunk.finish_reason:
+                finish_reason = chunk.finish_reason
+
+        content = "".join(parts) or None
+        prompt_tokens = int(usage.get("prompt_tokens", 0))
+        completion_tokens = int(usage.get("completion_tokens", 0))
+        return LLMResponseDTO(
+            content=content,
+            tool_calls=tool_calls,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            total_tokens=prompt_tokens + completion_tokens,
+            finish_reason=finish_reason,
+            model="",
+        )
 
     async def _record_assistant(
         self, run: RunDTO, response: LLMResponseDTO

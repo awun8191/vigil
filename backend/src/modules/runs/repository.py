@@ -113,6 +113,18 @@ class RunsRepository(Protocol):
         """
         ...
 
+    async def latest_run_for_session(self, session_id: UUID) -> RunDTO | None:
+        """
+        Return the newest run owning a message in the session.
+
+        Args:
+            session_id: UUID of the chat session.
+
+        Returns:
+            Newest RunDTO or None when the session has no runs.
+        """
+        ...
+
     async def create_run(self, data: RunCreateDTO) -> RunDTO:
         """
         Create and persist a new run in initial status.

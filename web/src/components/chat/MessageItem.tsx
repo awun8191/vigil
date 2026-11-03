@@ -1,10 +1,11 @@
 import { motion, useReducedMotion } from 'framer-motion';
-import type { ChatMessage } from '@/types';
+import { AlertCircle } from 'lucide-react';
+import type { StreamMessage } from '@/types';
 import { Message } from '@/components/ui/c-message-3-utils/message';
 import { Bubble, BubbleContent } from '@/components/ui/c-message-3-utils/bubble';
 
 interface Props {
-  message: ChatMessage;
+  message: StreamMessage;
   /** Set when this message opens a new day, rendered as a labelled divider. */
   divider?: string;
   /**
@@ -86,6 +87,13 @@ export function MessageItem({ message, divider, staggerIndex = 0 }: Props) {
                 <BubbleContent>{message.content}</BubbleContent>
               </motion.div>
             </Bubble>
+
+            {message.local_state === 'failed' && message.failure_reason ? (
+              <div className="mt-1 flex items-center gap-1.5 text-[12px] text-[var(--text-muted)]">
+                <AlertCircle size={13} strokeWidth={1.75} className="shrink-0" />
+                {message.failure_reason}
+              </div>
+            ) : null}
           </motion.div>
         </div>
       </Message>

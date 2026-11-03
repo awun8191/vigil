@@ -1,46 +1,55 @@
-"""Chat service implementing direct interactive conversation sessions."""
+"""Chat service implementing direct interactive conversation sessions.
+
+A chat session is a thread row, its turns are rows of the unified ``messages``
+table. Agent replies do not stream through this module: the in-app chat sends
+a message by creating a run (``POST /runs`` with the thread as ``session_id``)
+and the RunLoop persists each reply into the same table, so ``get_history``
+returns the full conversation across both paths.
+"""
 from __future__ import annotations
 
-from datetime import datetime, timezone
-from typing import AsyncIterator, ClassVar
-from uuid import UUID, uuid4
+from uuid import UUID
+
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.config.exceptions import NotFoundError
-from src.config.settings import Settings
-from src.integrations.repositories import LLMClientProtocol
 from src.modules.chat.data import ChatMessageResponse
 from src.modules.chat.repository import (
     ChatMessageCreateDTO,
     ChatMessageDTO,
+    ChatRepository,
     ChatSessionDTO,
 )
-from src.modules.memory.repository import MemoryRepository
+from src.modules.chat.state import InMemoryChatRepository, SqlChatRepository
 
 
 class ChatService:
-    """
-    Chat service satisfying ChatRepository via duck typing.
-    Constructor dependency injection of session, settings, llm, and memory.
+    """Chat service satisfying ChatRepository via duck typing.
+
+    The constructor picks the repository: the SQL implementation on a request
+    database session, the in-memory one when the service is built without a
+    session (tests, the CLI harness).
     """
 
-    _sessions: ClassVar[dict[UUID, ChatSessionDTO]] = {}
-    _messages: ClassVar[dict[UUID, list[ChatMessageDTO]]] = {}
+    _repo: ChatRepository
 
     def __init__(
         self,
-        session: AsyncSession,
-        settings: Settings,
-        llm: LLMClientProtocol | None = None,
-        memory_service: MemoryRepository | None = None,
+        session: AsyncSession | None,
+        settings: object,
+        repository: ChatRepository | None = None,
     ) -> None:
         self.session = session
         self.settings = settings
-        self.llm = llm
-        self.memory_service = memory_service
+        if repository is not None:
+            self._repo = repository
+        elif session is not None:
+            self._repo = SqlChatRepository(session)
+        else:
+            self._repo = InMemoryChatRepository()
 
     async def get_session(self, session_id: UUID) -> ChatSessionDTO | None:
-        return self._sessions.get(session_id)
+        return await self._repo.get_session(session_id)
 
     async def list_user_sessions(
         self,
@@ -48,56 +57,17 @@ class ChatService:
         limit: int = 50,
         offset: int = 0,
     ) -> list[ChatSessionDTO]:
-        user_sessions = [s for s in self._sessions.values() if s.user_id == user_id]
-        user_sessions.sort(key=lambda s: s.updated_at, reverse=True)
-        return user_sessions[offset : offset + limit]
+        return await self._repo.list_user_sessions(user_id, limit, offset)
 
     async def create_session(
         self,
         user_id: UUID,
         title: str | None = None,
     ) -> ChatSessionDTO:
-        sess_id = uuid4()
-        now = datetime.now(timezone.utc)
-        session = ChatSessionDTO(
-            session_id=sess_id,
-            user_id=user_id,
-            title=title or "New Chat",
-            created_at=now,
-            updated_at=now,
-            message_count=0,
-        )
-        self._sessions[sess_id] = session
-        self._messages[sess_id] = []
-        return session
+        return await self._repo.create_session(user_id, title)
 
     async def save_message(self, data: ChatMessageCreateDTO) -> ChatMessageDTO:
-        msg_id = uuid4()
-        now = datetime.now(timezone.utc)
-        msg = ChatMessageDTO(
-            id=msg_id,
-            session_id=data.session_id,
-            role=data.role,
-            content=data.content,
-            created_at=now,
-        )
-        if data.session_id not in self._messages:
-            self._messages[data.session_id] = []
-        self._messages[data.session_id].append(msg)
-
-        # Bump session
-        sess = self._sessions.get(data.session_id)
-        if sess:
-            updated_sess = ChatSessionDTO(
-                session_id=sess.session_id,
-                user_id=sess.user_id,
-                title=sess.title,
-                created_at=sess.created_at,
-                updated_at=now,
-                message_count=sess.message_count + 1,
-            )
-            self._sessions[data.session_id] = updated_sess
-        return msg
+        return await self._repo.save_message(data)
 
     async def get_history(
         self,
@@ -105,38 +75,28 @@ class ChatService:
         limit: int = 50,
         offset: int = 0,
     ) -> list[ChatMessageDTO]:
-        msgs = self._messages.get(session_id, [])
-        return msgs[offset : offset + limit]
+        return await self._repo.get_history(session_id, limit, offset)
 
     async def delete_session(self, session_id: UUID) -> bool:
-        if session_id in self._sessions:
-            del self._sessions[session_id]
-            self._messages.pop(session_id, None)
-            return True
-        return False
+        return await self._repo.delete_session(session_id)
 
-    # Domain Orchestration Methods
+    # -- domain orchestration ------------------------------------------------
+
     async def send_message(
         self,
         session_id: UUID,
         user_id: UUID,
         content: str,
     ) -> ChatMessageResponse:
-        """Save user message, retrieve context, invoke LLM, and persist assistant response."""
-        await self.save_message(ChatMessageCreateDTO(session_id=session_id, role="user", content=content))
-        asst_msg = await self.save_message(
-            ChatMessageCreateDTO(session_id=session_id, role="assistant", content="Assistant reply placeholder")
-        )
-        return ChatMessageResponse.model_validate(asst_msg)
+        """Persist one user turn; the reply comes from a run, not this endpoint.
 
-    async def stream_reply(
-        self,
-        session_id: UUID,
-        user_id: UUID,
-        content: str,
-    ) -> AsyncIterator[str]:
-        """Stream assistant response tokens via SSE."""
-        await self.save_message(ChatMessageCreateDTO(session_id=session_id, role="user", content=content))
-        sample_tokens = ["Hello! ", "How ", "can ", "I ", "assist ", "you ", "today?"]
-        for token in sample_tokens:
-            yield token
+        Ownership is enforced here: the thread of another user reads as not
+        found, never as a partial view of their messages.
+        """
+        thread = await self.get_session(session_id)
+        if thread is None or thread.user_id != user_id:
+            raise NotFoundError(f"Chat session {session_id} not found")
+        msg = await self.save_message(
+            ChatMessageCreateDTO(session_id=session_id, role="user", content=content)
+        )
+        return ChatMessageResponse.model_validate(msg)

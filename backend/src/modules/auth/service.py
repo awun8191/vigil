@@ -3,11 +3,11 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 import secrets
-from typing import ClassVar
 from uuid import UUID, uuid4
+
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.config.exceptions import NotFoundError, UnauthorizedError
+from src.config.exceptions import UnauthorizedError
 from src.config.security import hash_token
 from src.config.settings import Settings
 from src.modules.auth.data import (
@@ -20,43 +20,49 @@ from src.modules.auth.repository import (
     PairingCodeDTO,
     UserDTO,
 )
+from src.modules.auth.state import DEFAULT_USER_ID, InMemoryAuthStore, SqlAuthStore
 
 
 class AuthService:
     """
     Device authentication and pairing service satisfying AuthRepository via duck typing.
-    Constructor injection of session and settings.
+
+    The store swaps underneath the logic: the SQL implementation on a request
+    database session keeps users and devices durable across restarts, the
+    in-memory one serves tests and the CLI harness. Pairing codes stay
+    process-local in either case, each startup issues fresh ones.
     """
 
-    # In-memory stores for fast device and pairing code lookups across requests
-    _active_pairing_codes: ClassVar[dict[str, PairingCodeDTO]] = {}
-    _devices: ClassVar[dict[str, DeviceDTO]] = {}
-    _devices_by_id: ClassVar[dict[UUID, DeviceDTO]] = {}
-    _users: ClassVar[dict[UUID, UserDTO]] = {}
-
-    def __init__(self, session: AsyncSession, settings: Settings) -> None:
+    def __init__(self, session: AsyncSession | None, settings: Settings) -> None:
         self.session = session
         self.settings = settings
+        if session is not None:
+            self._store: InMemoryAuthStore | SqlAuthStore = SqlAuthStore(session)
+        else:
+            self._store = InMemoryAuthStore()
         # Test devices are never seeded here. Only the test suite calls
         # seed_test_devices(), and that method refuses to run outside APP_ENV=test.
 
     def seed_test_devices(self) -> None:
-        """Seed the deterministic test device tokens.
+        """Seed the deterministic test device tokens into the in-memory store.
 
         This method exists for the test suite only. It raises unless APP_ENV is
-        "test", so a development or production process can never obtain a device
-        that authenticates by well-known token.
+        "test", so a development or production process can never obtain a
+        device that authenticates by well-known token. HTTP-level tests reach
+        the SQL store instead, so the conftest seeds those rows in the test
+        database directly.
         """
         if self.settings.APP_ENV != "test":
             raise RuntimeError(
                 "seed_test_devices() requires APP_ENV='test' "
                 f"(got {self.settings.APP_ENV!r})"
             )
-        default_user_id = UUID("00000000-0000-0000-0000-000000000001")
-        if default_user_id not in self._users:
+        from src.modules.auth.state import DEFAULT_USER_ID, InMemoryAuthStore
+
+        if DEFAULT_USER_ID not in InMemoryAuthStore.users:
             now = datetime.now(timezone.utc)
-            self._users[default_user_id] = UserDTO(
-                id=default_user_id,
+            InMemoryAuthStore.users[DEFAULT_USER_ID] = UserDTO(
+                id=DEFAULT_USER_ID,
                 display_name="Default User",
                 settings={},
                 created_at=now,
@@ -72,10 +78,10 @@ class AuthService:
         now = datetime.now(timezone.utc)
         for raw_tok in test_tokens:
             h = hash_token(raw_tok)
-            if h not in self._devices:
+            if h not in InMemoryAuthStore.devices:
                 dev = DeviceDTO(
                     id=uuid4(),
-                    user_id=default_user_id,
+                    user_id=DEFAULT_USER_ID,
                     name="Test Device",
                     token_hash=h,
                     push_token=None,
@@ -83,90 +89,34 @@ class AuthService:
                     revoked_at=None,
                     created_at=now,
                 )
-                self._devices[h] = dev
-                self._devices_by_id[dev.id] = dev
+                InMemoryAuthStore.devices[h] = dev
+                InMemoryAuthStore.devices_by_id[dev.id] = dev
 
     async def get_device_by_token_hash(self, token_hash: str) -> DeviceDTO | None:
         """Lookup active (non-revoked) device record by SHA-256 token hash."""
-        device = self._devices.get(token_hash)
-        if device and device.revoked_at is None:
-            return device
-        return None
+        return await self._store.get_device_by_token_hash(token_hash)
 
     async def create_device(self, data: DeviceCreateDTO) -> DeviceDTO:
         """Persist new device record linked to user."""
-        device_id = uuid4()
-        now = datetime.now(timezone.utc)
-        device = DeviceDTO(
-            id=device_id,
-            user_id=data.user_id,
-            name=data.name,
-            token_hash=data.token_hash,
-            push_token=data.push_token,
-            last_seen_at=now,
-            revoked_at=None,
-            created_at=now,
-        )
-        self._devices[data.token_hash] = device
-        self._devices_by_id[device_id] = device
-        return device
+        return await self._store.create_device(data)
 
     async def update_device_last_seen(self, device_id: UUID, seen_at: datetime) -> None:
         """Update last_seen_at timestamp for active device."""
-        device = self._devices_by_id.get(device_id)
-        if device:
-            updated = DeviceDTO(
-                id=device.id,
-                user_id=device.user_id,
-                name=device.name,
-                token_hash=device.token_hash,
-                push_token=device.push_token,
-                last_seen_at=seen_at,
-                revoked_at=device.revoked_at,
-                created_at=device.created_at,
-            )
-            self._devices[device.token_hash] = updated
-            self._devices_by_id[device_id] = updated
+        await self._store.update_device_last_seen(device_id, seen_at)
 
     async def revoke_device(self, device_id: UUID) -> bool:
         """Mark device as revoked by setting revoked_at timestamp."""
-        device = self._devices_by_id.get(device_id)
-        if not device:
-            return False
-        revoked = DeviceDTO(
-            id=device.id,
-            user_id=device.user_id,
-            name=device.name,
-            token_hash=device.token_hash,
-            push_token=device.push_token,
-            last_seen_at=device.last_seen_at,
-            revoked_at=datetime.now(timezone.utc),
-            created_at=device.created_at,
-        )
-        self._devices[device.token_hash] = revoked
-        self._devices_by_id[device_id] = revoked
-        return True
+        return await self._store.revoke_device(device_id)
 
     async def get_or_create_default_user(self, display_name: str = "Default User") -> UserDTO:
         """Ensure default local user account exists."""
-        default_id = UUID("00000000-0000-0000-0000-000000000001")
-        if default_id in self._users:
-            return self._users[default_id]
-        now = datetime.now(timezone.utc)
-        user = UserDTO(
-            id=default_id,
-            display_name=display_name,
-            settings={},
-            created_at=now,
-            updated_at=now,
-        )
-        self._users[default_id] = user
-        return user
+        return await self._store.get_or_create_default_user(display_name)
 
     async def get_user_by_id(self, user_id: UUID) -> UserDTO | None:
         """Retrieve user record by ID."""
-        if user_id in self._users:
-            return self._users[user_id]
+        user = await self._store.get_user_by_id(user_id)
+        if user is not None:
+            return user
         default_user = await self.get_or_create_default_user()
         if default_user.id == user_id:
             return default_user
@@ -174,16 +124,11 @@ class AuthService:
 
     async def store_pairing_code(self, pairing: PairingCodeDTO) -> None:
         """Store generated pairing code."""
-        self._active_pairing_codes[pairing.code] = pairing
+        await self._store.store_pairing_code(pairing)
 
     async def validate_and_consume_pairing_code(self, code: str) -> PairingCodeDTO | None:
         """Validate pairing code, verifying expiration, and consume it atomically."""
-        pairing = self._active_pairing_codes.pop(code, None)
-        if not pairing:
-            return None
-        if datetime.now(timezone.utc) > pairing.expires_at:
-            return None
-        return pairing
+        return await self._store.validate_and_consume_pairing_code(code)
 
     # Domain Orchestration Methods
     async def generate_startup_pairing_code(self) -> str:
@@ -207,6 +152,12 @@ class AuthService:
                 message="Invalid or expired pairing code",
                 code="INVALID_PAIRING_CODE",
             )
+
+        # The default user row must exist before the device FK can land; on the
+        # SQL store the row appears here on the request session.
+        paired_user = pairing.user_id
+        if paired_user == DEFAULT_USER_ID:
+            await self._store.get_or_create_default_user()
 
         raw_token = f"vgt_{secrets.token_urlsafe(32)}"
         token_hash_val = hash_token(raw_token)

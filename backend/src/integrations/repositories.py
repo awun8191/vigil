@@ -128,6 +128,7 @@ class LLMStreamChunkDTO(BaseModel):
     )
     done: bool = Field(False, description="True if stream has concluded")
     finish_reason: str | None = Field(None, description="Stream termination reason")
+    usage: dict[str, Any] | None = Field(None, description="Provider usage on the final chunk")
 
 
 @runtime_checkable

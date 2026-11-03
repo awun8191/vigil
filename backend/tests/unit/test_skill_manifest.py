@@ -202,3 +202,42 @@ def test_collect_skill_files_rejects_a_missing_directory(tmp_path: Path) -> None
     """A missing skill directory is a not-found error."""
     with pytest.raises(NotFoundError):
         collect_skill_files(tmp_path / "absent")
+
+
+def test_bundled_skills_have_valid_manifests_and_core_context_embeds_philosophy() -> None:
+    """Every bundled skill has a valid manifest, and Karpathy/Brainstorming live in core context."""
+    from src.modules.runs.core_context import (
+        DEFAULT_BUNDLED_SKILLS,
+        build_core_system_prompt,
+    )
+    from src.modules.skills.service import (
+        BUNDLED_SKILLS_ROOT,
+        locate_skill_dir,
+        read_manifest,
+    )
+
+    assert BUNDLED_SKILLS_ROOT.is_dir()
+    bundled_names = sorted(p.name for p in BUNDLED_SKILLS_ROOT.iterdir() if p.is_dir())
+    assert set(bundled_names) == set(DEFAULT_BUNDLED_SKILLS)
+    assert "karpathy-guidelines" not in bundled_names
+    assert "brainstorming" not in bundled_names
+
+    for name in DEFAULT_BUNDLED_SKILLS:
+        located = locate_skill_dir("/nonexistent/skills/root", name)
+        assert located.is_dir()
+        manifest = read_manifest(located)
+        assert manifest.name == name
+        assert manifest.version
+        files = collect_skill_files(located)
+        assert "SKILL.md" in files
+
+    prompt = build_core_system_prompt(skills=DEFAULT_BUNDLED_SKILLS)
+    assert "Think Before Coding" in prompt
+    assert "Simplicity First" in prompt
+    assert "Surgical Changes" in prompt
+    assert "Goal-Driven Execution" in prompt
+    assert "Streamlined Brainstorming" in prompt
+    assert "high-end-visual-design" in prompt
+    assert "ASD-STE100" in prompt
+    assert "Emoji" in prompt
+

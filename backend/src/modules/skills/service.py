@@ -38,6 +38,9 @@ from src.schemas.skills import SkillModel
 #: The manifest file at the top of a skill directory.
 MANIFEST_FILENAME = "SKILL.md"
 
+#: Built-in core skills bundled with the Vigil runtime.
+BUNDLED_SKILLS_ROOT: Path = (Path(__file__).resolve().parent / "bundled").resolve()
+
 #: Every field that the frontmatter must hold.
 MANIFEST_REQUIRED_FIELDS: tuple[str, ...] = ("name", "description", "version")
 
@@ -100,6 +103,22 @@ def resolve_skill_dir(root: str | Path, name: str) -> Path:
     if target == base or not target.is_relative_to(base):
         raise ValidationError(f"skill path escapes the skills root: {name!r}")
     return target
+
+
+def locate_skill_dir(root: str | Path, name: str) -> Path:
+    """Locate an installed or bundled skill directory by ``name``.
+
+    Checks the configured ``root`` first. If that directory does not exist on
+    disk, falls back to :data:`BUNDLED_SKILLS_ROOT` when a bundled skill with
+    ``name`` is shipped with the codebase.
+    """
+    primary = resolve_skill_dir(root, name)
+    if primary.is_dir():
+        return primary
+    bundled = resolve_skill_dir(BUNDLED_SKILLS_ROOT, name)
+    if bundled.is_dir():
+        return bundled
+    return primary
 
 
 def parse_frontmatter(text: str) -> dict[str, Any]:
@@ -479,7 +498,7 @@ class SkillsService:
         Returns:
             The relative names of the files that the copy wrote, in order.
         """
-        skill_dir = resolve_skill_dir(self.settings.SKILLS_ROOT, name)
+        skill_dir = locate_skill_dir(self.settings.SKILLS_ROOT, name)
         files = await asyncio.to_thread(collect_skill_files, skill_dir)
         return await write_skill_files(files, name, sandbox_runner, container_id)
 
@@ -492,6 +511,36 @@ class SkillsService:
         """Copy each named skill into the sandbox workspace."""
         for name in skill_names:
             await self.load_into_sandbox(name, sandbox_runner, container_id)
+
+    async def seed_bundled_skills(self) -> list[SkillDTO]:
+        """Register all bundled skills in the skills registry if not already present.
+
+        Returns:
+            The list of registered or updated :class:`SkillDTO` entries for bundled skills.
+        """
+        if not BUNDLED_SKILLS_ROOT.is_dir():
+            return []
+        seeded: list[SkillDTO] = []
+        for entry in sorted(BUNDLED_SKILLS_ROOT.iterdir()):
+            if not entry.is_dir():
+                continue
+            manifest_file = entry / MANIFEST_FILENAME
+            if not manifest_file.is_file():
+                continue
+            manifest = await asyncio.to_thread(read_manifest, entry)
+            dto = await self.save_skill(
+                SkillCreateDTO(
+                    name=manifest.name,
+                    description=manifest.description,
+                    version=manifest.version,
+                    source="bundled",
+                    commit=None,
+                    enabled=True,
+                    storage_path=str(entry.resolve()),
+                )
+            )
+            seeded.append(dto)
+        return seeded
 
     @staticmethod
     def _to_dto(row: SkillModel) -> SkillDTO:
@@ -539,12 +588,14 @@ async def write_skill_files(
 
 
 __all__ = [
+    "BUNDLED_SKILLS_ROOT",
     "COMMIT_SHA_PATTERN",
     "MANIFEST_FILENAME",
     "SKILL_NAME_PATTERN",
     "SkillManifest",
     "SkillsService",
     "collect_skill_files",
+    "locate_skill_dir",
     "parse_frontmatter",
     "parse_manifest",
     "read_manifest",

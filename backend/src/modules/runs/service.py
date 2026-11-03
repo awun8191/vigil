@@ -19,7 +19,11 @@ from src.config.settings import Settings
 from src.integrations.repositories import LLMClientProtocol, SandboxRunnerProtocol
 from src.modules.jobs.repository import JobDTO, JobsRepository
 from src.modules.runs.barrier import InvariantViolation
-from src.modules.runs.tools import openai_tool_declarations
+from src.modules.runs.core_context import (
+    DEFAULT_BUNDLED_SKILLS,
+    build_core_system_prompt,
+)
+from src.modules.runs.tools import TOOLS, openai_tool_declarations
 from src.modules.runs.loop import (
     CompactionProvider,
     LoopDependencyMissing,
@@ -126,6 +130,10 @@ class RunsService:
     async def get_run_by_id(self, run_id: UUID) -> RunDTO | None:
         """Return one run by id."""
         return await self.journal.get_run(run_id)
+
+    async def latest_run_for_session(self, session_id: UUID) -> RunDTO | None:
+        """Return the newest run of a chat session, for client rehydration."""
+        return await self.journal.get_latest_run_for_session(session_id)
 
     async def create_run(self, data: RunCreateDTO) -> RunDTO:
         """Insert one run row in its initial status."""
@@ -388,6 +396,63 @@ class RunsService:
 
     async def save_agent_config(self, config: AgentConfigDTO) -> AgentConfigDTO:
         """Insert or replace one agent config."""
+        return await self.journal.save_config(config)
+
+    async def ensure_default_agent_config(
+        self,
+        *,
+        name: str = "vigil-default",
+        custom_instructions: str | None = None,
+    ) -> AgentConfigDTO:
+        """Return or create the default Vigil agent configuration.
+
+        The default configuration embeds the Karpathy engineering guidelines,
+        streamlined Brainstorming discipline, and ASD-STE100 technical writing
+        and emoji guidelines in its core ``system_prompt``, enables all 11
+        harness tools (including ``skill_load``, ``web_search``, and ``web_fetch``),
+        and provisions the 5 bundled design, coding, and research skills.
+        """
+        tools = list(TOOLS.keys())
+        skills = list(DEFAULT_BUNDLED_SKILLS)
+        expected_prompt = build_core_system_prompt(
+            custom_instructions,
+            skills=skills,
+        )
+        approval_policy = {tool_name: "local" for tool_name in tools}
+        approval_policy["ask_user"] = "external"
+        existing = await self.journal.get_config_by_name(name)
+        if existing is not None:
+            if (
+                existing.system_prompt == expected_prompt
+                and list(existing.tools) == tools
+                and list(existing.skills) == skills
+            ):
+                return existing
+            updated = AgentConfigDTO(
+                id=existing.id,
+                name=existing.name,
+                system_prompt=expected_prompt,
+                model=self.settings.REASONING_LLM_MODEL,
+                tools=tools,
+                skills=skills,
+                memory_scopes=list(existing.memory_scopes),
+                approval_policy=approval_policy,
+                limits=dict(existing.limits) if existing.limits else {"max_cost_micros": 0},
+            )
+            return await self.journal.save_config(updated)
+        config = AgentConfigDTO(
+            id=uuid4(),
+            name=name,
+            system_prompt=expected_prompt,
+            model=self.settings.REASONING_LLM_MODEL,
+            tools=tools,
+            skills=skills,
+            memory_scopes=["global"],
+            approval_policy=approval_policy,
+            # The agent_configs check constraint requires the max_cost_micros key;
+            # 0 means no budget ceiling (see record_cost_micros, limit <= 0 skips).
+            limits={"max_cost_micros": 0},
+        )
         return await self.journal.save_config(config)
 
     # -- domain orchestration ---------------------------------------------

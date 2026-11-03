@@ -527,6 +527,8 @@ class RunToolExecutor:
     The class satisfies :class:`src.modules.runs.loop.ToolExecutor`.
     """
 
+    HOST_ONLY_TOOLS: frozenset[str] = frozenset({"web_search", "web_fetch", "manage_tasks"})
+
     def __init__(
         self,
         *,
@@ -544,13 +546,20 @@ class RunToolExecutor:
         self.sandbox = sandbox
         self.mcp_host = mcp_host
         self.connector_id = connector_id
+        base_path = Path(settings.WORKSPACE_BASE_PATH)
+        if delivery_dir is None:
+            try:
+                base_path.mkdir(parents=True, exist_ok=True)
+            except OSError:
+                base_path = Path("/tmp/vigil/workspaces")
+                base_path.mkdir(parents=True, exist_ok=True)
         self.delivery_dir = (
             delivery_dir
             if delivery_dir is not None
-            else Path(settings.WORKSPACE_BASE_PATH) / "delivery" / str(run_id)
+            else base_path / "delivery" / str(run_id)
         )
         self.snapshot_tar = (
-            Path(settings.WORKSPACE_BASE_PATH) / "snapshots" / f"{run_id}.tar"
+            base_path / "snapshots" / f"{run_id}.tar"
         )
         self._container_id: str | None = None
 
@@ -600,7 +609,10 @@ class RunToolExecutor:
         """Run one local tool in the sandbox and return its result."""
         from src.modules.runs.tools import ToolContext, invoke_tool
 
-        container_id = await self.start()
+        if name in self.HOST_ONLY_TOOLS and self._container_id is None:
+            container_id = "host-only"
+        else:
+            container_id = await self.start()
         context = ToolContext(
             runner=self.sandbox,
             container_id=container_id,

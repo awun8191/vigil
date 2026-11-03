@@ -109,15 +109,114 @@ class LLMClient:
         tier: str = "reasoning",
         max_tokens: int | None = None,
     ) -> AsyncIterator[LLMStreamChunkDTO]:
-        """Stream assistant response tokens incrementally."""
-        resp = await self.complete(messages, tools, temperature, tier, max_tokens)
-        text = resp.content or ""
-        # Yield in tokens/words for streaming
-        for word in text.split(" "):
-            yield LLMStreamChunkDTO(delta_text=f"{word} ")
-        if resp.tool_calls:
-            for tc in resp.tool_calls:
-                yield LLMStreamChunkDTO(tool_calls=[tc])
+        """Stream assistant response tokens incrementally.
+
+        Calls the provider with ``stream=true`` and yields one chunk per
+        ``delta.content`` fragment. Tool call fragments accumulate internally and
+        are emitted once, complete, on the final chunk. Usage rides the last
+        chunk when the provider sends ``stream_options.include_usage``.
+        """
+        api_key = self.settings.FAST_LLM_API_KEY if tier == "fast" else self.settings.REASONING_LLM_API_KEY
+        if not api_key or self.settings.APP_ENV == "test":
+            resp = self._fallback_complete(messages, tools, tier)
+            text = resp.content or ""
+            for word in text.split(" "):
+                yield LLMStreamChunkDTO(delta_content=f"{word} ", tool_call_chunks=None, done=False, finish_reason=None, usage=None)
+            yield LLMStreamChunkDTO(delta_content="", tool_call_chunks=None, done=True, finish_reason="stop", usage=None)
+            return
+
+        base_url = (
+            self.settings.FAST_LLM_BASE_URL if tier == "fast" else self.settings.REASONING_LLM_BASE_URL
+        ).rstrip("/")
+        model = self.settings.FAST_LLM_MODEL if tier == "fast" else self.settings.REASONING_LLM_MODEL
+
+        payload: dict[str, Any] = {
+            "model": model,
+            "messages": messages,
+            "temperature": temperature,
+            "stream": True,
+            "stream_options": {"include_usage": True},
+        }
+        if tools:
+            payload["tools"] = tools
+        if max_tokens:
+            # Reasoning models (e.g., muse-spark) count reasoning tokens toward max_tokens.
+            # Ensure a floor so reasoning tokens do not truncate the final response to null.
+            effective_max_tokens = max(max_tokens, 1024) if "muse-spark" in model else max_tokens
+            payload["max_tokens"] = effective_max_tokens
+
+        client = self._client or httpx.AsyncClient(timeout=120.0)
+        own_client = self._client is None
+        call_fragments: dict[int, dict[str, Any]] = {}
+        usage: dict[str, Any] = {}
+        finish_reason = None
+        try:
+            async with client.stream(
+                "POST",
+                f"{base_url}/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                    "User-Agent": "vigil-agent/1.0",
+                },
+                json=payload,
+            ) as res:
+                res.raise_for_status()
+                async for line in res.aiter_lines():
+                    if not line.startswith("data:"):
+                        continue
+                    data = line[len("data:"):].strip()
+                    if not data or data == "[DONE]":
+                        continue
+                    event = json.loads(data)
+                    if event.get("usage"):
+                        usage = event["usage"]
+                    choice = (event.get("choices") or [{}])[0]
+                    if choice.get("finish_reason"):
+                        finish_reason = choice["finish_reason"]
+                    delta = choice.get("delta") or {}
+                    text = delta.get("content")
+                    if isinstance(text, str) and text:
+                        yield LLMStreamChunkDTO(delta_content=text, tool_call_chunks=None, done=False, finish_reason=None, usage=None)
+                    for fragment in delta.get("tool_calls") or []:
+                        index = int(fragment.get("index", 0))
+                        slot = call_fragments.setdefault(
+                            index, {"id": "", "name": "", "arguments": ""}
+                        )
+                        if fragment.get("id"):
+                            slot["id"] = fragment["id"]
+                        fn = fragment.get("function") or {}
+                        if fn.get("name"):
+                            slot["name"] = fn["name"]
+                        if "arguments" in fn:
+                            slot["arguments"] += str(fn["arguments"])
+            for try_tool_call in sorted(call_fragments):
+                slot = call_fragments[try_tool_call]
+                raw_args = slot["arguments"]
+                args: dict[str, Any]
+                if isinstance(raw_args, dict):
+                    args = raw_args
+                else:
+                    try:
+                        args = json.loads(raw_args)
+                    except Exception:
+                        args = {}
+                parsed = LLMToolCallDTO(
+                    id=slot["id"] or f"call_{try_tool_call}",
+                    name=slot["name"],
+                    arguments=args,
+                )
+                yield LLMStreamChunkDTO(delta_content="", done=False, finish_reason=finish_reason, tool_call_chunks=[parsed.model_dump(mode='json')])
+            yield LLMStreamChunkDTO(
+                delta_content="",
+                done=True,
+                finish_reason=finish_reason,
+                tool_call_chunks=None,
+                usage=usage,
+            )
+        finally:
+            if own_client:
+                await client.aclose()
 
     async def embed_texts(
         self,

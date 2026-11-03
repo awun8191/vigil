@@ -417,10 +417,15 @@ async def process_job(
     log.info("Completed job", job_id=str(job.id), job_type=job.type)
 
 
-async def run_worker() -> None:
+async def run_worker(
+    *,
+    stop_event: asyncio.Event | None = None,
+    install_signal_handlers: bool = True,
+) -> None:
     """Run background job worker loop."""
     settings = get_settings()
-    configure_logging(log_level=settings.LOG_LEVEL, log_format=settings.LOG_FORMAT)
+    if install_signal_handlers:
+        configure_logging(log_level=settings.LOG_LEVEL, log_format=settings.LOG_FORMAT)
     logger = get_logger("vigil.worker")
 
     worker_id = f"worker-{os.getpid()}-{uuid4().hex[:6]}"
@@ -432,14 +437,16 @@ async def run_worker() -> None:
         reap_interval=REAP_INTERVAL_SECONDS,
     )
 
-    stop_event = asyncio.Event()
+    if stop_event is None:
+        stop_event = asyncio.Event()
 
-    def handle_signal(sig: int, frame: object) -> None:
-        logger.info("Shutdown signal received", signal=sig)
-        stop_event.set()
+    if install_signal_handlers:
+        def handle_signal(sig: int, frame: object) -> None:
+            logger.info("Shutdown signal received", signal=sig)
+            stop_event.set()
 
-    signal.signal(signal.SIGINT, handle_signal)
-    signal.signal(signal.SIGTERM, handle_signal)
+        signal.signal(signal.SIGINT, handle_signal)
+        signal.signal(signal.SIGTERM, handle_signal)
 
     last_reap = 0.0
     last_idle_sweep = 0.0
@@ -520,8 +527,9 @@ async def run_worker() -> None:
             logger.error("Worker loop exception", error=str(exc))
 
         # Wait before next poll or until stop_event is set
+        poll_sleep = min(float(settings.JOB_POLL_INTERVAL_SECONDS), 1.0)
         try:
-            await asyncio.wait_for(stop_event.wait(), timeout=settings.JOB_POLL_INTERVAL_SECONDS)
+            await asyncio.wait_for(stop_event.wait(), timeout=poll_sleep)
         except asyncio.TimeoutError:
             pass
 

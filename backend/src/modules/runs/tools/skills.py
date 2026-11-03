@@ -17,6 +17,7 @@ from src.config.settings import get_settings
 from src.modules.runs.tools import Tool, ToolContext, ToolResult
 from src.modules.skills.service import (
     collect_skill_files,
+    locate_skill_dir,
     resolve_skill_dir,
     write_skill_files,
 )
@@ -41,7 +42,7 @@ async def skill_load(args: SkillLoadArgs, context: ToolContext) -> ToolResult:
     returns a failed result. The tool does not raise across the tool boundary.
     """
     try:
-        skill_dir = resolve_skill_dir(get_settings().SKILLS_ROOT, args.name)
+        skill_dir = locate_skill_dir(get_settings().SKILLS_ROOT, args.name)
         files = await asyncio.to_thread(collect_skill_files, skill_dir)
         written = await write_skill_files(
             files, args.name, context.runner, context.container_id

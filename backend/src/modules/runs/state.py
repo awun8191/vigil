@@ -26,7 +26,7 @@ from datetime import datetime, timezone
 from typing import Any, Literal, Protocol, runtime_checkable
 from uuid import UUID, uuid4
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import and_, delete, func, or_, select
 
 from src.config.exceptions import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -332,6 +332,10 @@ class RunJournal(Protocol):
         """Return one run or None."""
         ...
 
+    async def get_latest_run_for_session(self, session_id: UUID) -> RunDTO | None:
+        """Return the newest run that owns at least one message in the session."""
+        ...
+
     async def create_run(self, data: RunCreateDTO) -> RunDTO:
         """Insert one run row and return it."""
         ...
@@ -464,6 +468,22 @@ class InMemoryRunJournal:
     async def get_run(self, run_id: UUID) -> RunDTO | None:
         return self.runs.get(run_id)
 
+    async def get_latest_run_for_session(self, session_id: UUID) -> RunDTO | None:
+        """Return the newest run whose messages carry the session id."""
+        latest: tuple[RunDTO, str] | None = None
+        for run_id, rows in self.messages.items():
+            stamps = [row.created_at for row in rows if row.session_id == session_id]
+            if not stamps:
+                continue
+            run = self.runs.get(run_id)
+            if run is None:
+                continue
+            stamp = max(stamps)
+            key = stamp.isoformat() if hasattr(stamp, "isoformat") else str(stamp)
+            if latest is None or key > (latest[1] if latest else ""):
+                latest = (run, key)
+        return latest[0] if latest else None
+
     async def create_run(self, data: RunCreateDTO) -> RunDTO:
         now = _utc_now()
         run = RunDTO(
@@ -561,6 +581,27 @@ class InMemoryRunJournal:
 
     async def list_messages(self, run_id: UUID) -> list[MessageDTO]:
         return list(self.messages.get(run_id, ()))
+
+    async def list_session_history(
+        self,
+        session_id: UUID,
+        exclude_run_id: UUID | None = None,
+        limit: int = 40,
+    ) -> list[MessageDTO]:
+        """Return prior user and final assistant messages of a chat session."""
+        out: list[MessageDTO] = []
+        for r_id, msgs in self.messages.items():
+            if exclude_run_id is not None and r_id == exclude_run_id:
+                continue
+            for m in msgs:
+                if m.session_id != session_id:
+                    continue
+                if m.role == "user" or (
+                    m.role == "assistant" and not m.tool_calls and m.content
+                ):
+                    out.append(m)
+        out.sort(key=lambda m: m.created_at)
+        return out[-limit:]
 
     async def replace_messages(self, run_id: UUID, messages: list[MessageDTO]) -> None:
         self.messages[run_id] = list(messages)
@@ -815,7 +856,33 @@ class SqlRunJournal:
     # -- runs -------------------------------------------------------------
 
     async def get_run(self, run_id: UUID) -> RunDTO | None:
-        model = await self.session.get(RunModel, run_id)
+        try:
+            model = await self.session.get(RunModel, run_id, populate_existing=True)
+        except TypeError:
+            model = await self.session.get(RunModel, run_id)
+        return None if model is None else self._run_dto(model)
+
+    async def get_latest_run_for_session(self, session_id: UUID) -> RunDTO | None:
+        """Return the newest run that owns at least one message in the session.
+
+        The join rides the unified messages table (runs carry no session
+        column); newest means the run with the latest message timestamp.
+        """
+        latest_stamp = (
+            select(func.max(MessageModel.created_at))
+            .where(MessageModel.run_id == RunModel.id, MessageModel.session_id == session_id)
+            .correlate(RunModel)
+            .scalar_subquery()
+        )
+        exists_stmt = (
+            select(MessageModel.id)
+            .where(MessageModel.run_id == RunModel.id, MessageModel.session_id == session_id)
+            .exists()
+        )
+        result = await self.session.execute(
+            select(RunModel).where(exists_stmt).order_by(latest_stamp.desc()).limit(1)
+        )
+        model = result.scalars().first()
         return None if model is None else self._run_dto(model)
 
     async def create_run(self, data: RunCreateDTO) -> RunDTO:
@@ -923,6 +990,33 @@ class SqlRunJournal:
             .order_by(MessageModel.created_at.asc(), MessageModel.id.asc())
         )
         return [self._message_dto(row) for row in result.scalars().all()]
+
+    async def list_session_history(
+        self,
+        session_id: UUID,
+        exclude_run_id: UUID | None = None,
+        limit: int = 40,
+    ) -> list[MessageDTO]:
+        """Return prior user and final assistant messages of a chat session."""
+        stmt = select(MessageModel).where(
+            MessageModel.session_id == session_id,
+            MessageModel.role.in_(("user", "assistant")),
+        )
+        if exclude_run_id is not None:
+            stmt = stmt.where(
+                or_(
+                    MessageModel.run_id.is_(None),
+                    MessageModel.run_id != exclude_run_id,
+                )
+            )
+        stmt = stmt.order_by(MessageModel.created_at.asc(), MessageModel.id.asc())
+        result = await self.session.execute(stmt)
+        rows = [
+            row
+            for row in result.scalars().all()
+            if row.role == "user" or (row.role == "assistant" and not row.tool_calls and row.content)
+        ]
+        return [self._message_dto(row) for row in rows[-limit:]]
 
     async def replace_messages(self, run_id: UUID, messages: list[MessageDTO]) -> None:
         await self.session.execute(
