@@ -28,6 +28,9 @@ class ArtifactsService:
     process-local dict is the store only for a sessionless service (tests, the
     CLI harness); a read on a live session that fails raises instead of
     answering stale memory as if it were the row.
+
+    A write on a live session flushes and returns. The transaction boundary is
+    the caller's: the request session, the worker and the test own the commit.
     """
 
     _artifacts: ClassVar[dict[UUID, ArtifactDTO]] = {}
@@ -100,7 +103,7 @@ class ArtifactsService:
         )
         session = self._require_session()
         session.add(model)
-        await session.commit()
+        await session.flush()
         return self._to_dto(model)
 
     async def delete_artifact(self, artifact_id: UUID) -> bool:
@@ -111,7 +114,7 @@ class ArtifactsService:
         if model is None:
             return False
         await session.delete(model)
-        await session.commit()
+        await session.flush()
         return True
 
     # Domain Streaming Orchestration

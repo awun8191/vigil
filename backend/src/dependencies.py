@@ -668,7 +668,11 @@ class RunToolExecutor:
         }
 
     async def _register_artifact(self, tool_name: str, result: Any) -> None:
-        """Write one artifact row for a file that a tool delivered."""
+        """Write one artifact row for a file that a tool delivered.
+
+        The row joins the transaction that owns the session; the worker that
+        runs the job commits it with the rest of the run's writes.
+        """
         if self.session is None or not result.artifact_ref:
             return
         from src.schemas.runtime import ArtifactModel
@@ -683,7 +687,7 @@ class RunToolExecutor:
                 preview=None,
             )
         )
-        await self.session.commit()
+        await self.session.flush()
 
     async def close(self) -> None:
         """Snapshot /workspace and remove the run container. A missing container is not an error."""
