@@ -30,9 +30,10 @@ class LLMClient:
         max_tokens: int | None = None,
     ) -> LLMResponseDTO:
         """Execute non-streaming completion."""
-        # Use fallback if no API key is provided or during tests
+        # The fallback is for a missing key and for the test suite. A developer
+        # who sets a real key in a development .env must reach the provider.
         api_key = self.settings.FAST_LLM_API_KEY if tier == "fast" else self.settings.REASONING_LLM_API_KEY
-        if not api_key or self.settings.APP_ENV in ("test", "development"):
+        if not api_key or self.settings.APP_ENV == "test":
             return self._fallback_complete(messages, tools, tier)
 
         base_url = self.settings.FAST_LLM_BASE_URL if tier == "fast" else self.settings.REASONING_LLM_BASE_URL
