@@ -22,6 +22,7 @@ from src.dependencies import (
     build_runs_service,
     build_tool_executor,
     get_db_session,
+    get_llm_client,
     get_memory_service,
 )
 from src.modules.jobs.repository import JobCreateDTO, JobDTO
@@ -431,7 +432,13 @@ async def run_worker() -> None:
         try:
             async for session in get_db_session(settings):
                 jobs_service = JobsService(session=session, settings=settings)
-                context = JobContext(settings=settings, session=session)
+                # The real model client, not the stub. Without this the loop
+                # answers from its internal fake and no provider is ever called.
+                context = JobContext(
+                    settings=settings,
+                    session=session,
+                    llm=get_llm_client(settings=settings),
+                )
 
                 # 1. Reap stale locks on the fixed interval, not on every poll.
                 if should_reap:

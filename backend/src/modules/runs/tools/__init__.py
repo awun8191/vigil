@@ -195,6 +195,41 @@ async def invoke_tool(
     return await tool.invoke(arguments, context)
 
 
+def openai_tool_declarations(names: Sequence[str] | None = None) -> list[dict[str, Any]]:
+    """Return tools in the OpenAI `tools` wire shape.
+
+    The provider expects `{"type": "function", "function": {...}}`. Passing the
+    internal declaration shape straight through makes the model believe it has
+    no tools at all, and it answers "I cannot run commands".
+
+    Args:
+        names: Tool names to include. ``None`` includes the whole registry.
+
+    Returns:
+        One declaration per tool, ready for the request payload.
+    """
+    selected = (
+        list(names) if names is not None
+        else list(TOOLS.keys())
+    )
+    declarations: list[dict[str, Any]] = []
+    for name in selected:
+        tool = TOOLS.get(name)
+        if tool is None:
+            continue
+        declarations.append(
+            {
+                "type": "function",
+                "function": {
+                    "name": tool.name,
+                    "description": tool.description,
+                    "parameters": dict(tool.input_schema),
+                },
+            }
+        )
+    return declarations
+
+
 def tool_definitions() -> list[dict[str, Any]]:
     """Return the tool declarations for the model prompt."""
     return [
@@ -219,6 +254,7 @@ __all__ = [
     "ToolResult",
     "build_registry",
     "get_tool",
+    "openai_tool_declarations",
     "invoke_tool",
     "tool_definitions",
 ]

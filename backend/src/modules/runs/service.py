@@ -8,7 +8,7 @@ state machine and the journal in :mod:`state`, and the barrier invariant in
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import AsyncIterator
+from typing import Any, AsyncIterator, Sequence
 from uuid import UUID, uuid4
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -19,6 +19,7 @@ from src.config.settings import Settings
 from src.integrations.repositories import LLMClientProtocol, SandboxRunnerProtocol
 from src.modules.jobs.repository import JobDTO, JobsRepository
 from src.modules.runs.barrier import InvariantViolation
+from src.modules.runs.tools import openai_tool_declarations
 from src.modules.runs.loop import (
     LoopDependencyMissing,
     RunLoop,
@@ -91,6 +92,7 @@ class RunsService:
         *,
         observer: StageObserver | None = None,
         max_iterations: int = 40,
+        tool_schemas: Sequence[dict[str, Any]] | None = None,
     ) -> RunLoop:
         """
         Build a loop over the current dependencies.
@@ -108,6 +110,7 @@ class RunsService:
             tools=self.tools,
             policy=self.policy,
             observer=observer,
+            tool_schemas=tool_schemas,
             max_iterations=max_iterations,
         )
 
@@ -427,7 +430,14 @@ class RunsService:
         run = await self.journal.get_run(run_id)
         if run is None:
             raise NotFoundError(f"Run {run_id} not found")
-        loop = self.build_loop(observer=observer)
+        # Declare the tools this run may use. Without this the provider sees an
+        # empty tool list and the model refuses work it could do.
+        config = await self.journal.get_config(run.config_id)
+        declared = list(config.tools) if config is not None else []
+        loop = self.build_loop(
+            observer=observer,
+            tool_schemas=openai_tool_declarations(declared),
+        )
         try:
             result = await loop.run(run_id)
         except (InvariantViolation, LoopDependencyMissing) as exc:
