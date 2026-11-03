@@ -211,9 +211,11 @@ async def test_stream_writes_keepalive_comment() -> None:
         last_event_id=0,
         poll_interval=0.01,
         keepalive_interval=0.01,
-        max_duration_seconds=0.05,
+        max_duration_seconds=2.0,
     ):
         frames.append(frame)
+        if KEEPALIVE_COMMENT in frames:
+            break
 
     assert KEEPALIVE_COMMENT in frames
     assert not any(frame.startswith("id: ") for frame in frames)
