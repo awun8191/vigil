@@ -375,6 +375,10 @@ class RunJournal(Protocol):
         request session while the run is still executing. A store no longer
         commits, so the loop asks for this checkpoint after each step write.
         It is one commit per batch, not one per token.
+
+        A terminal failure also relies on this call: the worker rolls back the
+        job's transaction when a handler raises, so ``_fail_run`` checkpoints the
+        failed status and the ``run_failed`` step before it re-raises.
         """
         ...
 
