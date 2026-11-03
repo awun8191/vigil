@@ -1,11 +1,21 @@
 """External MCP server client: stdio and SSE transport, handshake, tool discovery.
 
-The client speaks a minimal newline-delimited JSON-RPC dialect: one ``initialize``
-request carrying ``protocolVersion``, ``capabilities`` and ``clientInfo``, the
-``notifications/initialized`` notification, then the work request (``tools/list``
-or ``tools/call``). Each message is a single JSON object per line, matched by
-``id``. Only the background worker calls this module. Request handlers never
-spawn a process: registration enqueues a ``discover_mcp_tools`` job and returns
+The stdio transport speaks a minimal newline-delimited JSON-RPC dialect: one
+``initialize`` request carrying ``protocolVersion``, ``capabilities`` and
+``clientInfo``, the ``notifications/initialized`` notification, then the work
+request (``tools/list`` or ``tools/call``). Each message is a single JSON object
+per line, matched by ``id``.
+
+The SSE transport does not do that. It posts one ``tools/list`` or ``tools/call``
+request and reads the answer, with no ``initialize`` request and no
+``notifications/initialized`` notification, so a server that enforces the
+handshake rejects it. TODO(StreamMCP): open the session (the ``GET`` event
+stream), keep the session id it returns, echo that id on every ``POST``, and
+send the initialize request and the initialized notification before the work
+request.
+
+Only the background worker calls this module. Request handlers never spawn a
+process: registration enqueues a ``discover_mcp_tools`` job and returns
 202, and the worker runs discovery there.
 """
 from __future__ import annotations
