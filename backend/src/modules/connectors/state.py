@@ -135,6 +135,10 @@ class SqlConnectorStore:
 
     The credential blob is written and read back unchanged. Nothing here logs
     it, and the response DTO already excludes it.
+
+    The store flushes and never commits or rolls back. The request session, the
+    worker or the test owns the transaction, so a service composes two writes
+    into one unit of work.
     """
 
     def __init__(self, session: AsyncSession) -> None:
@@ -217,11 +221,11 @@ class SqlConnectorStore:
             .returning(ConnectedAccountModel.id)
         )
         account_id = (await self.session.execute(statement)).scalar_one()
-        await self.session.commit()
+        await self.session.flush()
         model = await self.session.get(ConnectedAccountModel, account_id)
         if model is None:
-            # The upsert returned an id and committed, so the row must be
-            # readable. Nothing sensible is left to return if it is not.
+            # The upsert returned an id, so the row must be readable inside this
+            # transaction. Nothing sensible is left to return if it is not.
             raise RuntimeError(
                 f"connected account {account_id} is missing after a successful upsert"
             )
@@ -238,7 +242,6 @@ class SqlConnectorStore:
         model.status = status
         model.updated_at = _now()
         await self.session.flush()
-        await self.session.commit()
         return self._account_dto(model)
 
     async def register_server(self, server: MCPServerDTO) -> MCPServerDTO:
@@ -246,9 +249,11 @@ class SqlConnectorStore:
 
         Two registrations of one name can both pass the service's pre-check, and
         the unique index on ``name`` then rejects the second insert. That race is
-        a domain error, not a server fault: the transaction is rolled back and
-        the caller sees ``MCPRegistrationError`` instead of an IntegrityError
-        surfacing as a 500.
+        a domain error, not a server fault: the flush reports the constraint
+        violation and the caller sees ``MCPRegistrationError`` instead of an
+        IntegrityError surfacing as a 500. The store does not roll back: the
+        boundary that owns the transaction discards the aborted transaction,
+        which is why the error carries the domain meaning instead.
         """
         model = MCPServerModel(
             id=server.id,
@@ -262,9 +267,7 @@ class SqlConnectorStore:
         self.session.add(model)
         try:
             await self.session.flush()
-            await self.session.commit()
         except IntegrityError as exc:
-            await self.session.rollback()
             raise MCPRegistrationError(
                 f"an MCP server named {server.name!r} is already registered"
             ) from exc
@@ -294,7 +297,6 @@ class SqlConnectorStore:
             return False
         await self.session.delete(model)
         await self.session.flush()
-        await self.session.commit()
         return True
 
 
