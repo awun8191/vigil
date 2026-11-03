@@ -244,6 +244,9 @@ class MockRunsRepository:
     async def get_run_by_id(self, run_id: UUID) -> RunDTO | None:
         return self.mock_run
 
+    async def latest_run_for_session(self, session_id: UUID) -> RunDTO | None:
+        return self.mock_run
+
     async def create_run(self, data: RunCreateDTO) -> RunDTO:
         return self.mock_run
 
