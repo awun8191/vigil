@@ -70,7 +70,10 @@ def get_repository_files() -> list[Path]:
 def repo_ast_trees() -> list[tuple[Path, ast.Module]]:
     """Parse all discovered repository files into AST modules."""
     files = get_repository_files()
-    assert len(files) == 16, f"Expected exactly 16 repository files (15 modules + integrations), found {len(files)}"
+    # Every module with a repository protocol, plus the integrations set. The
+    # number moves when a module is added; the point of the guard is that the
+    # discovery found them all rather than silently none.
+    assert len(files) == 17, f"Expected exactly 17 repository files (16 modules + integrations), found {len(files)}"
     trees = []
     for f in files:
         content = f.read_text(encoding="utf-8")

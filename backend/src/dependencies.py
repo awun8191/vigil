@@ -654,6 +654,42 @@ def build_tool_executor(
     )
 
 
+def build_pricing_service(session: AsyncSession | None) -> Any:
+    """Build the pricing service over a session.
+
+    Args:
+        session: Database session, or None in a test.
+
+    Returns:
+        The pricing service. With no session, every model costs zero.
+    """
+    from src.modules.pricing.service import PricingService, SqlPricingRepository
+
+    if session is None:
+        return PricingService(repository=_EmptyPricingRepository())
+    return PricingService(repository=SqlPricingRepository(session))
+
+
+class _EmptyPricingRepository:
+    """A pricing repository with no rows. Every model then costs zero."""
+
+    async def get_by_model(self, model: str) -> Any:
+        return None
+
+    async def list_prices(self) -> list[Any]:
+        return []
+
+    async def upsert(self, data: Any) -> Any:
+        raise RuntimeError("no session: the pricing table is not writable")
+
+
+def get_pricing_service(
+    session: AsyncSession = Depends(get_db_session),
+) -> Any:
+    """FastAPI provider for the pricing service."""
+    return build_pricing_service(session)
+
+
 def build_runs_service(
     session: AsyncSession | None,
     settings: Settings,
@@ -691,6 +727,7 @@ def build_runs_service(
         sandbox=sandbox,
         llm=llm if llm is not None else get_llm_client(settings),
         tools=executor,
+        pricing=build_pricing_service(session),
     )
 
 
@@ -721,6 +758,7 @@ __all__ = [
     "get_auth_service",
     "get_cards_service",
     "get_triage_service",
+    "get_pricing_service",
     "get_runs_service",
     "get_approvals_service",
     "get_chat_service",

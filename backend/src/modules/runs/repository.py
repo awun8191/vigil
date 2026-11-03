@@ -34,6 +34,7 @@ class RunDTO:
     ended_at: datetime | None
     token_usage: dict[str, int]
     cost_usd: float
+    cost_micros: int = 0
 
 
 @dataclass(frozen=True)

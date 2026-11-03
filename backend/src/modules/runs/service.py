@@ -70,6 +70,7 @@ class RunsService:
         tools: ToolExecutor | None = None,
         policy: PartitionPolicy | None = None,
         jobs: JobsRepository | None = None,
+        pricing: Any | None = None,
     ) -> None:
         self.session = session
         self.settings = settings
@@ -77,6 +78,7 @@ class RunsService:
         self.llm = llm
         self.tools = tools
         self.policy = policy
+        self.pricing = pricing
         self.journal: RunJournal = journal or self._default_journal(session)
         self.jobs = jobs
 
@@ -111,6 +113,7 @@ class RunsService:
             policy=self.policy,
             observer=observer,
             tool_schemas=tool_schemas,
+            cost=self,
             max_iterations=max_iterations,
         )
 
@@ -213,6 +216,36 @@ class RunsService:
             child_ref = f"ws_{uuid4().hex}"
         await self.journal.set_workspace_ref(child_id, child_ref)
         return child_ref
+
+    async def charge(
+        self,
+        run_id: UUID,
+        model: str,
+        prompt_tokens: int,
+        completion_tokens: int,
+    ) -> int:
+        """Charge one model call to its run and return the micros added.
+
+        The rate comes from the price table. A model with no row costs zero, so
+        the run still records its token counts.
+
+        Args:
+            run_id: Run that pays for the call.
+            model: Model name of the call.
+            prompt_tokens: Prompt tokens of the call.
+            completion_tokens: Completion tokens of the call.
+
+        Returns:
+            Whole micros charged.
+        """
+        if self.pricing is None:
+            return 0
+        micros = await self.pricing.cost_micros(
+            model, prompt_tokens, completion_tokens
+        )
+        if micros:
+            await self.record_cost_micros(run_id, micros)
+        return micros
 
     async def record_cost_micros(self, run_id: UUID, amount_micros: int) -> RunDTO:
         """Charge one run and fail any ancestor whose budget is exceeded.

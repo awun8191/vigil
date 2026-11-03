@@ -477,6 +477,7 @@ class InMemoryRunJournal:
             ended_at=None,
             token_usage={"prompt": 0, "completion": 0, "total": 0},
             cost_usd=0.0,
+            cost_micros=0,
         )
         self.runs[run.id] = run
         self.messages[run.id] = []
@@ -509,6 +510,7 @@ class InMemoryRunJournal:
             ended_at=ended_at if ended_at is not None else (now if done else run.ended_at),
             token_usage=token_usage if token_usage is not None else run.token_usage,
             cost_usd=cost_usd if cost_usd is not None else run.cost_usd,
+            cost_micros=self.cost_micros.get(run_id, run.cost_micros),
         )
         self.runs[run_id] = updated
         return updated
@@ -529,6 +531,20 @@ class InMemoryRunJournal:
             raise KeyError(f"run {run_id} is absent from the journal")
         total = self.cost_micros.get(run_id, 0) + amount_micros
         self.cost_micros[run_id] = total
+        run = self.runs[run_id]
+        self.runs[run_id] = RunDTO(
+            id=run.id,
+            config_id=run.config_id,
+            card_id=run.card_id,
+            parent_run_id=run.parent_run_id,
+            depth=run.depth,
+            status=run.status,
+            started_at=run.started_at,
+            ended_at=run.ended_at,
+            token_usage=run.token_usage,
+            cost_usd=total / 1_000_000,
+            cost_micros=total,
+        )
         return total
 
     async def get_workspace_ref(self, run_id: UUID) -> str | None:
@@ -713,6 +729,7 @@ class SqlRunJournal:
             started_at=_as_utc(model.started_at),
             ended_at=_as_utc(model.ended_at) if model.ended_at is not None else None,
             token_usage=dict(model.token_usage or {}),
+            cost_micros=int(model.cost_micros or 0),
             cost_usd=(model.cost_micros or 0) / 1_000_000,
         )
 

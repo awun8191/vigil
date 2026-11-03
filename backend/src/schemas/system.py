@@ -176,3 +176,42 @@ class AuditLogModel(Base):
             id.desc(),
         ),
     )
+
+class ModelPriceModel(Base):
+    """Price of one model, in integer micros per million tokens.
+
+    Cost is money, so it is stored in integer micros and never in a float. The
+    loop multiplies the token counts of each call by these rates and adds the
+    result to ``runs.cost_micros``.
+    """
+
+    __tablename__ = "model_prices"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    model: Mapped[str] = mapped_column(String(255), nullable=False, unique=True)
+    prompt_micros_per_mtok: Mapped[int] = mapped_column(Integer, nullable=False)
+    completion_micros_per_mtok: Mapped[int] = mapped_column(Integer, nullable=False)
+    currency: Mapped[str] = mapped_column(
+        String(3), nullable=False, server_default="USD"
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "prompt_micros_per_mtok >= 0", name="ck_model_prices_prompt_non_negative"
+        ),
+        CheckConstraint(
+            "completion_micros_per_mtok >= 0",
+            name="ck_model_prices_completion_non_negative",
+        ),
+    )

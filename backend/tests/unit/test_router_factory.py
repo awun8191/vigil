@@ -22,8 +22,8 @@ def test_create_api_router_honors_custom_prefix() -> None:
     assert router.prefix == "/custom/api/v2"
 
 
-def test_module_factories_list_covers_all_14_modules() -> None:
-    """Verify all 15 domain modules are accounted for in MODULE_FACTORIES."""
+def test_module_factories_list_covers_all_modules() -> None:
+    """Verify every domain module is accounted for in MODULE_FACTORIES."""
     expected_modules = {
         "health",
         "auth",
@@ -40,10 +40,11 @@ def test_module_factories_list_covers_all_14_modules() -> None:
         "settings",
         "audit",
         "jobs",
+        "pricing",
     }
     registered_modules = {mod for mod, _ in MODULE_FACTORIES}
     assert registered_modules == expected_modules
-    assert len(MODULE_FACTORIES) == 15
+    assert len(MODULE_FACTORIES) == len(expected_modules)
 
 
 def test_no_bare_global_routers_in_config() -> None:

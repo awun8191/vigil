@@ -22,7 +22,12 @@ from src.schemas.runtime import (
     ThreadModel,
 )
 from src.schemas.skills import SkillModel
-from src.schemas.system import AuditLogModel, IdempotencyRecordModel, JobModel
+from src.schemas.system import (
+    AuditLogModel,
+    IdempotencyRecordModel,
+    JobModel,
+    ModelPriceModel,
+)
 from src.schemas.triage import CardActionModel, CardModel, TriageDecisionModel
 
 __all__ = [
@@ -57,4 +62,5 @@ __all__ = [
     "JobModel",
     "IdempotencyRecordModel",
     "AuditLogModel",
+    "ModelPriceModel",
 ]

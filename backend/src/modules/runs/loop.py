@@ -332,6 +332,7 @@ class RunLoop:
         compactor: CompactionProvider | None = None,
         observer: StageObserver | None = None,
         tool_schemas: Sequence[Mapping[str, Any]] | None = None,
+        cost: Any | None = None,
         max_iterations: int = 40,
         context_token_limit: int = 100_000,
         compact_ratio: float = 0.7,
@@ -342,6 +343,7 @@ class RunLoop:
         self.policy = policy
         self.compactor = compactor
         self.observer = observer or NullObserver()
+        self.cost = cost
         self.tool_schemas: list[dict[str, Any]] | None = (
             [dict(schema) for schema in tool_schemas] if tool_schemas else None
         )
@@ -452,6 +454,16 @@ class RunLoop:
         assistant = await self._record_assistant(run, response)
         stages.append("infer")
         await self.observer.on_stage(run_id, "infer")
+
+        # Charge the call. The rate lives in the price table, so a model with no
+        # row costs nothing and the run keeps its token counts.
+        if self.cost is not None:
+            await self.cost.charge(
+                run.id,
+                config.model,
+                int(response.prompt_tokens),
+                int(response.completion_tokens),
+            )
 
         calls = [ToolCall.from_wire(call) for call in assistant.tool_calls or []]
 

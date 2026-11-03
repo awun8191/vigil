@@ -33,6 +33,7 @@ MODULE_FACTORIES: list[tuple[str, str]] = [
     ("memory", "build_memory_router"),
     ("compaction", "build_compaction_router"),
     ("skills", "build_skills_router"),
+    ("pricing", "build_pricing_router"),
     ("connectors", "build_connectors_router"),
     ("settings", "build_settings_router"),
     ("audit", "build_audit_router"),
@@ -42,7 +43,7 @@ MODULE_FACTORIES: list[tuple[str, str]] = [
 
 def create_api_router(settings: Settings) -> APIRouter:
     """
-    Root API router factory aggregating all 15 domain module router builders.
+    Root API router factory aggregating all 16 domain module router builders.
     Enforces dynamic configuration binding and prevents global router state leaks.
 
     A missing module router is a startup error. The factory never skips a

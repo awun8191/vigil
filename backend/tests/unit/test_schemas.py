@@ -28,6 +28,7 @@ from src.schemas import (
     MemoryChunkModel,
     MessageModel,
     RunModel,
+    ModelPriceModel,
     RunStepModel,
     RunWorkspaceModel,
     SkillModel,
@@ -51,6 +52,7 @@ EXPECTED_TABLES = {
     "runs",
     "run_workspaces",
     "run_steps",
+    "model_prices",
     "messages",
     "approvals",
     "artifacts",
@@ -64,10 +66,10 @@ EXPECTED_TABLES = {
 
 
 def test_central_schema_exports_all_tables() -> None:
-    """Verify that exactly 23 tables are registered in the centralized Base metadata."""
+    """Verify that exactly 24 tables are registered in the centralized Base metadata."""
     registered_tables = set(Base.metadata.tables.keys())
     assert registered_tables == EXPECTED_TABLES
-    assert len(registered_tables) == 23
+    assert len(registered_tables) == 24
 
 
 def test_models_map_to_expected_table_names() -> None:
@@ -86,6 +88,7 @@ def test_models_map_to_expected_table_names() -> None:
         RunModel: "runs",
         RunWorkspaceModel: "run_workspaces",
         RunStepModel: "run_steps",
+        ModelPriceModel: "model_prices",
         MessageModel: "messages",
         ApprovalModel: "approvals",
         ArtifactModel: "artifacts",
@@ -102,7 +105,7 @@ def test_models_map_to_expected_table_names() -> None:
 
 
 def test_primary_keys() -> None:
-    """Verify primary key columns across all 23 models."""
+    """Verify primary key columns across all 24 models."""
     for table_name in EXPECTED_TABLES:
         table = Base.metadata.tables[table_name]
         pk_cols = [c.name for c in table.primary_key.columns]

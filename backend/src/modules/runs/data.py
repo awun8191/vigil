@@ -46,7 +46,12 @@ class RunResponse(BaseModel):
     started_at: datetime = Field(..., description="Execution start timestamp.")
     ended_at: datetime | None = Field(default=None, description="Completion timestamp.")
     token_usage: dict[str, int] = Field(default_factory=dict, description="Token consumption metrics.")
-    cost_usd: float = Field(default=0.0, description="Estimated total run cost in USD.")
+    cost_micros: int = Field(
+        default=0, description="Total run cost in integer micros. This is the source of truth."
+    )
+    cost_usd: float = Field(
+        default=0.0, description="The same cost in major units, for display only."
+    )
 
 
 class RunCancelResponse(BaseModel):
