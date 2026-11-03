@@ -10,6 +10,7 @@ import sys
 import textwrap
 import time
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -248,3 +249,80 @@ async def test_stderr_tail_reaches_the_error_message(tmp_path: Path) -> None:
         )
     assert "exited with code" in str(excinfo.value)
     assert "BOOM: missing api key" in str(excinfo.value)
+
+
+# ---------------------------------------------------------------------------
+# Name resolution: a call addressed to one server must never run on another.
+# ---------------------------------------------------------------------------
+
+
+def inject_sse_server(name: str, tool_name: str) -> Any:
+    """Store an SSE server and its tool without a handshake."""
+    from datetime import datetime, timezone
+    from uuid import uuid4
+
+    from src.modules.connectors.service import MCPDiscoveredToolDTO, MCPServerDTO
+
+    server = MCPServerDTO(
+        id=uuid4(),
+        name=name,
+        transport="sse",
+        command=None,
+        url=f"http://{name}.test/mcp",
+        enabled=True,
+        created_at=datetime.now(timezone.utc),
+    )
+    ConnectorsService._mcp_servers[server.id] = server
+    ConnectorsService._mcp_servers_by_name[name] = server
+    ConnectorsService._mcp_tools[(server.id, tool_name)] = MCPDiscoveredToolDTO(
+        server_id=server.id,
+        server_name=name,
+        name=tool_name,
+        description="",
+        input_schema={},
+        level="external",
+    )
+    return server
+
+
+async def test_shared_tool_name_is_ambiguous_and_runs_nowhere(tmp_path: Path) -> None:
+    """Two servers expose one name: the gap is an error, and neither server runs."""
+    command_a, log_a = write_scripted_server(tmp_path, name="alpha_server.py")
+    command_b, log_b = write_scripted_server(tmp_path, name="beta_server.py")
+    service = ConnectorsService(session=None, settings=Settings(APP_ENV="test"))
+    await service.register_mcp_server(name="alpha", transport="stdio", command=command_a)
+    await service.register_mcp_server(name="beta", transport="stdio", command=command_b)
+    log_a.write_text("", encoding="utf-8")
+    log_b.write_text("", encoding="utf-8")
+
+    # The builder always passes "default", which names no server, so the tool
+    # name is the only handle. Two owners means the call is not runnable.
+    result = await make_host().execute_tool(
+        "default", "echo_ext", {"msg": "hello"}, tool_call_id="call-ambig"
+    )
+
+    assert result.is_error is True
+    assert "ambiguous" in str(result.output)
+    assert "alpha" in str(result.output) and "beta" in str(result.output)
+    assert [entry for entry in read_log(log_a) if entry["method"] == "tools/call"] == []
+    assert [entry for entry in read_log(log_b) if entry["method"] == "tools/call"] == []
+
+
+async def test_a_single_owner_resolves_and_runs(tmp_path: Path) -> None:
+    """One server owns the name: the default connector id still reaches it."""
+    command, log_path = write_scripted_server(tmp_path)
+    service = ConnectorsService(session=None, settings=Settings(APP_ENV="test"))
+    await service.register_mcp_server(name="solo", transport="stdio", command=command)
+    log_path.write_text("", encoding="utf-8")
+
+    result = await make_host().execute_tool(
+        "default", "echo_ext", {"msg": "solo"}, tool_call_id="call-solo"
+    )
+
+    assert result.is_error is False, result.output
+    assert result.output == "ECHO:solo|initialized=True"
+    assert [entry["method"] for entry in read_log(log_path)] == [
+        "initialize",
+        "notifications/initialized",
+        "tools/call",
+    ]

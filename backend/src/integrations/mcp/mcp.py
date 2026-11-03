@@ -570,10 +570,36 @@ class MCPHostClient:
 
         server = ConnectorsService._mcp_servers_by_name.get(connector_id)
         if server is None:
-            for (sid, tname), _tool in ConnectorsService._mcp_tools.items():
-                if tname == tool_name:
-                    server = ConnectorsService._mcp_servers.get(sid)
-                    break
+            # No server carries ``connector_id`` as its name, and the builder
+            # never sets a real one: the tool name is the only remaining handle.
+            # Resolve by name only when exactly one registered server owns it,
+            # because a call addressed to one server must never run on another.
+            owners = sorted(
+                {
+                    sid
+                    for (sid, tname) in ConnectorsService._mcp_tools
+                    if tname == tool_name
+                }
+            )
+            if len(owners) > 1:
+                names = sorted(
+                    ConnectorsService._mcp_servers[sid].name
+                    if sid in ConnectorsService._mcp_servers
+                    else str(sid)
+                    for sid in owners
+                )
+                return MCPToolResultDTO(
+                    tool_call_id=tool_call_id,
+                    output=(
+                        f"MCP tool {tool_name!r} is ambiguous: servers "
+                        f"{', '.join(repr(name) for name in names)} all expose it "
+                        f"and connector {connector_id!r} names none of them; "
+                        "the tool was not run"
+                    ),
+                    is_error=True,
+                )
+            if len(owners) == 1:
+                server = ConnectorsService._mcp_servers.get(owners[0])
         if server is None:
             # Never report success for a tool that was not run: an invented
             # result would be fed back to the model as a real tool result.
