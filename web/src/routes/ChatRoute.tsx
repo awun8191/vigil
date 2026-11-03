@@ -47,7 +47,7 @@ export default function ChatRoute() {
 
   const handleSeedConsumed = useCallback(() => {
     setSeed(undefined);
-    if (state.cardId) navigate('/chat', { replace: true, state: null });
+    if (state.cardId) navigate('/agent/chat', { replace: true, state: null });
   }, [navigate, state.cardId]);
 
   const messages = messagesQuery.data ?? [];
@@ -66,7 +66,7 @@ export default function ChatRoute() {
       </div>
 
       {stream.connection === 'reconnecting' ? (
-        <div className="pointer-events-none fixed inset-x-0 bottom-[10.5rem] z-20 flex justify-center px-4 md:bottom-28 md:pl-20">
+        <div className="pointer-events-none fixed inset-x-0 bottom-[11.5rem] z-20 flex justify-center px-4 md:bottom-[7.5rem] md:pl-20">
           <p className="glass inline-flex items-center gap-2 rounded-[8px] px-3.5 py-2 text-[12px] text-[var(--text-muted)]">
             <RotateCw size={13} strokeWidth={1.5} className="animate-spin" />
             Reconnecting to Vigil...

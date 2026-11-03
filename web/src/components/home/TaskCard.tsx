@@ -1,6 +1,6 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { ArrowUpRight, Check } from 'lucide-react';
-import { motion } from 'framer-motion';
+import { motion, useReducedMotion } from 'framer-motion';
 import { useNavigate } from 'react-router-dom';
 import { api } from '@/lib/api';
 import { userMessageOf } from '@/lib/errors';
@@ -10,6 +10,14 @@ import { CARDS_KEY, useDismissCard } from '@/queries/cards';
 import NotificationCard from '@/components/ui/NotificationCard';
 import { SourceAvatar, sourceFor } from '@/components/ui/SourceAvatar';
 import type { Card, CardAction } from '@/types';
+
+/** Matches MessageItem so briefings and chat arrivals share the same physical feel. */
+const enterSpring = {
+  type: 'spring' as const,
+  stiffness: 480,
+  damping: 20,
+  mass: 0.9,
+};
 
 interface Props {
   card: Card;
@@ -26,6 +34,7 @@ export function TaskCard({ card, index, onError }: Props) {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const dismissCard = useDismissCard();
+  const reduced = useReducedMotion();
 
   const source = sourceFor(card.type);
   const due = relativeTime(card.due_at);
@@ -54,7 +63,7 @@ export function TaskCard({ card, index, onError }: Props) {
         break;
       case 'reply': {
         const seed = typeof action.payload['seed'] === 'string' ? action.payload['seed'] : '';
-        navigate('/chat', { state: { seed, cardId: card.id } });
+        navigate('/agent/chat', { state: { seed, cardId: card.id } });
         break;
       }
       default:
@@ -75,10 +84,11 @@ export function TaskCard({ card, index, onError }: Props) {
   return (
     <motion.div
       layout
-      initial={{ opacity: 0, y: 16 }}
-      animate={{ opacity: 1, y: 0 }}
+      initial={reduced ? { opacity: 0 } : { opacity: 0, y: 18, scale: 0.96 }}
+      animate={{ opacity: 1, y: 0, scale: 1 }}
       exit={{ opacity: 0, scale: 0.96, transition: { duration: 0.2 } }}
-      transition={{ type: 'spring', stiffness: 400, damping: 30, delay: index * 0.05 }}
+      transition={reduced ? { duration: 0.2 } : { ...enterSpring, delay: index * 0.07 }}
+      style={{ transformOrigin: 'top center' }}
     >
       <NotificationCard
         bodyId={`card-body-${card.id}`}
@@ -134,7 +144,7 @@ export function TaskCard({ card, index, onError }: Props) {
           <button
             type="button"
             onClick={() =>
-              navigate('/chat', {
+              navigate('/agent/chat', {
                 state: { seed: `Tell me about: ${card.title}`, cardId: card.id },
               })
             }

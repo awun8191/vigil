@@ -5,6 +5,7 @@ import { AmbientBackground } from '@/components/layout/AmbientBackground';
 import { HeaderBrand } from '@/components/layout/HeaderBrand';
 import { FloatingDock } from '@/components/layout/FloatingDock';
 import { api, IS_MOCK, setAuthFailureHandler } from '@/lib/api';
+import LandingRoute from '@/routes/LandingRoute';
 import HomeRoute from '@/routes/HomeRoute';
 import PairRoute from '@/routes/PairRoute';
 import ChatRoute from '@/routes/ChatRoute';
@@ -43,7 +44,8 @@ function AppShell() {
 
 /**
  * The shell must never render unauthenticated. A 401 anywhere lands here exactly once, because
- * `setAuthFailureHandler` is debounced per token in `lib/api.ts`.
+ * `setAuthFailureHandler` is debounced per token in `lib/api.ts`. The landing page at `/` stays
+ * public: unpaired visitors read it, paired users are sent straight to `/agent`.
  */
 function AuthGate({ children }: { children: ReactNode }) {
   const status = useSession((state) => state.status);
@@ -66,14 +68,15 @@ function AuthGate({ children }: { children: ReactNode }) {
   }
 
   if (status === 'unauthed') {
-    if (location.pathname === '/pair') return <>{children}</>;
+    if (location.pathname === '/pair' || location.pathname === '/') return <>{children}</>;
     return <Navigate to="/pair" replace state={{ from: location.pathname }} />;
   }
 
   if (location.pathname === '/pair') {
-    return <Navigate to="/" replace />;
+    return <Navigate to="/agent" replace />;
   }
 
+  // The landing stays reachable for everyone, paired or not, so `Log in` can always be linked.
   return <>{children}</>;
 }
 
@@ -87,15 +90,20 @@ export default function App() {
             <Routes>
               <Route path="/pair" element={<PairRoute />} />
 
+              <Route path="/" element={<LandingRoute />} />
+
               <Route element={<AppShell />}>
-                <Route index element={<HomeRoute />} />
-                <Route path="chat" element={<ChatRoute />} />
-                <Route path="chat/:sessionId" element={<ChatRoute />} />
-                <Route path="settings" element={<Navigate to="/settings/appearance" replace />} />
-                <Route path="settings/:section" element={<SettingsRoute />} />
+                <Route path="/agent" element={<HomeRoute />} />
+                <Route path="/agent/chat" element={<ChatRoute />} />
+                <Route path="/agent/chat/:sessionId" element={<ChatRoute />} />
+                <Route
+                  path="/agent/settings"
+                  element={<Navigate to="/agent/settings/appearance" replace />}
+                />
+                <Route path="/agent/settings/:section" element={<SettingsRoute />} />
               </Route>
 
-              <Route path="*" element={<Navigate to="/" replace />} />
+              <Route path="*" element={<Navigate to="/agent" replace />} />
             </Routes>
           </Suspense>
         </AuthGate>

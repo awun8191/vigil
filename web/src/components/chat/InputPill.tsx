@@ -131,7 +131,7 @@ export function InputPill({
       : 'idle';
 
   return (
-    <div className="pointer-events-none fixed inset-x-0 bottom-24 z-30 flex justify-center px-4 md:bottom-8 md:pl-20">
+    <div className="pointer-events-none fixed inset-x-0 bottom-28 z-30 flex justify-center px-4 md:bottom-10 md:pl-20">
       <div className="pointer-events-auto w-full max-w-2xl">
         <AnimatePresence>
           {files.length > 0 && (
@@ -233,7 +233,7 @@ export function InputPill({
                   }}
                   placeholder="Ask Vigil anything or assign a task..."
                   disabled={disabled}
-                  className="max-h-[160px] w-full resize-none bg-transparent px-2 py-[10px] text-[15px] leading-relaxed text-[var(--text)] outline-none placeholder:text-[var(--text-muted)] disabled:opacity-60"
+                  className="max-h-[160px] w-full resize-none rounded-[12px] bg-[color-mix(in_srgb,var(--text)_10%,transparent)] px-3 py-[10px] text-[15px] leading-relaxed text-[var(--text)] outline-none placeholder:text-[var(--text-muted)] disabled:opacity-60"
                 />
               )}
             </div>

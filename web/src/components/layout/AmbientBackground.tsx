@@ -6,17 +6,17 @@ const cloud = (color: string) => `radial-gradient(ellipse at center, ${color}, t
 export function AmbientBackground() {
   return (
     <div aria-hidden className="pointer-events-none fixed inset-0 -z-10 overflow-hidden">
-      {/* Cloud banks */}
+      {/* Light catches the upper edge at sunrise, then settles at the lower right after dark. */}
       <div
-        className="animate-drift absolute -left-[18%] -top-[28%] h-[72vh] w-[78vw] blur-3xl"
+        className="animate-drift absolute -left-[18%] -top-[30%] h-[76vh] w-[82vw] blur-3xl"
         style={{ background: cloud('var(--cloud-1)') }}
       />
       <div
-        className="animate-drift absolute -right-[22%] top-[2%] h-[78vh] w-[72vw] blur-3xl"
+        className="animate-drift absolute -right-[22%] top-[0%] h-[80vh] w-[74vw] blur-3xl"
         style={{ background: cloud('var(--cloud-2)'), animationDelay: '-6s' }}
       />
       <div
-        className="animate-drift absolute bottom-[-22%] left-[12%] h-[60vh] w-[86vw] blur-3xl"
+        className="animate-drift absolute -right-[20%] bottom-[-30%] h-[74vh] w-[82vw] blur-3xl"
         style={{ background: cloud('var(--cloud-3)'), animationDelay: '-12s' }}
       />
 

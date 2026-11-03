@@ -13,9 +13,9 @@ interface DockItem {
 }
 
 const items: DockItem[] = [
-  { id: 'home', label: 'Home', to: '/', Icon: Home },
-  { id: 'chat', label: 'Chat', to: '/chat', Icon: MessageSquare },
-  { id: 'settings', label: 'Settings', to: '/settings', Icon: Settings },
+  { id: 'home', label: 'Home', to: '/agent', Icon: Home },
+  { id: 'chat', label: 'Chat', to: '/agent/chat', Icon: MessageSquare },
+  { id: 'settings', label: 'Settings', to: '/agent/settings', Icon: Settings },
 ];
 
 const spring = { type: 'spring' as const, stiffness: 400, damping: 30 };
@@ -25,9 +25,9 @@ export function FloatingDock() {
   const { pathname } = useLocation();
   const navigate = useNavigate();
 
-  const activeId: DockItem['id'] = pathname.startsWith('/settings')
+  const activeId: DockItem['id'] = pathname.startsWith('/agent/settings')
     ? 'settings'
-    : pathname.startsWith('/chat')
+    : pathname.startsWith('/agent/chat')
       ? 'chat'
       : 'home';
 

@@ -59,12 +59,12 @@ export function SettingsPage() {
   const { section } = useParams();
 
   if (!section || !SECTION_IDS.has(section)) {
-    return <Navigate to="/settings/appearance" replace />;
+    return <Navigate to="/agent/settings/appearance" replace />;
   }
 
   const current = SECTIONS.find((entry) => entry.id === section);
   if (!current) {
-    return <Navigate to="/settings/appearance" replace />;
+    return <Navigate to="/agent/settings/appearance" replace />;
   }
 
   return (
@@ -78,7 +78,7 @@ export function SettingsPage() {
               return (
                 <li key={id} className="shrink-0">
                   <NavLink
-                    to={`/settings/${id}`}
+                    to={`/agent/settings/${id}`}
                     aria-current={active ? 'page' : undefined}
                     className="flex items-center gap-2.5 whitespace-nowrap rounded-[10px] px-3 py-2 text-[14px] transition-colors"
                     style={{

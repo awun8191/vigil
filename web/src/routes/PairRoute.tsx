@@ -33,7 +33,7 @@ export default function PairRoute() {
     try {
       const pairing = await api.pair(code, deviceName.trim());
       await signIn(pairing, () => api.me());
-      navigate('/', { replace: true });
+      navigate('/agent', { replace: true });
     } catch (cause) {
       setError(
         cause instanceof Error && cause.name === 'ApiError' && 'status' in cause && cause.status === 401

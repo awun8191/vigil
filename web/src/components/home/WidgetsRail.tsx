@@ -1,9 +1,19 @@
 import { ArrowUpRight, CalendarDays, Eye, Gauge, Hash, Mail, Plus } from 'lucide-react';
+import { motion, useReducedMotion } from 'framer-motion';
 import type { ComponentType } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useConnectors, useLimits } from '@/queries/settings';
 
 type IconType = ComponentType<{ size?: number; strokeWidth?: number; className?: string }>;
+
+/** A quiet counterpoint to the briefing spring: slide, settle, then stay still. */
+function slideIn(reduced: boolean, delay: number) {
+  return {
+    initial: reduced ? { opacity: 0 } : { opacity: 0, x: 18 },
+    animate: { opacity: 1, x: 0 },
+    transition: { duration: reduced ? 0.2 : 0.45, delay, ease: 'easeOut' as const },
+  };
+}
 
 const ICONS: Record<string, IconType> = {
   mail: Mail,
@@ -39,12 +49,13 @@ export function WidgetsRail() {
   const navigate = useNavigate();
   const connectors = useConnectors();
   const limits = useLimits();
+  const reduced = useReducedMotion() ?? false;
 
   const accounts = connectors.data ?? [];
 
   return (
     <aside aria-label="Widgets" className="flex flex-col gap-4">
-      <section className="card animate-rise rounded-[14px] p-5" style={{ animationDelay: '0.1s' }}>
+      <motion.section {...slideIn(reduced, 0.12)} className="card rounded-[14px] p-5">
         <div className="flex items-center gap-2 text-sm font-medium">
           <Gauge size={16} strokeWidth={1.5} className="text-[var(--text-muted)]" />
           Limits
@@ -63,9 +74,9 @@ export function WidgetsRail() {
             value={limits.data ? `${Math.round(limits.data.run_timeout_seconds / 60)}m` : '—'}
           />
         </div>
-      </section>
+      </motion.section>
 
-      <section className="card animate-rise rounded-[14px] p-5" style={{ animationDelay: '0.18s' }}>
+      <motion.section {...slideIn(reduced, 0.2)} className="card rounded-[14px] p-5">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2 text-sm font-medium">
             <Eye size={16} strokeWidth={1.5} className="text-[var(--text-muted)]" />
@@ -73,7 +84,7 @@ export function WidgetsRail() {
           </div>
           <button
             type="button"
-            onClick={() => navigate('/settings')}
+            onClick={() => navigate('/agent/settings')}
             className="rounded-full px-2 py-1 text-xs font-medium text-[var(--text-muted)] transition-colors hover:text-[var(--text)]"
           >
             Manage
@@ -112,18 +123,19 @@ export function WidgetsRail() {
             {connectors.isLoading ? 'Checking connectors...' : 'No connectors linked yet.'}
           </p>
         )}
-      </section>
+      </motion.section>
 
-      <button
-        type="button"
-        onClick={() => navigate('/chat')}
-        className="btn btn-ghost animate-rise h-12 w-full"
-        style={{ animationDelay: '0.26s' }}
-      >
-        <Plus size={16} strokeWidth={1.5} />
-        Ask Vigil for something
-        <ArrowUpRight size={14} strokeWidth={1.5} />
-      </button>
+      <motion.div {...slideIn(reduced, 0.28)}>
+        <button
+          type="button"
+          onClick={() => navigate('/agent/chat')}
+          className="btn btn-ghost h-12 w-full"
+        >
+          <Plus size={16} strokeWidth={1.5} />
+          Ask Vigil for something
+          <ArrowUpRight size={14} strokeWidth={1.5} />
+        </button>
+      </motion.div>
     </aside>
   );
 }

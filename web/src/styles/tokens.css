@@ -65,6 +65,7 @@
   --card: rgba(255, 255, 255, 0.05);
   --card-hover: rgba(255, 255, 255, 0.075);
   --card-strong: rgba(255, 255, 255, 0.08);
+  --card-highlight: rgba(255, 255, 255, 0.08);
   --border: rgba(255, 255, 255, 0.09);
   --border-strong: rgba(255, 255, 255, 0.2);
   --accent: #ffffff;
@@ -78,34 +79,41 @@
   --btn-primary-ink: #000000;
   --cloud-1: rgba(255, 255, 255, 0.045);
   --cloud-2: rgba(255, 255, 255, 0.035);
-  --cloud-3: rgba(255, 255, 255, 0.02);
-  --horizon: rgba(0, 0, 0, 0.92);
-  --grain-opacity: 0.09;
+  --cloud-3: rgba(232, 132, 73, 0.16);
+  --horizon: rgba(0, 0, 0, 0.82);
+  --grain-opacity: 0.07;
+  --sky-accent: #ffffff;
+  --sun-accent: #ffffff;
+  --focus-ring: #ffffff;
   color-scheme: dark;
 }
 
 [data-theme='light'] {
-  --bg-from: #ffffff;
-  --bg-to: #f4f4f4;
-  --card: #ffffff;
-  --card-hover: #ffffff;
-  --card-strong: #ffffff;
-  --border: rgba(0, 0, 0, 0.08);
-  --border-strong: rgba(0, 0, 0, 0.22);
-  --accent: #000000;
-  --accent-ink: #ffffff;
-  --text: #0a0a0a;
-  --text-muted: rgba(0, 0, 0, 0.55);
-  --glass: rgba(255, 255, 255, 0.7);
-  --surface-solid: #ffffff;
-  --shadow: 0 20px 50px rgba(0, 0, 0, 0.08), 0 4px 14px rgba(0, 0, 0, 0.04);
-  --btn-primary-bg: #0a0a0a;
-  --btn-primary-ink: #ffffff;
-  --cloud-1: rgba(0, 0, 0, 0.03);
-  --cloud-2: rgba(0, 0, 0, 0.02);
-  --cloud-3: rgba(0, 0, 0, 0.015);
-  --horizon: rgba(255, 255, 255, 0.95);
-  --grain-opacity: 0.07;
+  --bg-from: #f7fbff;
+  --bg-to: #eaf3fa;
+  --card: rgba(255, 255, 255, 0.62);
+  --card-hover: rgba(255, 255, 255, 0.78);
+  --card-strong: rgba(255, 255, 255, 0.9);
+  --card-highlight: rgba(255, 255, 255, 0.85);
+  --border: rgba(66, 103, 137, 0.14);
+  --border-strong: rgba(66, 103, 137, 0.25);
+  --accent: #152536;
+  --accent-ink: #f7fbff;
+  --text: #152536;
+  --text-muted: rgba(42, 66, 87, 0.66);
+  --glass: rgba(247, 251, 255, 0.72);
+  --surface-solid: #f7fbff;
+  --shadow: 0 22px 60px rgba(65, 100, 130, 0.1), 0 3px 14px rgba(65, 100, 130, 0.05);
+  --btn-primary-bg: #152536;
+  --btn-primary-ink: #f7fbff;
+  --cloud-1: rgba(244, 166, 108, 0.22);
+  --cloud-2: rgba(121, 187, 232, 0.2);
+  --cloud-3: rgba(112, 178, 226, 0.12);
+  --horizon: rgba(234, 244, 251, 0.38);
+  --grain-opacity: 0.025;
+  --sky-accent: #397ca8;
+  --sun-accent: #b96836;
+  --focus-ring: #2f6f9c;
   color-scheme: light;
 }
 
@@ -118,7 +126,7 @@ body,
 body {
   margin: 0;
   font-family: 'Plus Jakarta Sans Variable', 'Plus Jakarta Sans', ui-sans-serif, system-ui, sans-serif;
-  background: linear-gradient(180deg, var(--bg-from), var(--bg-to));
+  background: linear-gradient(155deg, var(--bg-from), var(--bg-to));
   background-attachment: fixed;
   color: var(--text);
   -webkit-font-smoothing: antialiased;
@@ -129,7 +137,12 @@ body {
 }
 
 ::selection {
-  background: color-mix(in srgb, var(--text) 18%, transparent);
+  background: color-mix(in srgb, var(--sky-accent) 24%, transparent);
+}
+
+:where(button, a):focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 3px;
 }
 
 .glass {
@@ -239,3 +252,84 @@ body {
 @utility tabular {
   font-variant-numeric: tabular-nums;
 }
+
+/* ══ Eye tracker ═══════════════════════════════════════════
+   From Bencho (MIT, bencho.dev/licence). The frame holds the
+   largest ball the Size knob allows, so the wall never
+   rescales it. */
+.eyt {
+  width: 200px;
+  height: 200px;
+  display: grid;
+  place-items: center;}
+
+.eyt-ball {
+  width: var(--eyt-size, 100px);
+  height: var(--eyt-size, 100px);
+  overflow: visible;}
+
+/* Token mapping, Vigil side (nothing added as globals): the ball
+   is the ink itself and the eyes the ground it sits on, so the
+   mark inverts with the theme exactly like the rest of the UI.
+   --fill-slab → var(--text), --fill-on → var(--bg-from),
+   --font-ui → inherited app font, --ink/--bg unused (they only
+   fed Bencho's site-chrome rules, not copied here). */
+.eyt-body { fill: var(--text); }
+
+.eyt-eye { fill: var(--bg-from); }
+
+/* a press on the toy opens a chat bubble off its lower right: the
+   pet's bubble, its square corner pointing back at the face */
+.eyt { position: relative; }
+
+/* a press gives a little under the finger and springs back out */
+.eyt-ball[data-poke] {
+  cursor: pointer;
+  transform-origin: center;
+  transition: scale 420ms cubic-bezier(0.24, 1.34, 0.38, 1);
+  -webkit-tap-highlight-color: transparent;}
+
+.eyt-ball[data-poke]:active { scale: 0.96; transition-duration: 160ms; transition-timing-function: ease; }
+
+.eyt-say {
+  position: absolute;
+  left: calc(50% + var(--eyt-size, 100px) * 0.36);
+  top: calc(50% + var(--eyt-size, 100px) * 0.3);
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  min-height: 34px;
+  padding: 0 16px;
+  border-radius: 6px 14px 14px 14px;
+  /* monochrome: ink slab, ground lettering, no colour tints */
+  background: var(--text);
+  color: var(--bg-from);
+  box-shadow: inset 0 -1.5px 0 rgba(0, 0, 0, 0.1);
+  font-family: var(--font-ui, inherit);
+  font-size: 13px;
+  font-weight: 400;
+  white-space: nowrap;
+  transform-origin: top left;
+  opacity: 0;
+  scale: 0.85;
+  pointer-events: none;
+  transition: opacity 160ms ease, scale 220ms cubic-bezier(0.24, 1.34, 0.38, 1), background-color 220ms ease;
+  letter-spacing: 0em;}
+
+.eyt-say[data-on] { opacity: 1; scale: 1; }
+
+.eyt-caret {
+  width: 1.5px;
+  height: 13px;
+  border-radius: 1px;
+  background: var(--bg-from);
+  animation: pet-caret 1s steps(1) infinite;}
+
+@keyframes pet-caret {
+  50% { opacity: 0; }}
+
+/* Inline duty (the navbar mark): drop the 200px bench frame and
+   let the ball take its own size inside the logo row. */
+.eyt-inline .eyt {
+  width: auto;
+  height: auto;}
