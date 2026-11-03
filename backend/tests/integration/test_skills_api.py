@@ -24,15 +24,19 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 
+from src.config.security import hash_token
 from src.config.settings import Settings, get_settings
 from src.dependencies import get_db_session
 from src.main import create_app
+from src.modules.auth.state import DEFAULT_USER_ID
 from src.modules.runs.tools import ToolContext, invoke_tool
 from src.modules.skills.repository import SkillCreateDTO
 from src.modules.skills.service import SkillsService
 from src.schemas.base import Base
 
 AUTH_HEADERS = {"Authorization": "Bearer vgt_testtoken"}
+TEST_DEVICE_TOKEN = "vgt_testtoken"
+"""The token AUTH_HEADERS sends. Each scratch database seeds this device row."""
 
 SKILL_MANIFEST = """---
 name: demo
@@ -85,6 +89,27 @@ async def _scratch_database() -> AsyncIterator[ScratchDatabase]:
         async with engine.begin() as connection:
             await connection.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
             await connection.run_sync(Base.metadata.create_all)
+            # The request path authenticates through the SQL auth store, so this
+            # database needs the same device row the root conftest seeds into the
+            # development database. Without it every request here is a 401.
+            await connection.execute(
+                text(
+                    "insert into users (id, display_name) values (:id, 'Default User') "
+                    "on conflict (id) do nothing"
+                ),
+                {"id": DEFAULT_USER_ID},
+            )
+            await connection.execute(
+                text(
+                    "insert into devices (id, user_id, name, token_hash, last_seen_at) "
+                    "values (gen_random_uuid(), :user_id, 'Test Device', :token_hash, now()) "
+                    "on conflict (token_hash) do nothing"
+                ),
+                {
+                    "user_id": DEFAULT_USER_ID,
+                    "token_hash": hash_token(TEST_DEVICE_TOKEN),
+                },
+            )
         yield ScratchDatabase(
             name=name,
             dsn=dsn,
