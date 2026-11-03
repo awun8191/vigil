@@ -1,13 +1,28 @@
 """Integration tests for connectors module API and encrypted credential lifecycle."""
-from uuid import uuid4
+from uuid import UUID, uuid4
 import pytest
 import httpx
 from httpx import ASGITransport
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import create_async_engine
 
 from src.config.security import decrypt_secret
 from src.config.settings import Settings
 from src.main import create_app
 from src.modules.connectors.service import ConnectorsService
+
+
+async def _delete_account(account_id: UUID) -> None:
+    """Remove a row this test created, so a repeat run starts from zero."""
+    engine = create_async_engine(Settings().DATABASE_URL)
+    try:
+        async with engine.begin() as connection:
+            await connection.execute(
+                text("delete from connected_accounts where id = :id"),
+                {"id": account_id},
+            )
+    finally:
+        await engine.dispose()
 
 
 @pytest.mark.asyncio
@@ -16,46 +31,51 @@ async def test_connector_registration_and_sync_api() -> None:
     settings = Settings(APP_ENV="test")
     app = create_app(settings)
     auth_headers = {"Authorization": "Bearer vgt_testtoken"}
+    account_id: UUID | None = None
 
     transport = ASGITransport(app=app, raise_app_exceptions=False)
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-        # 1. Register Gmail account
-        reg_payload = {
-            "connector_id": "gmail",
-            "account_label": "work-gmail@company.com",
-            "raw_credentials": {
-                "client_id": "client_abc123",
-                "client_secret": "secret_xyz789",
-                "refresh_token": "refresh_token_sample",
-            },
-            "scopes": ["https://www.googleapis.com/auth/gmail.readonly"],
-        }
-        res_reg = await client.post("/api/v1/connectors/accounts", json=reg_payload, headers=auth_headers)
-        assert res_reg.status_code == 201
-        acc_data = res_reg.json()
-        assert acc_data["connector_id"] == "gmail"
-        assert acc_data["account_label"] == "work-gmail@company.com"
-        assert acc_data["status"] == "active"
-        account_id = acc_data["id"]
+    try:
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            # 1. Register Gmail account
+            reg_payload = {
+                "connector_id": "gmail",
+                "account_label": "work-gmail@company.com",
+                "raw_credentials": {
+                    "client_id": "client_abc123",
+                    "client_secret": "secret_xyz789",
+                    "refresh_token": "refresh_token_sample",
+                },
+                "scopes": ["https://www.googleapis.com/auth/gmail.readonly"],
+            }
+            res_reg = await client.post("/api/v1/connectors/accounts", json=reg_payload, headers=auth_headers)
+            assert res_reg.status_code == 201
+            acc_data = res_reg.json()
+            assert acc_data["connector_id"] == "gmail"
+            assert acc_data["account_label"] == "work-gmail@company.com"
+            assert acc_data["status"] == "active"
+            account_id = UUID(acc_data["id"])
 
-        # 2. Verify account is listed
-        res_list = await client.get("/api/v1/connectors/accounts", headers=auth_headers)
-        assert res_list.status_code == 200
-        accounts = res_list.json()
-        assert any(a["id"] == account_id for a in accounts)
+            # 2. Verify account is listed
+            res_list = await client.get("/api/v1/connectors/accounts", headers=auth_headers)
+            assert res_list.status_code == 200
+            accounts = res_list.json()
+            assert any(a["id"] == str(account_id) for a in accounts)
 
-        # 3. Get single account
-        res_get = await client.get(f"/api/v1/connectors/accounts/{account_id}", headers=auth_headers)
-        assert res_get.status_code == 200
-        assert res_get.json()["id"] == account_id
+            # 3. Get single account
+            res_get = await client.get(f"/api/v1/connectors/accounts/{account_id}", headers=auth_headers)
+            assert res_get.status_code == 200
+            assert res_get.json()["id"] == str(account_id)
 
-        # 4. Trigger sync
-        res_sync = await client.post(f"/api/v1/connectors/accounts/{account_id}/sync", headers=auth_headers)
-        assert res_sync.status_code == 200
-        sync_data = res_sync.json()
-        assert sync_data["account_id"] == account_id
-        assert sync_data["status"] == "queued"
-        assert "job_id" in sync_data
+            # 4. Trigger sync
+            res_sync = await client.post(f"/api/v1/connectors/accounts/{account_id}/sync", headers=auth_headers)
+            assert res_sync.status_code == 200
+            sync_data = res_sync.json()
+            assert sync_data["account_id"] == str(account_id)
+            assert sync_data["status"] == "queued"
+            assert "job_id" in sync_data
+    finally:
+        if account_id is not None:
+            await _delete_account(account_id)
 
 
 @pytest.mark.asyncio
