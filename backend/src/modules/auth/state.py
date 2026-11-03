@@ -128,6 +128,10 @@ class SqlAuthStore:
 
     A paired device survives a process restart, which is the whole point: the
     web client keeps one bearer token for the lifetime of the database.
+
+    The store flushes and never commits. The request session, the worker or the
+    test that owns the session owns the transaction, so two writes in one
+    request either both land or neither does.
     """
 
     def __init__(self, session: AsyncSession) -> None:
@@ -163,7 +167,6 @@ class SqlAuthStore:
         model = UserModel(id=user_id, display_name=display_name, settings={})
         self.session.add(model)
         await self.session.flush()
-        await self.session.commit()
         return model
 
     async def get_device_by_token_hash(self, token_hash: str) -> DeviceDTO | None:
@@ -188,14 +191,12 @@ class SqlAuthStore:
         )
         self.session.add(model)
         await self.session.flush()
-        await self.session.commit()
         return self._device_dto(model)
 
     async def update_device_last_seen(self, device_id: UUID, seen_at: datetime) -> None:
         await self.session.execute(
             update(DeviceModel).where(DeviceModel.id == device_id).values(last_seen_at=seen_at)
         )
-        await self.session.commit()
 
     async def revoke_device(self, device_id: UUID) -> bool:
         result = await self.session.execute(
@@ -203,7 +204,6 @@ class SqlAuthStore:
             .where(DeviceModel.id == device_id, DeviceModel.revoked_at.is_(None))
             .values(revoked_at=_now())
         )
-        await self.session.commit()
         return int(getattr(result, "rowcount", 0) or 0) > 0
 
     async def get_or_create_default_user(self, display_name: str = "Default User") -> UserDTO:

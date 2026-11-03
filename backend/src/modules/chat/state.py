@@ -174,7 +174,6 @@ class SqlChatRepository:
         model = ThreadModel(id=uuid4(), user_id=user_id, title=title or "New Chat")
         self.session.add(model)
         await self.session.flush()
-        await self.session.commit()
         return self._session_dto(model, 0)
 
     async def save_message(self, data: ChatMessageCreateDTO) -> ChatMessageDTO:
@@ -191,7 +190,6 @@ class SqlChatRepository:
         self.session.add(msg)
         thread.updated_at = _now()
         await self.session.flush()
-        await self.session.commit()
         return self._message_dto(msg)
 
     @staticmethod
@@ -240,7 +238,6 @@ class SqlChatRepository:
             return False
         await self.session.delete(model)
         await self.session.flush()
-        await self.session.commit()
         return True
 
     async def _message_count(self, session_id: UUID) -> int:
