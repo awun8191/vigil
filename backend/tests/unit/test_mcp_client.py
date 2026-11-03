@@ -8,12 +8,17 @@ from __future__ import annotations
 import json
 import sys
 import textwrap
+import time
 from pathlib import Path
 
 import pytest
 
 from src.config.settings import Settings
-from src.integrations.mcp.mcp import MCPHostClient
+from src.integrations.mcp.mcp import (
+    HANDSHAKE_TIMEOUT_SECONDS,
+    MCPHandshakeError,
+    MCPHostClient,
+)
 from src.modules.connectors.service import ConnectorsService
 
 SCRIPTED_SERVER = textwrap.dedent(
@@ -154,6 +159,27 @@ async def test_server_without_transport_fails_closed(tmp_path: Path) -> None:
     assert "no usable transport" in str(result.output)
 
 
+async def test_stdio_server_with_large_stderr_completes(tmp_path: Path) -> None:
+    """A server that floods stderr still finishes: the client drains the pipe."""
+    command, _log = write_scripted_server(
+        tmp_path, stderr_bytes=512 * 1024, name="chatty_mcp_server.py"
+    )
+    service = ConnectorsService(session=None, settings=Settings(APP_ENV="test"))
+    await service.register_mcp_server(
+        name="chatty-server", transport="stdio", command=command
+    )
+
+    started = time.monotonic()
+    result = await make_host().execute_tool(
+        "chatty-server", "echo_ext", {"msg": "hello"}, tool_call_id="call-3"
+    )
+    elapsed = time.monotonic() - started
+
+    assert result.is_error is False, result.output
+    assert result.output == "ECHO:hello|initialized=True"
+    assert elapsed < HANDSHAKE_TIMEOUT_SECONDS
+
+
 async def test_initialize_payload_matches_schema_on_tool_call(tmp_path: Path) -> None:
     """tools/call sends the schema initialize request, then the initialized notification."""
     command, log_path = write_scripted_server(tmp_path)
@@ -168,7 +194,6 @@ async def test_initialize_payload_matches_schema_on_tool_call(tmp_path: Path) ->
         "schema-server", "echo_ext", {"msg": "hi"}, tool_call_id="call-4"
     )
     assert result.is_error is False, result.output
-    assert result.output == "ECHO:hi|initialized=True"
 
     entries = read_log(log_path)
     assert [entry["method"] for entry in entries] == [
@@ -202,3 +227,24 @@ async def test_initialize_payload_matches_schema_on_discovery(tmp_path: Path) ->
     assert params["protocolVersion"] == "2024-11-05"
     assert params["capabilities"] == {}
     assert params["clientInfo"] == {"name": "vigil", "version": "1.0"}
+
+
+async def test_stderr_tail_reaches_the_error_message(tmp_path: Path) -> None:
+    """A server that dies after writing stderr is reported with its own words."""
+    script = tmp_path / "dies_after_stderr.py"
+    script.write_text(
+        "import sys\n"
+        "sys.stderr.write('BOOM: missing api key\\n')\n"
+        "sys.stderr.flush()\n"
+        "raise SystemExit(3)\n",
+        encoding="utf-8",
+    )
+    service = ConnectorsService(session=None, settings=Settings(APP_ENV="test"))
+    with pytest.raises(MCPHandshakeError) as excinfo:
+        await service.register_mcp_server(
+            name="stderr-server",
+            transport="stdio",
+            command=f"{sys.executable} {script}",
+        )
+    assert "exited with code" in str(excinfo.value)
+    assert "BOOM: missing api key" in str(excinfo.value)

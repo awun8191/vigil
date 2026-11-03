@@ -11,6 +11,7 @@ spawn a process: registration enqueues a ``discover_mcp_tools`` job and returns
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import shlex
 from asyncio.subprocess import PIPE
@@ -39,6 +40,9 @@ MCP_CLIENT_NAME = "vigil"
 
 #: Client version announced in ``clientInfo``.
 MCP_CLIENT_VERSION = "1.0"
+
+#: Trailing bytes of a server's stderr kept for the error message.
+STDERR_TAIL_BYTES = 4096
 
 
 class MCPHandshakeError(ValueError):
@@ -94,6 +98,42 @@ def _normalize_tools(raw: Any) -> list[dict[str, Any]]:
             }
         )
     return tools
+
+
+class _StderrTail:
+    """Bounded tail of a server's stderr, kept for the error message only."""
+
+    def __init__(self, limit: int = STDERR_TAIL_BYTES) -> None:
+        self._limit = limit
+        self._buffer = bytearray()
+
+    def feed(self, chunk: bytes) -> None:
+        self._buffer.extend(chunk)
+        excess = len(self._buffer) - self._limit
+        if excess > 0:
+            del self._buffer[:excess]
+
+    def text(self) -> str:
+        return bytes(self._buffer).decode("utf-8", "replace").strip()
+
+
+async def _drain_stderr(
+    stream: asyncio.StreamReader | None,
+    tail: _StderrTail,
+) -> None:
+    """Read a server's stderr until EOF so a chatty server never blocks the pipe.
+
+    A server writing more than one pipe buffer of diagnostics would block on its
+    own ``write`` call, never answer the request, and hang the call until the
+    timeout. Draining concurrently is the only way to keep the exchange moving.
+    """
+    if stream is None:
+        return
+    while True:
+        chunk = await stream.read(4096)
+        if not chunk:
+            return
+        tail.feed(chunk)
 
 
 def _initialize_params() -> dict[str, Any]:
@@ -214,8 +254,10 @@ async def _handshake(
     )
 
 
-async def _discover_stdio(command: str, timeout: float) -> list[dict[str, Any]]:
-    """Run the handshake against a stdio server command and return raw tools."""
+async def _spawn_stdio(
+    command: str,
+) -> tuple[asyncio.subprocess.Process, _StderrTail, asyncio.Task[None]]:
+    """Start a stdio server and drain its stderr concurrently from the first byte."""
     try:
         argv = shlex.split(command, posix=True)
     except ValueError as exc:
@@ -236,6 +278,33 @@ async def _discover_stdio(command: str, timeout: float) -> list[dict[str, Any]]:
         raise MCPHandshakeError(
             f"stdio handshake failed: cannot start the process: {exc}"
         ) from exc
+    tail = _StderrTail()
+    stderr_task = asyncio.create_task(_drain_stderr(proc.stderr, tail))
+    return proc, tail, stderr_task
+
+
+async def _stop_stdio(
+    proc: asyncio.subprocess.Process,
+    stderr_task: asyncio.Task[None],
+) -> None:
+    """Terminate the server and stop the stderr drain task."""
+    if proc.returncode is None:
+        try:
+            proc.terminate()
+            await asyncio.wait_for(proc.wait(), 5.0)
+        except (TimeoutError, ProcessLookupError):
+            try:
+                proc.kill()
+            except ProcessLookupError:
+                pass
+    stderr_task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await stderr_task
+
+
+async def _discover_stdio(command: str, timeout: float) -> list[dict[str, Any]]:
+    """Run the handshake against a stdio server command and return raw tools."""
+    proc, tail, stderr_task = await _spawn_stdio(command)
     try:
         await _handshake(proc, timeout)
         result = await _exchange(
@@ -245,16 +314,13 @@ async def _discover_stdio(command: str, timeout: float) -> list[dict[str, Any]]:
             "tools/list",
         )
         return _normalize_tools(result.get("tools"))
+    except MCPHandshakeError as exc:
+        detail = tail.text()
+        if not detail:
+            raise
+        raise MCPHandshakeError(f"{exc} (server stderr: {detail})") from exc
     finally:
-        if proc.returncode is None:
-            try:
-                proc.terminate()
-                await asyncio.wait_for(proc.wait(), 5.0)
-            except (TimeoutError, ProcessLookupError):
-                try:
-                    proc.kill()
-                except ProcessLookupError:
-                    pass
+        await _stop_stdio(proc, stderr_task)
 
 
 async def _discover_sse(server_url: str, timeout: float) -> list[dict[str, Any]]:
@@ -379,14 +445,7 @@ async def _call_stdio_tool(
     timeout: float = HANDSHAKE_TIMEOUT_SECONDS,
 ) -> tuple[str, bool]:
     """Invoke tools/call on a stdio MCP server and return (output, is_error)."""
-    argv = shlex.split(command, posix=True)
-    proc = await asyncio.create_subprocess_exec(
-        *argv,
-        stdin=PIPE,
-        stdout=PIPE,
-        stderr=PIPE,
-        limit=MAX_LINE_BYTES,
-    )
+    proc, tail, stderr_task = await _spawn_stdio(command)
     try:
         await _handshake(proc, timeout)
         result = await _exchange(
@@ -411,16 +470,13 @@ async def _call_stdio_tool(
         if isinstance(content, str):
             return content, is_error
         return json.dumps(result), is_error
+    except MCPHandshakeError as exc:
+        detail = tail.text()
+        if not detail:
+            raise
+        raise MCPHandshakeError(f"{exc} (server stderr: {detail})") from exc
     finally:
-        if proc.returncode is None:
-            try:
-                proc.terminate()
-                await asyncio.wait_for(proc.wait(), 5.0)
-            except (TimeoutError, ProcessLookupError):
-                try:
-                    proc.kill()
-                except ProcessLookupError:
-                    pass
+        await _stop_stdio(proc, stderr_task)
 
 
 async def _call_sse_tool(
