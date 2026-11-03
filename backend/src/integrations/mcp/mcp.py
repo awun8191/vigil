@@ -44,6 +44,12 @@ MCP_CLIENT_VERSION = "1.0"
 #: Trailing bytes of a server's stderr kept for the error message.
 STDERR_TAIL_BYTES = 4096
 
+#: Longest wait for a terminated server to exit before it is killed, in seconds.
+STOP_TIMEOUT_SECONDS = 5.0
+
+#: Longest bounded wait for the stderr drain to reach EOF before the tail is read.
+STDERR_DRAIN_JOIN_SECONDS = 0.2
+
 
 class MCPHandshakeError(ValueError):
     """A third party MCP server failed the handshake. The message names the reason."""
@@ -283,23 +289,73 @@ async def _spawn_stdio(
     return proc, tail, stderr_task
 
 
+async def _join_drain(
+    stderr_task: asyncio.Task[None],
+    timeout: float = STDERR_DRAIN_JOIN_SECONDS,
+) -> None:
+    """Wait a short bounded time for the stderr drain to reach EOF.
+
+    The tail is read right after this call, so a drain that is still running
+    must not be racing the read. A server that is still alive never reaches EOF,
+    so the wait is bounded: it gives up and leaves the drain running for
+    ``_stop_stdio`` to cancel.
+    """
+    if stderr_task.done():
+        return
+    try:
+        await asyncio.wait_for(asyncio.shield(stderr_task), timeout)
+    except TimeoutError:
+        return
+
+
+async def _terminate(proc: asyncio.subprocess.Process) -> None:
+    """Terminate a server, kill it when it ignores SIGTERM, then reap it.
+
+    Both waits are shielded: a cancellation raises out of this coroutine but
+    never cancels the wait itself, so the child is still reaped.
+    """
+    if proc.returncode is not None:
+        return
+    try:
+        proc.terminate()
+    except ProcessLookupError:
+        return
+    try:
+        await asyncio.wait_for(asyncio.shield(proc.wait()), STOP_TIMEOUT_SECONDS)
+        return
+    except TimeoutError:
+        pass
+    try:
+        proc.kill()
+    except ProcessLookupError:
+        return
+    with contextlib.suppress(TimeoutError):
+        await asyncio.wait_for(asyncio.shield(proc.wait()), STOP_TIMEOUT_SECONDS)
+
+
 async def _stop_stdio(
     proc: asyncio.subprocess.Process,
     stderr_task: asyncio.Task[None],
 ) -> None:
-    """Terminate the server and stop the stderr drain task."""
-    if proc.returncode is None:
-        try:
-            proc.terminate()
-            await asyncio.wait_for(proc.wait(), 5.0)
-        except (TimeoutError, ProcessLookupError):
-            try:
-                proc.kill()
-            except ProcessLookupError:
-                pass
+    """Stop the stderr drain first, then terminate the server and reap it.
+
+    The drain goes first: a cancellation that arrives during worker shutdown
+    would otherwise escape on the terminate wait and leave the drain task
+    running against a dead pipe. A cancellation during the terminate still
+    kills the child before it propagates, so no process leaks.
+    """
     stderr_task.cancel()
-    with contextlib.suppress(asyncio.CancelledError):
-        await stderr_task
+    try:
+        await _terminate(proc)
+    except asyncio.CancelledError:
+        with contextlib.suppress(ProcessLookupError):
+            proc.kill()
+        raise
+    finally:
+        # The drain is already cancelled, so this join cannot block.
+        if not stderr_task.done():
+            with contextlib.suppress(asyncio.CancelledError, RuntimeError):
+                await stderr_task
 
 
 async def _discover_stdio(command: str, timeout: float) -> list[dict[str, Any]]:
@@ -315,6 +371,9 @@ async def _discover_stdio(command: str, timeout: float) -> list[dict[str, Any]]:
         )
         return _normalize_tools(result.get("tools"))
     except MCPHandshakeError as exc:
+        # Let the drain finish reading what the server already wrote before
+        # the tail is read, or the message loses the server's own words.
+        await _join_drain(stderr_task)
         detail = tail.text()
         if not detail:
             raise
@@ -471,6 +530,9 @@ async def _call_stdio_tool(
             return content, is_error
         return json.dumps(result), is_error
     except MCPHandshakeError as exc:
+        # Let the drain finish reading what the server already wrote before
+        # the tail is read, or the message loses the server's own words.
+        await _join_drain(stderr_task)
         detail = tail.text()
         if not detail:
             raise

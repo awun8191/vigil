@@ -5,6 +5,7 @@ received on its stdin and on what the client returned, never on a mock.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import sys
 import textwrap
@@ -412,3 +413,150 @@ async def test_sse_result_still_succeeds(monkeypatch: pytest.MonkeyPatch) -> Non
 
     assert result.is_error is False, result.output
     assert result.output == "SSE-OK"
+
+
+# ---------------------------------------------------------------------------
+# stdio teardown: the drain stops first, the child never leaks, the tail is
+# read only after the drain has been joined.
+# ---------------------------------------------------------------------------
+
+IGNORES_SIGTERM_SERVER = textwrap.dedent(
+    """\
+    import signal, sys, time
+
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)
+    sys.stderr.write("IGNORING-SIGTERM\\n")
+    sys.stderr.flush()
+    while True:
+        time.sleep(0.05)
+    """
+)
+
+
+def write_ignores_sigterm_server(tmp_path: Path) -> str:
+    path = tmp_path / "ignores_sigterm.py"
+    path.write_text(IGNORES_SIGTERM_SERVER, encoding="utf-8")
+    return f"{sys.executable} {path}"
+
+
+async def wait_until_ignoring_sigterm(tail: Any) -> None:
+    """Wait for the child to install its SIGTERM handler and say so on stderr."""
+    for _ in range(200):
+        if "IGNORING-SIGTERM" in tail.text():
+            return
+        await asyncio.sleep(0.01)
+    raise AssertionError(f"the child never started: {tail.text()!r}")
+
+
+async def test_stop_stdio_kills_a_server_that_ignores_sigterm(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A server that ignores SIGTERM is killed, and the drain is not left running."""
+    from src.integrations.mcp import mcp as mcp_module
+
+    command = write_ignores_sigterm_server(tmp_path)
+    proc, tail, stderr_task = await mcp_module._spawn_stdio(command)
+    await wait_until_ignoring_sigterm(tail)
+    monkeypatch.setattr(mcp_module, "STOP_TIMEOUT_SECONDS", 0.2)
+
+    started = time.monotonic()
+    await mcp_module._stop_stdio(proc, stderr_task)
+    elapsed = time.monotonic() - started
+
+    assert stderr_task.done()
+    assert await asyncio.wait_for(proc.wait(), 5.0) is not None
+    # SIGTERM was ignored, so only the kill removed it.
+    assert proc.returncode == -9
+    assert elapsed < 3.0
+
+
+async def test_stop_stdio_cancelled_mid_wait_still_kills_the_child(tmp_path: Path) -> None:
+    """A cancellation during worker shutdown kills the child and stops the drain."""
+    from src.integrations.mcp import mcp as mcp_module
+
+    command = write_ignores_sigterm_server(tmp_path)
+    proc, tail, stderr_task = await mcp_module._spawn_stdio(command)
+    await wait_until_ignoring_sigterm(tail)
+
+    stopper = asyncio.create_task(mcp_module._stop_stdio(proc, stderr_task))
+    await asyncio.sleep(0.2)
+    assert proc.returncode is None, "the child exited before the cancellation"
+
+    # The drain is stopped before the terminate is waited on, so a second
+    # cancellation cannot escape ahead of it.
+    assert stderr_task.done()
+
+    stopper.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await stopper
+
+    assert await asyncio.wait_for(proc.wait(), 5.0) is not None
+    assert proc.returncode == -9
+    assert "IGNORING-SIGTERM" in tail.text()
+
+
+async def test_discover_joins_the_drain_before_reading_the_tail(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The discovery error path joins the stderr drain before it reads the tail."""
+    from src.integrations.mcp import mcp as mcp_module
+
+    events: list[str] = []
+    real_join = mcp_module._join_drain
+    real_text = mcp_module._StderrTail.text
+
+    async def spy_join(task: Any, timeout: float = 0.2) -> None:
+        events.append("join")
+        await real_join(task, timeout)
+
+    def spy_text(self: Any) -> str:
+        events.append("text")
+        return real_text(self)
+
+    monkeypatch.setattr(mcp_module, "_join_drain", spy_join)
+    monkeypatch.setattr(mcp_module._StderrTail, "text", spy_text)
+
+    script = tmp_path / "dies.py"
+    script.write_text(
+        "import sys\n"
+        "sys.stderr.write('DRAIN-ME\\n')\n"
+        "sys.stderr.flush()\n"
+        "raise SystemExit(3)\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(MCPHandshakeError):
+        await ConnectorsService(
+            session=None, settings=Settings(APP_ENV="test")
+        ).register_mcp_server(
+            name="join-server",
+            transport="stdio",
+            command=f"{sys.executable} {script}",
+        )
+
+    assert events.count("join") == 1
+    assert events.index("join") < events.index("text")
+
+
+async def test_join_drain_leaves_a_still_running_drain_alone() -> None:
+    """The join is bounded: a drain that never reaches EOF is not cancelled."""
+    from src.integrations.mcp import mcp as mcp_module
+
+    tail = mcp_module._StderrTail()
+    started = asyncio.Event()
+
+    async def never_ends() -> None:
+        started.set()
+        await asyncio.sleep(30)
+
+    task = asyncio.create_task(never_ends())
+    await started.wait()
+    began = time.monotonic()
+    await mcp_module._join_drain(task, timeout=0.05)
+    elapsed = time.monotonic() - began
+
+    assert task.done() is False
+    assert elapsed < 1.0
+    assert tail.text() == ""
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
