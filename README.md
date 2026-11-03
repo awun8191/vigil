@@ -134,6 +134,12 @@ cd backend
 env -u PYTHONPATH uv run python -m src.worker
 ```
 
+The API does not poll the job queue. It has no Docker socket, so a job it
+claimed would fail at its first sandbox tool call. For single-process local
+development you can set `EMBED_WORKER=true` and skip the second terminal, but
+then the API process must own the Docker socket. Keep it false whenever
+`python -m src.worker` runs.
+
 ### Run the web client
 
 ```bash

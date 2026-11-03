@@ -177,6 +177,11 @@ class Settings(BaseSettings):
     # --- Background Jobs & Worker ---
     JOB_POLL_INTERVAL_SECONDS: int = 5
     JOB_LOCK_TIMEOUT_SECONDS: int = 300
+    # Start the job poller inside the API process. Off by default: the deploy
+    # runs one worker process with the Docker socket, and a second poller in
+    # the API cannot create sandbox containers, so every run it claims fails.
+    # Set true only for single-process local development.
+    EMBED_WORKER: bool = False
 
     # --- Notifications Subsystem ---
     NTFY_BASE_URL: str = "https://ntfy.sh"

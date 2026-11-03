@@ -66,11 +66,14 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     import asyncio
     worker_stop = asyncio.Event()
     worker_task: asyncio.Task[None] | None = None
-    if settings.APP_ENV != "test":
+    if settings.EMBED_WORKER:
         from src.worker import run_worker
+        logger.info("Starting embedded job worker in the API process")
         worker_task = asyncio.create_task(
             run_worker(stop_event=worker_stop, install_signal_handlers=False)
         )
+    else:
+        logger.info("Embedded job worker disabled; run `python -m src.worker` separately")
 
     yield
     worker_stop.set()
