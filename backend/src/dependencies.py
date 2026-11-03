@@ -461,7 +461,9 @@ class _StubMCPHost:
         return "read"
 
     async def is_healthy(self, connector_id: str) -> bool:
-        return True
+        # This host cannot run a tool, so it is never healthy. A true here would
+        # make a broken install read as a working connector host.
+        return False
 
 
 def get_mcp_host(settings: Settings = Depends(get_settings)) -> MCPHostProtocol:

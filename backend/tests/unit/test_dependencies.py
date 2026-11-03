@@ -184,3 +184,13 @@ async def test_auth_dependencies() -> None:
     user = await deps.get_current_user(device=device, settings=settings, session=None)
     assert isinstance(user, UserDTO)
     assert user.display_name == "Default User"
+
+
+async def test_stub_mcp_host_never_reports_success() -> None:
+    """The fallback host cannot run a tool, so it is unhealthy and fails closed."""
+    host = deps._StubMCPHost()
+
+    assert await host.is_healthy("missing") is False
+    result = await host.execute_tool("missing", "any_tool", {})
+    assert result.is_error is True
+    assert "not run" in result.output

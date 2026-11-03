@@ -17,15 +17,25 @@ from src.middlewares.timing import TimingMiddleware
 
 
 def assert_safe_startup_config(settings: Settings) -> None:
-    """Refuse to boot a production process that keeps a published secret key.
+    """Refuse to boot a configuration that cannot work.
 
-    Settings validation raises first for this case. This guard also covers a
-    Settings object that a caller builds around validation.
+    Settings validation raises first for the published secret key. This guard
+    also covers a Settings object that a caller builds around validation.
+
+    A production API process must not poll the queue: the deployment gives that
+    job to the worker service, which owns the Docker socket, and a second poller
+    claims the same runs and fails at its first sandbox call.
     """
     if settings.APP_ENV == "production" and is_unsafe_secret_key(settings.SECRET_KEY):
         raise RuntimeError(
             "Refusing to start: SECRET_KEY is not safe for production. "
             "Set SECRET_KEY to a unique value, for example: openssl rand -hex 32"
+        )
+    if settings.APP_ENV == "production" and settings.EMBED_WORKER:
+        raise RuntimeError(
+            "Refusing to start: EMBED_WORKER is true in production. "
+            "Run `python -m src.worker` as its own process and keep "
+            "EMBED_WORKER=false in the API service."
         )
 
 

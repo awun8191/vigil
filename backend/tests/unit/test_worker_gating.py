@@ -6,6 +6,7 @@ cannot execute. These tests use the real lifespan and a recorder in place of
 the worker loop. No database, no Docker, no provider call.
 """
 import asyncio
+import secrets
 
 import pytest
 
@@ -82,3 +83,24 @@ async def test_lifespan_starts_worker_when_enabled(
 
     assert len(calls) == 1
     assert calls[0].is_set()
+
+
+def test_production_refuses_an_embedded_worker() -> None:
+    """A production API process must not poll the queue."""
+    settings = Settings(
+        APP_ENV="production",
+        EMBED_WORKER=True,
+        SECRET_KEY=secrets.token_hex(32),
+    )
+    with pytest.raises(RuntimeError, match="EMBED_WORKER"):
+        main_module.assert_safe_startup_config(settings)
+
+
+def test_production_accepts_a_separate_worker() -> None:
+    """The supported production shape boots with the worker kept separate."""
+    settings = Settings(
+        APP_ENV="production",
+        EMBED_WORKER=False,
+        SECRET_KEY=secrets.token_hex(32),
+    )
+    main_module.assert_safe_startup_config(settings)
