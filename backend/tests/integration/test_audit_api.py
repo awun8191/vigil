@@ -24,7 +24,6 @@ from src.modules.audit.service import (
     AuditService,
     redact_details,
 )
-from src.modules.connectors.service import ConnectorsService
 from src.modules.jobs.service import JobsService
 from src.modules.runs.repository import RunCreateDTO
 from src.modules.runs.service import RunsService
@@ -35,11 +34,14 @@ AUTH_HEADERS = {"Authorization": "Bearer vgt_testtoken"}
 
 
 def _clear_stores() -> None:
-    """Empty every in-memory store so one test never reads another test row."""
+    """Empty every in-memory store so one test never reads another test row.
+
+    The connector service holds no process-wide account store any more: each
+    service owns its repository, so there is nothing here to empty.
+    """
     ApprovalsService._approvals.clear()
     JobsService._jobs.clear()
     AuditService._events.clear()
-    ConnectorsService._accounts.clear()
     SettingsService._user_settings.clear()
 
 
