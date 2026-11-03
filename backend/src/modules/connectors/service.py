@@ -25,6 +25,7 @@ from src.modules.audit.service import (
     record_event,
 )
 from src.modules.connectors.data import RegisterConnectorRequest, SyncTriggerResponse
+from src.modules.connectors.errors import MCPRegistrationError
 from src.modules.connectors.repository import (
     ConnectorAccountCreateDTO,
     ConnectorAccountDTO,
@@ -39,9 +40,8 @@ from src.modules.connectors.state import (
     SqlConnectorStore,
 )
 
-
-class MCPRegistrationError(ValueError):
-    """A third party MCP server cannot be registered. The message names the reason."""
+# MCPRegistrationError is defined in errors.py so the store can raise it without
+# importing this module, and it stays importable from here as it always was.
 
 
 @dataclass(frozen=True)

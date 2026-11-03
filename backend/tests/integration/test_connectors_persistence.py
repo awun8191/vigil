@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import uuid
 from collections.abc import AsyncIterator
+from datetime import datetime, timezone
 
 import pytest
 from sqlalchemy import func, select, text
@@ -25,8 +26,8 @@ from sqlalchemy.ext.asyncio import (
 
 from src.config.settings import Settings
 from src.modules.connectors.data import RegisterConnectorRequest
-from src.modules.connectors.repository import ConnectorAccountCreateDTO
-from src.modules.connectors.service import ConnectorsService
+from src.modules.connectors.repository import ConnectorAccountCreateDTO, MCPServerDTO
+from src.modules.connectors.service import ConnectorsService, MCPRegistrationError
 from src.schemas.connectors import ConnectedAccountModel, MCPServerModel
 from tests.unit.test_mcp_registration import write_fake_server
 
@@ -298,5 +299,51 @@ async def test_saving_the_same_account_twice_replaces_that_row(
                 )
             await cleanup.execute(
                 text("delete from users where id = :id"), {"id": user_id}
+            )
+            await cleanup.commit()
+
+
+@pytest.mark.asyncio
+async def test_a_second_registration_of_one_name_is_a_domain_error(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """A lost race on the unique name is an MCPRegistrationError, not a 500.
+
+    Two workers can both pass the service's "is it registered" pre-check. The
+    unique index on ``mcp_servers.name`` rejects the loser, and the store has to
+    roll the transaction back and raise the same error the pre-check raises.
+    """
+    name = f"dup-mcp-{uuid.uuid4().hex[:8]}"
+    now = datetime.now(timezone.utc)
+
+    def candidate() -> MCPServerDTO:
+        return MCPServerDTO(
+            id=uuid.uuid4(),
+            name=name,
+            transport="sse",
+            command=None,
+            url="http://127.0.0.1:9/sse",
+            enabled=True,
+            created_at=now,
+        )
+
+    try:
+        async with session_factory() as session:
+            service = ConnectorsService(
+                session=session, settings=Settings(APP_ENV="test")
+            )
+            stored = await service.repository.register_server(candidate())
+
+            with pytest.raises(MCPRegistrationError, match="already registered"):
+                await service.repository.register_server(candidate())
+
+            # The rollback left the session usable and the first row untouched.
+            still_stored = await service.repository.get_server(name)
+            assert still_stored is not None
+            assert still_stored.id == stored.id
+    finally:
+        async with session_factory() as cleanup:
+            await cleanup.execute(
+                text("delete from mcp_servers where name = :name"), {"name": name}
             )
             await cleanup.commit()

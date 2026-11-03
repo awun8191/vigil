@@ -14,8 +14,10 @@ from uuid import UUID, uuid4
 
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.modules.connectors.errors import MCPRegistrationError
 from src.modules.connectors.repository import (
     ConnectorAccountCreateDTO,
     ConnectorAccountDTO,
@@ -240,6 +242,14 @@ class SqlConnectorStore:
         return self._account_dto(model)
 
     async def register_server(self, server: MCPServerDTO) -> MCPServerDTO:
+        """Insert one server row, or report the name as already registered.
+
+        Two registrations of one name can both pass the service's pre-check, and
+        the unique index on ``name`` then rejects the second insert. That race is
+        a domain error, not a server fault: the transaction is rolled back and
+        the caller sees ``MCPRegistrationError`` instead of an IntegrityError
+        surfacing as a 500.
+        """
         model = MCPServerModel(
             id=server.id,
             name=server.name,
@@ -250,8 +260,14 @@ class SqlConnectorStore:
             created_at=server.created_at,
         )
         self.session.add(model)
-        await self.session.flush()
-        await self.session.commit()
+        try:
+            await self.session.flush()
+            await self.session.commit()
+        except IntegrityError as exc:
+            await self.session.rollback()
+            raise MCPRegistrationError(
+                f"an MCP server named {server.name!r} is already registered"
+            ) from exc
         return self._server_dto(model)
 
     async def get_server(self, name: str) -> MCPServerDTO | None:
