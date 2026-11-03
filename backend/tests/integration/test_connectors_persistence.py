@@ -11,6 +11,7 @@ missing, they skip with a reason.
 """
 from __future__ import annotations
 
+import asyncio
 import uuid
 from collections.abc import AsyncIterator
 
@@ -24,8 +25,9 @@ from sqlalchemy.ext.asyncio import (
 
 from src.config.settings import Settings
 from src.modules.connectors.data import RegisterConnectorRequest
+from src.modules.connectors.repository import ConnectorAccountCreateDTO
 from src.modules.connectors.service import ConnectorsService
-from src.schemas.connectors import ConnectedAccountModel
+from src.schemas.connectors import ConnectedAccountModel, MCPServerModel
 from tests.unit.test_mcp_registration import write_fake_server
 
 
@@ -131,6 +133,38 @@ async def test_account_and_mcp_server_survive_a_new_session(
                     ConnectedAccountModel.id == account.id
                 )
             )
+            # Direct selects, with no service and no cache in the path.
+            account_row_ids = list(
+                await second.scalars(
+                    select(ConnectedAccountModel.id).where(
+                        ConnectedAccountModel.user_id == user_id,
+                        ConnectedAccountModel.connector_id == "gmail",
+                        ConnectedAccountModel.account_label == account_label,
+                    )
+                )
+            )
+            server_row_names = list(
+                await second.scalars(
+                    select(MCPServerModel.name).where(MCPServerModel.name == server_name)
+                )
+            )
+
+        # The rows exist. This is asserted before any account field, because the
+        # account half can be served by the process-local store while the row is
+        # missing; only a select proves the database has it.
+        assert server_row_names == [server_name]
+        assert account_row_ids == [account.id]
+
+        # The restored server comes back through the service, not the cache that
+        # the restart just emptied.
+        assert restored_server is not None
+        assert restored_server.id == server.id
+        assert restored_server.name == server_name
+        assert restored_server.transport == "stdio"
+        assert restored_server.command == command
+        assert restored_server.url is None
+        assert restored_server.enabled is True
+        assert server_name in [row.name for row in listed_servers]
 
         assert restored_account is not None
         assert restored_account.id == account.id
@@ -141,15 +175,6 @@ async def test_account_and_mcp_server_survive_a_new_session(
         assert restored_account.status == "active"
         assert restored_account.encrypted_credentials == account.encrypted_credentials
         assert [row.id for row in listed_accounts] == [account.id]
-
-        assert restored_server is not None
-        assert restored_server.id == server.id
-        assert restored_server.name == server_name
-        assert restored_server.transport == "stdio"
-        assert restored_server.command == command
-        assert restored_server.url is None
-        assert restored_server.enabled is True
-        assert server_name in [row.name for row in listed_servers]
 
         # One account row appeared, and the blob round-trips byte for byte.
         assert accounts_after == accounts_before + 1
@@ -169,6 +194,108 @@ async def test_account_and_mcp_server_survive_a_new_session(
                 text("delete from mcp_servers where name = :name"),
                 {"name": server_name},
             )
+            await cleanup.execute(
+                text("delete from users where id = :id"), {"id": user_id}
+            )
+            await cleanup.commit()
+
+
+@pytest.mark.asyncio
+async def test_saving_the_same_account_twice_replaces_that_row(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """A reconnect rewrites one row: same id, new blob and scopes, later timestamp.
+
+    The unique key on (user_id, connector_id, account_label) is what makes a
+    second connect the same account. The insert's update branch has to keep the
+    id and created_at, replace the credentials and scopes, and leave exactly one
+    row behind.
+    """
+    settings = Settings(APP_ENV="test")
+    suffix = uuid.uuid4().hex[:8]
+    user_id = uuid.uuid4()
+    account_label = f"reconnect-{suffix}@example.com"
+    first_blob = f"ciphertext-first-{suffix}"
+    second_blob = f"ciphertext-second-{suffix}"
+    first_scopes = ["https://www.googleapis.com/auth/gmail.readonly"]
+    second_scopes = [
+        "https://www.googleapis.com/auth/gmail.readonly",
+        "https://www.googleapis.com/auth/gmail.modify",
+    ]
+    account_id: uuid.UUID | None = None
+
+    try:
+        async with session_factory() as setup:
+            await setup.execute(
+                text(
+                    "insert into users (id, display_name) values (:id, :name) "
+                    "on conflict (id) do nothing"
+                ),
+                {"id": user_id, "name": f"reconnect-connector-{suffix}"},
+            )
+            await setup.commit()
+
+        async with session_factory() as first:
+            first_service = ConnectorsService(session=first, settings=settings)
+            original = await first_service.save_account(
+                ConnectorAccountCreateDTO(
+                    user_id=user_id,
+                    connector_id="gmail",
+                    account_label=account_label,
+                    encrypted_credentials=first_blob,
+                    scopes=first_scopes,
+                )
+            )
+            account_id = original.id
+
+        # Long enough that the second write stamps a strictly later updated_at.
+        await asyncio.sleep(0.01)
+
+        # A reconnect after a restart: new session, new service, same triple.
+        async with session_factory() as second:
+            second_service = ConnectorsService(session=second, settings=settings)
+            replaced = await second_service.save_account(
+                ConnectorAccountCreateDTO(
+                    user_id=user_id,
+                    connector_id="gmail",
+                    account_label=account_label,
+                    encrypted_credentials=second_blob,
+                    scopes=second_scopes,
+                )
+            )
+            row_count = await second.scalar(
+                select(func.count())
+                .select_from(ConnectedAccountModel)
+                .where(
+                    ConnectedAccountModel.user_id == user_id,
+                    ConnectedAccountModel.connector_id == "gmail",
+                    ConnectedAccountModel.account_label == account_label,
+                )
+            )
+            stored = await second.scalar(
+                select(ConnectedAccountModel).where(
+                    ConnectedAccountModel.id == original.id
+                )
+            )
+
+        assert row_count == 1
+        assert stored is not None
+        assert replaced.id == original.id
+        assert stored.id == original.id
+        # The update branch replaced the mutable columns ...
+        assert stored.encrypted_credentials == second_blob
+        assert stored.scopes == second_scopes
+        # ... and kept created_at while moving updated_at forward.
+        assert stored.created_at == original.created_at
+        assert stored.updated_at > original.updated_at
+        assert stored.updated_at > stored.created_at
+    finally:
+        async with session_factory() as cleanup:
+            if account_id is not None:
+                await cleanup.execute(
+                    text("delete from connected_accounts where id = :id"),
+                    {"id": account_id},
+                )
             await cleanup.execute(
                 text("delete from users where id = :id"), {"id": user_id}
             )
