@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 from datetime import datetime, timezone
+from typing import Any
 from uuid import UUID, uuid4
 
 from sqlalchemy import and_, func, or_, select
@@ -193,6 +194,31 @@ class SqlChatRepository:
         await self.session.commit()
         return self._message_dto(msg)
 
+    @staticmethod
+    def _history_filter(session_id: UUID) -> tuple[Any, ...]:
+        """Return the WHERE terms the chat view applies to one thread.
+
+        A user row is always history. An assistant row is history only when it
+        carries prose: a row that requested tools, or that has no content yet,
+        belongs to the run transcript.
+        """
+        no_tool_calls = or_(
+            MessageModel.tool_calls.is_(None),
+            func.jsonb_array_length(MessageModel.tool_calls) == 0,
+        )
+        has_content = and_(
+            MessageModel.content.is_not(None),
+            MessageModel.content != "",
+        )
+        return (
+            MessageModel.session_id == session_id,
+            MessageModel.role.in_(CHAT_HISTORY_ROLES),
+            or_(
+                MessageModel.role == "user",
+                and_(MessageModel.role == "assistant", no_tool_calls, has_content),
+            ),
+        )
+
     async def get_history(
         self,
         session_id: UUID,
@@ -201,18 +227,12 @@ class SqlChatRepository:
     ) -> list[ChatMessageDTO]:
         result = await self.session.execute(
             select(MessageModel)
-            .where(
-                MessageModel.session_id == session_id,
-                MessageModel.role.in_(CHAT_HISTORY_ROLES),
-            )
+            .where(*self._history_filter(session_id))
             .order_by(MessageModel.created_at.asc(), MessageModel.id.asc())
+            .offset(offset)
+            .limit(limit)
         )
-        rows = [
-            m
-            for m in result.scalars().all()
-            if m.role == "user" or (m.role == "assistant" and not m.tool_calls and m.content)
-        ]
-        return [self._message_dto(m) for m in rows[offset : offset + limit]]
+        return [self._message_dto(m) for m in result.scalars().all()]
 
     async def delete_session(self, session_id: UUID) -> bool:
         model = await self.session.get(ThreadModel, session_id)
@@ -224,8 +244,10 @@ class SqlChatRepository:
         return True
 
     async def _message_count(self, session_id: UUID) -> int:
-        rows = await self.get_history(session_id, limit=10000)
-        return len(rows)
+        result = await self.session.execute(
+            select(func.count(MessageModel.id)).where(*self._history_filter(session_id))
+        )
+        return int(result.scalar_one())
 
 
 def _now() -> datetime:
