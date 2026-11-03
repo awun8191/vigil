@@ -852,7 +852,6 @@ class RunLoop:
         pending: list[str] = []
         pending_chars = 0
         pending_since: float | None = None
-        batch = 0
         tool_calls: list[LLMToolCallDTO] = []
         usage: dict[str, Any] = {}
         finish_reason = "stop"
@@ -863,17 +862,14 @@ class RunLoop:
             The helper is idempotent: an empty batch is a no-op, so every exit
             path may call it without checking.
             """
-            nonlocal pending, pending_chars, pending_since, batch
+            nonlocal pending, pending_chars, pending_since
             if not pending:
                 return
             delta = "".join(pending)
             pending = []
             pending_chars = 0
             pending_since = None
-            batch += 1
-            await self._record_step(
-                run.id, "message_delta", {"delta": delta, "index": batch}
-            )
+            await self._record_step(run.id, "message_delta", {"delta": delta})
 
         def batch_timeout() -> float:
             """Return the seconds left before the open batch must be flushed."""
