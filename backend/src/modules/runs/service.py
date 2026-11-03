@@ -21,6 +21,7 @@ from src.modules.jobs.repository import JobDTO, JobsRepository
 from src.modules.runs.barrier import InvariantViolation
 from src.modules.runs.tools import openai_tool_declarations
 from src.modules.runs.loop import (
+    CompactionProvider,
     LoopDependencyMissing,
     RunLoop,
     StageObserver,
@@ -71,6 +72,7 @@ class RunsService:
         policy: PartitionPolicy | None = None,
         jobs: JobsRepository | None = None,
         pricing: Any | None = None,
+        compactor: CompactionProvider | None = None,
     ) -> None:
         self.session = session
         self.settings = settings
@@ -81,6 +83,7 @@ class RunsService:
         self.pricing = pricing
         self.journal: RunJournal = journal or self._default_journal(session)
         self.jobs = jobs
+        self.compactor = compactor
 
     @staticmethod
     def _default_journal(session: AsyncSession | None) -> RunJournal:
@@ -111,6 +114,7 @@ class RunsService:
             model=self.llm,
             tools=self.tools,
             policy=self.policy,
+            compactor=self.compactor,
             observer=observer,
             tool_schemas=tool_schemas,
             cost=self,

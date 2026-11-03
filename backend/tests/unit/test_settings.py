@@ -7,7 +7,7 @@ from src.config.settings import Settings, get_settings
 
 def test_default_settings():
     """Verify default values and types for all core configuration fields."""
-    settings = Settings()
+    settings = Settings(_env_file=None)
 
     # Server defaults
     assert settings.APP_NAME == "Vigil"

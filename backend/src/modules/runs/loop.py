@@ -414,7 +414,10 @@ class RunLoop:
         await self.observer.on_stage(run_id, "assemble")
 
         # Stage 2: compact check.
-        messages = await self._compact_check(run, assembled, messages)
+        compacted_messages = await self._compact_check(run, assembled, messages)
+        if list(compacted_messages) != list(messages):
+            messages = compacted_messages
+            assembled = self._assemble(config, messages)
         stages.append("compact_check")
         await self.observer.on_stage(run_id, "compact_check")
 
@@ -564,8 +567,65 @@ class RunLoop:
         if assembled.tokens <= limit:
             return list(messages)
         if self.compactor is not None:
-            changed = await self.compactor.compact(run.id, messages)
-            if changed:
+            class _HybridMessage(dict[str, Any]):
+                """Mapping + attribute wrapper so both CompactionService and MessageDTO consumers work."""
+
+                def __init__(self, dto: MessageDTO) -> None:
+                    data: dict[str, Any] = {
+                        "id": str(dto.id),
+                        "run_id": dto.run_id,
+                        "session_id": dto.session_id,
+                        "role": dto.role,
+                        "content": dto.content,
+                        "tool_calls": dto.tool_calls,
+                        "tool_call_id": dto.tool_call_id,
+                        "tool_name": dto.tool_name,
+                        "tool_arguments": dto.tool_arguments,
+                        "tool_result_reference": dto.tool_result_reference,
+                        "created_at": dto.created_at,
+                    }
+                    super().__init__({k: v for k, v in data.items() if v is not None or k in ("role", "content")})
+                    self._dto = dto
+
+                def __getattr__(self, item: str) -> Any:
+                    return getattr(self._dto, item)
+
+            originals_by_id = {str(m.id): m for m in messages}
+            hybrid_messages = [_HybridMessage(m) for m in messages]
+            result: Any = await self.compactor.compact(run.id, hybrid_messages)  # type: ignore[arg-type]
+            if hasattr(result, "messages") and isinstance(result.messages, Sequence):
+                from datetime import datetime, timezone
+                from uuid import uuid4
+
+                compacted_dtos: list[MessageDTO] = []
+                now = datetime.now(timezone.utc)
+                for item in result.messages:
+                    if isinstance(item, MessageDTO):
+                        compacted_dtos.append(item)
+                        continue
+                    raw_id = str(item.get("id") or "")
+                    orig = originals_by_id.get(raw_id)
+                    msg_id = orig.id if orig is not None else uuid4()
+                    compacted_dtos.append(
+                        MessageDTO(
+                            id=msg_id,
+                            run_id=run.id,
+                            session_id=orig.session_id if orig is not None else self._session_id,
+                            role=str(item.get("role", "assistant")),
+                            content=item.get("content"),
+                            tool_calls=item.get("tool_calls") if "tool_calls" in item else (orig.tool_calls if orig else None),
+                            tool_call_id=item.get("tool_call_id") if "tool_call_id" in item else (orig.tool_call_id if orig else None),
+                            tool_name=item.get("tool_name") if "tool_name" in item else (orig.tool_name if orig else None),
+                            tool_arguments=item.get("tool_arguments") if "tool_arguments" in item else (orig.tool_arguments if orig else None),
+                            tool_result_reference=item.get("tool_result_reference") if "tool_result_reference" in item else (orig.tool_result_reference if orig else None),
+                            created_at=orig.created_at if orig is not None else now,
+                        )
+                    )
+                replace_fn = getattr(self.journal, "replace_messages", None)
+                if callable(replace_fn):
+                    await replace_fn(run.id, compacted_dtos)
+                return compacted_dtos
+            if result:
                 return await self.journal.list_messages(run.id)
         await self._record_step(
             run.id,

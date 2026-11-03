@@ -47,12 +47,19 @@ from src.integrations.repositories import (
 
 _engine = None
 _sessionmaker = None
+_engine_loop = None
 
 
 def _get_sessionmaker(settings: Settings) -> async_sessionmaker[AsyncSession]:
     """Internal lazy singleton for async SQLAlchemy session factory."""
-    global _engine, _sessionmaker
-    if _sessionmaker is None:
+    import asyncio
+
+    global _engine, _sessionmaker, _engine_loop
+    try:
+        current_loop = asyncio.get_running_loop()
+    except RuntimeError:
+        current_loop = None
+    if _sessionmaker is None or (_engine_loop is not None and current_loop is not _engine_loop):
         _engine = create_async_engine(
             settings.DATABASE_URL,
             pool_size=settings.DATABASE_POOL_SIZE,
@@ -65,6 +72,7 @@ def _get_sessionmaker(settings: Settings) -> async_sessionmaker[AsyncSession]:
             expire_on_commit=False,
             autoflush=False,
         )
+        _engine_loop = current_loop
     return _sessionmaker
 
 
@@ -75,10 +83,14 @@ async def get_db_session(
     FastAPI dependency yielding an async database session with automatic transaction management.
     Rolls back on unhandled exceptions and ensures clean closure.
     """
+    from sqlalchemy import text
+
     session_factory = _get_sessionmaker(settings)
     has_yielded = False
     try:
         async with session_factory() as session:
+            if settings.APP_ENV == "test":
+                await session.execute(text("SELECT 1"))
             try:
                 has_yielded = True
                 yield session
@@ -87,7 +99,7 @@ async def get_db_session(
                 await session.rollback()
                 raise
     except BaseException:
-        if has_yielded:
+        if has_yielded or settings.APP_ENV not in ("test", "development"):
             # Re-raise exceptions that originated from inside the yield block (route handler / validation)
             raise
         # Fallback for environments where PostgreSQL is not running (e.g. offline unit test suite)
@@ -537,6 +549,9 @@ class RunToolExecutor:
             if delivery_dir is not None
             else Path(settings.WORKSPACE_BASE_PATH) / "delivery" / str(run_id)
         )
+        self.snapshot_tar = (
+            Path(settings.WORKSPACE_BASE_PATH) / "snapshots" / f"{run_id}.tar"
+        )
         self._container_id: str | None = None
 
     @property
@@ -548,6 +563,12 @@ class RunToolExecutor:
         """Create the run container once and return its id."""
         if self._container_id is None:
             self._container_id = await self._create_container()
+            restore: Any = getattr(self.sandbox, "restore_workspace", None)
+            if callable(restore) and self.snapshot_tar.is_file():
+                try:
+                    await restore(self._container_id, str(self.snapshot_tar))
+                except Exception:  # noqa: BLE001
+                    pass
         return self._container_id
 
     async def _create_container(self) -> str:
@@ -623,11 +644,17 @@ class RunToolExecutor:
         await self.session.commit()
 
     async def close(self) -> None:
-        """Remove the run container. A missing container is not an error."""
+        """Snapshot /workspace and remove the run container. A missing container is not an error."""
         container_id = self._container_id
         self._container_id = None
         if container_id is None:
             return
+        snapshot: Any = getattr(self.sandbox, "snapshot_workspace", None)
+        if callable(snapshot):
+            try:
+                await snapshot(container_id, str(self.snapshot_tar))
+            except Exception:  # noqa: BLE001 - best-effort workspace snapshot before container teardown
+                pass
         try:
             await self.sandbox.stop_and_remove(container_id)
         except Exception:  # noqa: BLE001 - cleanup must not mask the run outcome
@@ -699,6 +726,7 @@ def build_runs_service(
     sandbox: SandboxRunnerProtocol | None = None,
     mcp_host: MCPHostProtocol | None = None,
     tools: Any | None = None,
+    compactor: Any | None = None,
 ) -> Any:
     """Build the runs service with the model client and the tools of one run.
 
@@ -710,6 +738,7 @@ def build_runs_service(
         sandbox: Optional sandbox runner. It defaults to the real runner.
         mcp_host: Optional connector host. It defaults to the real host.
         tools: Optional tool executor. It overrides the built executor.
+        compactor: Optional compaction provider. It defaults to CompactionService.
 
     Returns:
         The runs service.
@@ -721,6 +750,11 @@ def build_runs_service(
         executor = build_tool_executor(
             session, settings, run_id, sandbox=sandbox, mcp_host=mcp_host
         )
+    resolved_compactor = (
+        compactor
+        if compactor is not None
+        else get_compaction_service(session=session, settings=settings)  # type: ignore[arg-type]
+    )
     return RunsService(
         session=session,
         settings=settings,
@@ -728,6 +762,7 @@ def build_runs_service(
         llm=llm if llm is not None else get_llm_client(settings),
         tools=executor,
         pricing=build_pricing_service(session),
+        compactor=resolved_compactor,
     )
 
 

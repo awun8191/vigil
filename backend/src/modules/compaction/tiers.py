@@ -17,6 +17,9 @@ from typing import Any, Mapping, Sequence
 
 try:  # pragma: no cover - import guard only
     import tiktoken
+    import tiktoken.model as _tiktoken_model
+
+    _tiktoken_model.MODEL_PREFIX_TO_ENCODING.setdefault("muse-spark", "o200k_base")
 except ImportError:  # pragma: no cover - tiktoken is a declared dependency
     tiktoken = None  # type: ignore[assignment]
 

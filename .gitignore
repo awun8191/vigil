@@ -53,6 +53,9 @@ sdist/
 .env
 .env.*
 !.env.example
+backend/.env
+backend/.env.*
+!backend/.env.example
 deploy/.env
 deploy/.env.*
 !deploy/.env.example

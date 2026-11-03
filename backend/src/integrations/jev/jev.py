@@ -41,7 +41,7 @@ class JevClient:
     ) -> JevEvaluationResultDTO:
         """Evaluate calibrated questions on item state."""
         # In offline/test mode or if no API key is provided, use deterministic rule-based evaluation
-        if not self.settings.JEV_API_KEY or self.settings.APP_ENV in ("test", "development"):
+        if not self.settings.JEV_API_KEY or self.settings.APP_ENV == "test":
             return self._fallback_evaluate(state, questions, model)
 
         client = await self._get_client()

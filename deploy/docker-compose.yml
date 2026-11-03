@@ -32,6 +32,9 @@ services:
       # No default. A missing key fails the compose command, not the boot.
       SECRET_KEY: ${SECRET_KEY:?SECRET_KEY must be set. Generate one with openssl rand -hex 32}
       PORT: 8000
+    volumes:
+      - vigil_workspaces:/var/vigil/workspaces
+      - vigil_skills:/var/vigil/skills
     depends_on:
       postgres:
         condition: service_healthy
@@ -55,9 +58,15 @@ services:
       APP_ENV: ${APP_ENV:-development}
       # The worker decrypts stored credentials, so it needs the same key.
       SECRET_KEY: ${SECRET_KEY:?SECRET_KEY must be set. Generate one with openssl rand -hex 32}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - vigil_workspaces:/var/vigil/workspaces
+      - vigil_skills:/var/vigil/skills
     depends_on:
       postgres:
         condition: service_healthy
 
 volumes:
   postgres_data:
+  vigil_workspaces:
+  vigil_skills:

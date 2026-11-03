@@ -220,6 +220,27 @@ async def handle_reindex_memory(job: JobDTO, context: JobContext) -> None:
     )
 
 
+async def handle_discover_mcp_tools(job: JobDTO, context: JobContext) -> None:
+    """Run MCP handshake and tool discovery for a third party MCP server."""
+    from src.modules.connectors.service import ConnectorsService
+
+    payload = _payload(job)
+    name = str(payload.get("name") or "")
+    transport = str(payload.get("transport") or "")
+    command = payload.get("command")
+    url = payload.get("url")
+    service = ConnectorsService(session=context.session, settings=context.settings)  # type: ignore[arg-type]
+    if await service.get_mcp_server(name) is not None:
+        await service.refresh_mcp_tools(name)
+    else:
+        await service.register_mcp_server(
+            name=name,
+            transport=transport,
+            command=str(command) if command is not None else None,
+            url=str(url) if url is not None else None,
+        )
+
+
 JOB_HANDLERS: dict[str, JobHandler] = {
     "resume_run": handle_resume_run,
     "execute_run": handle_execute_run,
@@ -230,6 +251,10 @@ JOB_HANDLERS: dict[str, JobHandler] = {
     "reindex_memory": handle_reindex_memory,
 }
 """The dispatch table. It holds one handler for every type in JOB_TYPE_PRIORITIES."""
+
+EXTRA_JOB_HANDLERS: dict[str, JobHandler] = {
+    "discover_mcp_tools": handle_discover_mcp_tools,
+}
 
 UNWIRED_JOB_TYPES: frozenset[str] = frozenset(
     {"triage_item", "poll_connector", "cleanup_sandbox", "reindex_memory"}
@@ -262,6 +287,8 @@ def resolve_handler(
     try:
         return table[job_type]
     except KeyError:
+        if handlers is None and job_type in EXTRA_JOB_HANDLERS:
+            return EXTRA_JOB_HANDLERS[job_type]
         raise UnknownJobTypeError(job_type) from None
 
 

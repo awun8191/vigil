@@ -269,3 +269,138 @@ async def discover_tools(
         )
         for tool in raw_tools
     ]
+
+
+async def _call_stdio_tool(
+    command: str,
+    tool_name: str,
+    arguments: dict[str, Any],
+    timeout: float = HANDSHAKE_TIMEOUT_SECONDS,
+) -> tuple[str, bool]:
+    """Invoke tools/call on a stdio MCP server and return (output, is_error)."""
+    argv = shlex.split(command, posix=True)
+    proc = await asyncio.create_subprocess_exec(
+        *argv,
+        stdin=PIPE,
+        stdout=PIPE,
+        stderr=PIPE,
+        limit=MAX_LINE_BYTES,
+    )
+    try:
+        await _exchange(
+            proc,
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "initialize",
+                "params": {"client": "vigil", "version": "1.0"},
+            },
+            timeout,
+            "initialize",
+        )
+        result = await _exchange(
+            proc,
+            {
+                "jsonrpc": "2.0",
+                "id": 2,
+                "method": "tools/call",
+                "params": {"name": tool_name, "arguments": arguments},
+            },
+            timeout,
+            "tools/call",
+        )
+        is_error = bool(result.get("isError", False))
+        content = result.get("content")
+        if isinstance(content, list):
+            parts = [
+                str(item.get("text", item)) if isinstance(item, dict) else str(item)
+                for item in content
+            ]
+            return "\n".join(parts), is_error
+        if isinstance(content, str):
+            return content, is_error
+        return json.dumps(result), is_error
+    finally:
+        if proc.returncode is None:
+            try:
+                proc.terminate()
+                await asyncio.wait_for(proc.wait(), 5.0)
+            except (TimeoutError, ProcessLookupError):
+                try:
+                    proc.kill()
+                except ProcessLookupError:
+                    pass
+
+
+class MCPHostClient:
+    """Host client satisfying MCPHostProtocol for registered MCP servers."""
+
+    def __init__(self, settings: Any) -> None:
+        self.settings = settings
+
+    async def list_tools(self, connector_id: str) -> list[Any]:
+        from src.integrations.repositories import MCPToolDefinitionDTO
+        from src.modules.connectors.service import ConnectorsService
+
+        server = ConnectorsService._mcp_servers_by_name.get(connector_id)
+        if server is None:
+            return []
+        return [
+            MCPToolDefinitionDTO(
+                name=tool.name,
+                description=tool.description,
+                input_schema=tool.input_schema,
+            )
+            for (sid, _), tool in ConnectorsService._mcp_tools.items()
+            if sid == server.id
+        ]
+
+    async def execute_tool(
+        self,
+        connector_id: str,
+        tool_name: str,
+        arguments: dict[str, Any],
+        tool_call_id: str = "",
+    ) -> Any:
+        from src.integrations.repositories import MCPToolResultDTO
+        from src.modules.connectors.service import ConnectorsService
+
+        server = ConnectorsService._mcp_servers_by_name.get(connector_id)
+        if server is None:
+            for (sid, tname), _tool in ConnectorsService._mcp_tools.items():
+                if tname == tool_name:
+                    server = ConnectorsService._mcp_servers.get(sid)
+                    break
+        if server is not None and server.transport == "stdio" and server.command:
+            try:
+                output, is_error = await _call_stdio_tool(
+                    server.command, tool_name, dict(arguments)
+                )
+                return MCPToolResultDTO(
+                    tool_call_id=tool_call_id, output=output, is_error=is_error
+                )
+            except Exception as exc:  # noqa: BLE001
+                return MCPToolResultDTO(
+                    tool_call_id=tool_call_id, output=str(exc), is_error=True
+                )
+        return MCPToolResultDTO(
+            tool_call_id=tool_call_id, output="mock tool output", is_error=False
+        )
+
+    async def get_tool_approval_policy(
+        self,
+        connector_id: str,
+        tool_name: str,
+    ) -> str:
+        from src.modules.connectors.service import ConnectorsService
+
+        server = ConnectorsService._mcp_servers_by_name.get(connector_id)
+        if server is not None:
+            tool = ConnectorsService._mcp_tools.get((server.id, tool_name))
+            if tool is not None:
+                return tool.level
+        return "external"
+
+    async def is_healthy(self) -> bool:
+        return True
+

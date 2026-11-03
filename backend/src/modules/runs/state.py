@@ -26,7 +26,7 @@ from datetime import datetime, timezone
 from typing import Any, Literal, Protocol, runtime_checkable
 from uuid import UUID, uuid4
 
-from sqlalchemy import select
+from sqlalchemy import delete, func, select
 
 from src.config.exceptions import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -496,6 +496,8 @@ class InMemoryRunJournal:
         run = self.runs.get(run_id)
         if run is None:
             raise KeyError(f"run {run_id} is absent from the journal")
+        if status is not None and run.status in TERMINAL_RUN_STATUSES and status != run.status:
+            raise InvalidRunTransition(run.status, status, run_id)
         now = _utc_now()
         new_status = status if status is not None else run.status
         done = new_status in TERMINAL_RUN_STATUSES
@@ -559,6 +561,9 @@ class InMemoryRunJournal:
 
     async def list_messages(self, run_id: UUID) -> list[MessageDTO]:
         return list(self.messages.get(run_id, ()))
+
+    async def replace_messages(self, run_id: UUID, messages: list[MessageDTO]) -> None:
+        self.messages[run_id] = list(messages)
 
     async def append_message(self, data: MessageCreateDTO) -> MessageDTO:
         message = MessageDTO(
@@ -841,10 +846,15 @@ class SqlRunJournal:
         token_usage: dict[str, int] | None = None,
         cost_usd: float | None = None,
     ) -> RunDTO:
-        model = await self.session.get(RunModel, run_id)
+        result = await self.session.execute(
+            select(RunModel).where(RunModel.id == run_id).with_for_update()
+        )
+        model = result.scalars().first()
         if model is None:
             raise KeyError(f"run {run_id} is absent from the journal")
         if status is not None:
+            if model.status in TERMINAL_RUN_STATUSES and status != model.status:
+                raise InvalidRunTransition(model.status, status, run_id)
             model.status = status
             if status in TERMINAL_RUN_STATUSES:
                 model.ended_at = ended_at or _utc_now()
@@ -914,6 +924,29 @@ class SqlRunJournal:
         )
         return [self._message_dto(row) for row in result.scalars().all()]
 
+    async def replace_messages(self, run_id: UUID, messages: list[MessageDTO]) -> None:
+        await self.session.execute(
+            delete(MessageModel).where(MessageModel.run_id == run_id)
+        )
+        for msg in messages:
+            self.session.add(
+                MessageModel(
+                    id=msg.id,
+                    run_id=run_id,
+                    session_id=msg.session_id,
+                    role=msg.role,
+                    content=msg.content,
+                    tool_calls=msg.tool_calls,
+                    tool_call_id=msg.tool_call_id,
+                    tool_name=msg.tool_name,
+                    tool_arguments=msg.tool_arguments,
+                    tool_result_reference=msg.tool_result_reference,
+                    created_at=msg.created_at,
+                )
+            )
+        await self.session.flush()
+        await self.session.commit()
+
     async def append_message(self, data: MessageCreateDTO) -> MessageDTO:
         model = MessageModel(
             id=uuid4(),
@@ -945,10 +978,21 @@ class SqlRunJournal:
         return [self._step_dto(model) for model in result.scalars().all()]
 
     async def append_step(self, data: RunStepCreateDTO) -> RunStepDTO:
+        # Lock the parent run row so concurrent writers allocate monotonic step numbers
+        await self.session.execute(
+            select(RunModel.id).where(RunModel.id == data.run_id).with_for_update()
+        )
+        max_res = await self.session.execute(
+            select(func.coalesce(func.max(RunStepModel.step_number), 0)).where(
+                RunStepModel.run_id == data.run_id
+            )
+        )
+        next_step = int(max_res.scalar() or 0) + 1
+        step_number = max(data.step_number, next_step)
         model = RunStepModel(
             id=uuid4(),
             run_id=data.run_id,
-            step_number=data.step_number,
+            step_number=step_number,
             event_type=data.event_type,
             payload=dict(data.payload or {}),
             created_at=_utc_now(),
