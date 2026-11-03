@@ -87,7 +87,7 @@ async def streamed_run(
     """Run one loop iteration over a streaming model and return the run id."""
     model = StreamingModel(fragments)
     tools = FakeToolExecutor()
-    journal = journal or InMemoryRunJournal()
+    journal = journal if journal is not None else InMemoryRunJournal()
     service = RunsService(
         session=None,
         settings=Settings(APP_ENV="test"),
@@ -148,3 +148,36 @@ async def test_the_remainder_is_flushed_before_the_stage_ends() -> None:
     deltas = [step for step in steps if step.event_type == "message_delta"]
     assert len(deltas) == 1
     assert deltas[0].payload["delta"] == "abc"
+
+
+class NoRescanJournal(InMemoryRunJournal):
+    """A journal that fails the test when the loop rescans the step rows."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.guarded = False
+
+    async def list_steps(self, run_id: UUID):
+        """Refuse a read while the loop is running."""
+        if self.guarded:
+            raise AssertionError(
+                "the loop reloaded every step row of the run to number the next one"
+            )
+        return await super().list_steps(run_id)
+
+
+@pytest.mark.asyncio
+async def test_recording_a_step_does_not_rescan_the_run() -> None:
+    """The loop never calls ``list_steps`` while it records steps."""
+    journal = NoRescanJournal()
+    journal.guarded = True
+    fragments = [f"{index % 1000:03d}" for index in range(FRAGMENT_COUNT)]
+
+    run_id, journal = await streamed_run(fragments, journal=journal)
+
+    journal.guarded = False
+    steps = await journal.list_steps(run_id)
+    assert [step.event_type for step in steps].count("message_delta") >= 1
+    numbers = [step.step_number for step in steps]
+    assert numbers == sorted(numbers)
+    assert len(numbers) == len(set(numbers))

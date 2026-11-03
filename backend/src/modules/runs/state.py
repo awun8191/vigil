@@ -628,15 +628,19 @@ class InMemoryRunJournal:
         return list(self.steps.get(run_id, ()))
 
     async def append_step(self, data: RunStepCreateDTO) -> RunStepDTO:
+        steps = self.steps.setdefault(data.run_id, [])
+        # Mirror SqlRunJournal: the stored number is the greater of the request
+        # and the next free slot, so a caller may pass 0 to let it allocate.
+        step_number = max(data.step_number, len(steps) + 1)
         step = RunStepDTO(
             id=uuid4(),
             run_id=data.run_id,
-            step_number=data.step_number,
+            step_number=step_number,
             event_type=data.event_type,
             payload=data.payload,
             created_at=_utc_now(),
         )
-        self.steps.setdefault(data.run_id, []).append(step)
+        steps.append(step)
         return step
 
     async def get_config(self, config_id: UUID) -> AgentConfigDTO | None:

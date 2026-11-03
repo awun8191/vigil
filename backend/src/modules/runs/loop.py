@@ -1016,12 +1016,16 @@ class RunLoop:
     async def _record_step(
         self, run_id: UUID, event_type: str, payload: dict[str, Any]
     ) -> None:
-        """Append one step event to the journal."""
-        steps = await self.journal.list_steps(run_id)
+        """Append one step event to the journal.
+
+        The step number is left to the journal. ``append_step`` reads the
+        highest number of the run under its own row lock, so the loop does not
+        load every step row of the run only to count them.
+        """
         await self.journal.append_step(
             RunStepCreateDTO(
                 run_id=run_id,
-                step_number=len(steps) + 1,
+                step_number=0,
                 event_type=event_type,
                 payload=payload,
             )
