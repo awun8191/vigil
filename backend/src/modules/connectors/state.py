@@ -217,7 +217,12 @@ class SqlConnectorStore:
         account_id = (await self.session.execute(statement)).scalar_one()
         await self.session.commit()
         model = await self.session.get(ConnectedAccountModel, account_id)
-        assert model is not None
+        if model is None:
+            # The upsert returned an id and committed, so the row must be
+            # readable. Nothing sensible is left to return if it is not.
+            raise RuntimeError(
+                f"connected account {account_id} is missing after a successful upsert"
+            )
         return self._account_dto(model)
 
     async def update_account_status(

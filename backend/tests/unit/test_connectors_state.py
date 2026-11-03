@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 
@@ -15,6 +15,7 @@ from src.modules.connectors.service import ConnectorsService
 from src.modules.connectors.state import (
     ConnectorStore,
     InMemoryConnectorStore,
+    SqlConnectorStore,
 )
 
 
@@ -103,3 +104,46 @@ async def test_mcp_server_cache_is_populated_from_the_store() -> None:
     assert await service.unregister_mcp_server(server.name) is True
     assert server.name not in ConnectorsService._mcp_servers_by_name
     assert server.id not in ConnectorsService._mcp_servers
+
+
+class _UpsertResult:
+    """The result of an upsert: one id, the way RETURNING id reports it."""
+
+    def __init__(self, account_id: UUID) -> None:
+        self.account_id = account_id
+
+    def scalar_one(self) -> UUID:
+        return self.account_id
+
+
+class _SessionWithoutTheRow:
+    """A session whose upsert reports an id that no read can find."""
+
+    async def execute(self, statement):  # noqa: ANN001 - statement shape is SQLAlchemy's
+        return _UpsertResult(uuid4())
+
+    async def commit(self) -> None:
+        return None
+
+    async def get(self, model, key):  # noqa: ANN001 - mirrors AsyncSession.get
+        return None
+
+
+@pytest.mark.asyncio
+async def test_a_missing_row_after_an_upsert_raises_runtime_error() -> None:
+    """A committed upsert whose row cannot be read back fails loudly.
+
+    ``assert`` was the old guard, and ``python -O`` strips it, which would let
+    the store hand back a half-built account. The guard is now an exception.
+    """
+    store = SqlConnectorStore(_SessionWithoutTheRow())  # type: ignore[arg-type]
+    with pytest.raises(RuntimeError, match="missing after a successful upsert"):
+        await store.save_account(
+            ConnectorAccountCreateDTO(
+                user_id=uuid4(),
+                connector_id="gmail",
+                account_label="ghost@example.com",
+                encrypted_credentials="ciphertext-blob",
+                scopes=[],
+            )
+        )
