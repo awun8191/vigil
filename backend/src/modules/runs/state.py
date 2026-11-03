@@ -368,6 +368,16 @@ class RunJournal(Protocol):
         """Record one step event."""
         ...
 
+    async def checkpoint(self) -> None:
+        """Make the steps written so far visible to a reader on another session.
+
+        The step journal is a live feed: the SSE endpoint reads it from its own
+        request session while the run is still executing. A store no longer
+        commits, so the loop asks for this checkpoint after each step write.
+        It is one commit per batch, not one per token.
+        """
+        ...
+
     async def get_config(self, config_id: UUID) -> AgentConfigDTO | None:
         """Return one agent configuration or None."""
         ...
@@ -646,6 +656,10 @@ class InMemoryRunJournal:
         )
         steps.append(step)
         return step
+
+    async def checkpoint(self) -> None:
+        """No-op: the in-memory journal has no transaction to close."""
+        return None
 
     async def get_config(self, config_id: UUID) -> AgentConfigDTO | None:
         return self.configs.get(config_id)
@@ -1094,6 +1108,16 @@ class SqlRunJournal:
         self.session.add(model)
         await self.session.flush()
         return self._step_dto(model)
+
+    async def checkpoint(self) -> None:
+        """Close the current transaction so a reader on another session sees the steps.
+
+        The SSE endpoint polls this table from its own request session while the
+        run is still executing, so a step that sits in an open transaction is
+        invisible and the live view stalls. The loop calls this after each step
+        write. It is one commit per batch, not one per token.
+        """
+        await self.session.commit()
 
     # -- configs ----------------------------------------------------------
 

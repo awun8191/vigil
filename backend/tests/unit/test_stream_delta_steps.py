@@ -365,3 +365,33 @@ async def test_a_provider_failure_still_writes_the_prefix() -> None:
     assert numbers == sorted(numbers)
     assert len(numbers) == len(set(numbers))
 
+
+
+class CountingJournal(InMemoryRunJournal):
+    """Records how often the loop asks for a live checkpoint."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.checkpoints = 0
+
+    async def checkpoint(self) -> None:
+        self.checkpoints += 1
+        await super().checkpoint()
+
+
+@pytest.mark.asyncio
+async def test_every_step_write_asks_for_a_live_checkpoint() -> None:
+    """The live reader has its own session, so each step write must checkpoint.
+
+    Without the call the step sits in the job's open transaction and the SSE
+    reader, which polls from a request session, sees nothing until the job ends.
+    """
+    journal = CountingJournal()
+
+    run_id, journal = await streamed_run(
+        ["alpha ", "beta ", "gamma "], journal=journal
+    )
+
+    steps = await journal.list_steps(run_id)
+    assert steps
+    assert journal.checkpoints == len(steps)

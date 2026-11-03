@@ -342,3 +342,79 @@ async def test_a_write_in_one_request_is_visible_to_the_next_request() -> None:
                     )
         finally:
             await cleanup_engine.dispose()
+
+
+async def test_a_step_checkpoint_reaches_a_reader_mid_run(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """A step written during a run is visible to the SSE reader before the run ends.
+
+    The step journal is a live feed. The reader holds its own request session, so
+    a step that waits for the job's final commit is invisible and the live view
+    stalls. The checkpoint is what makes the step visible while the writer is
+    still inside the run.
+    """
+    from src.modules.runs.repository import (
+        AgentConfigDTO,
+        RunCreateDTO,
+        RunStepCreateDTO,
+    )
+    from src.modules.runs.state import SqlRunJournal
+
+    run_id: UUID | None = None
+    config_id: UUID | None = None
+    try:
+        async with session_factory() as writer:
+            journal = SqlRunJournal(writer)
+            config = await journal.save_config(
+                AgentConfigDTO(
+                    id=uuid4(),
+                    name=f"uow-steps-{uuid4().hex[:8]}",
+                    system_prompt="Checkpoint probe.",
+                    model="test-model",
+                    tools=[],
+                    skills=[],
+                    memory_scopes=[],
+                    approval_policy={},
+                    limits={"max_cost_micros": 0},
+                )
+            )
+            config_id = config.id
+            run = await journal.create_run(
+                RunCreateDTO(config_id=config.id, status="running")
+            )
+            run_id = run.id
+            await journal.append_step(
+                RunStepCreateDTO(
+                    run_id=run.id,
+                    step_number=0,
+                    event_type="message_delta",
+                    payload={"delta": "live"},
+                )
+            )
+            await journal.checkpoint()
+
+            # The writer is still open, exactly like a run in progress.
+            async with session_factory() as reader:
+                steps = await SqlRunJournal(reader).list_steps(run.id)
+
+            assert [step.event_type for step in steps] == ["message_delta"]
+            assert steps[0].payload["delta"] == "live"
+    finally:
+        cleanup = create_async_engine(Settings(APP_ENV="test").DATABASE_URL)
+        try:
+            async with cleanup.begin() as connection:
+                if run_id is not None:
+                    for statement in (
+                        "delete from run_steps where run_id = :id",
+                        "delete from messages where run_id = :id",
+                        "delete from runs where id = :id",
+                    ):
+                        await connection.execute(text(statement), {"id": run_id})
+                if config_id is not None:
+                    await connection.execute(
+                        text("delete from agent_configs where id = :id"),
+                        {"id": config_id},
+                    )
+        finally:
+            await cleanup.dispose()

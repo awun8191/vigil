@@ -1088,6 +1088,9 @@ class RunLoop:
                 payload=payload,
             )
         )
+        # The step journal is a live feed and the SSE reader has its own session,
+        # so each step must leave the transaction before the run ends.
+        await self.journal.checkpoint()
 
     @staticmethod
     def _iteration(
