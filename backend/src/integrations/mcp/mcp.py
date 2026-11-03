@@ -1,10 +1,12 @@
 """External MCP server client: stdio and SSE transport, handshake, tool discovery.
 
 The client speaks a minimal newline-delimited JSON-RPC dialect: one ``initialize``
-request, then one ``tools/list`` request. Each message is a single JSON object per
-line, matched by ``id``. Only the background worker calls this module. Request
-handlers never spawn a process: registration enqueues a ``discover_mcp_tools``
-job and returns 202, and the worker runs discovery there.
+request carrying ``protocolVersion``, ``capabilities`` and ``clientInfo``, the
+``notifications/initialized`` notification, then the work request (``tools/list``
+or ``tools/call``). Each message is a single JSON object per line, matched by
+``id``. Only the background worker calls this module. Request handlers never
+spawn a process: registration enqueues a ``discover_mcp_tools`` job and returns
+202, and the worker runs discovery there.
 """
 from __future__ import annotations
 
@@ -28,6 +30,15 @@ SSE_TIMEOUT_SECONDS = 10.0
 
 #: Largest single protocol line accepted from a third party server.
 MAX_LINE_BYTES = 1_048_576
+
+#: Protocol version announced in the initialize request.
+MCP_PROTOCOL_VERSION = "2024-11-05"
+
+#: Client name announced in ``clientInfo``.
+MCP_CLIENT_NAME = "vigil"
+
+#: Client version announced in ``clientInfo``.
+MCP_CLIENT_VERSION = "1.0"
 
 
 class MCPHandshakeError(ValueError):
@@ -85,13 +96,21 @@ def _normalize_tools(raw: Any) -> list[dict[str, Any]]:
     return tools
 
 
-async def _exchange(
+def _initialize_params() -> dict[str, Any]:
+    """Build the initialize params the MCP schema requires."""
+    return {
+        "protocolVersion": MCP_PROTOCOL_VERSION,
+        "capabilities": {},
+        "clientInfo": {"name": MCP_CLIENT_NAME, "version": MCP_CLIENT_VERSION},
+    }
+
+
+async def _write_message(
     proc: asyncio.subprocess.Process,
     message: dict[str, Any],
-    timeout: float,
     step: str,
-) -> dict[str, Any]:
-    """Send one request line and return the parsed response object."""
+) -> None:
+    """Write one JSON-RPC line to the server's stdin."""
     line = (json.dumps(message) + "\n").encode("utf-8")
     try:
         proc.stdin.write(line)  # type: ignore[union-attr]
@@ -102,29 +121,58 @@ async def _exchange(
             f"stdio handshake failed during {step}: "
             f"the process exited with code {code}"
         ) from exc
-    try:
-        raw = await asyncio.wait_for(proc.stdout.readline(), timeout)  # type: ignore[union-attr]
-    except TimeoutError as exc:
-        raise MCPHandshakeError(
-            f"stdio handshake failed during {step}: "
-            f"no response within {timeout:g} seconds"
-        ) from exc
-    if not raw:
-        code = proc.returncode
-        raise MCPHandshakeError(
-            f"stdio handshake failed during {step}: "
-            f"the process exited with code {code} before it answered"
-        )
-    try:
-        response = json.loads(raw.decode("utf-8"))
-    except (UnicodeDecodeError, ValueError) as exc:
-        raise MCPHandshakeError(
-            f"stdio handshake failed during {step}: invalid JSON response"
-        ) from exc
-    if not isinstance(response, dict) or response.get("id") != message["id"]:
-        raise MCPHandshakeError(
-            f"stdio handshake failed during {step}: mismatched response id"
-        )
+
+
+async def _exchange(
+    proc: asyncio.subprocess.Process,
+    message: dict[str, Any],
+    timeout: float,
+    step: str,
+) -> dict[str, Any]:
+    """Send one request line and return the response object with the matching id.
+
+    A server may interleave notifications (logging, progress) with responses,
+    so lines without our id are skipped until the answer arrives. The whole
+    wait, not each line, is bounded by ``timeout``.
+    """
+    await _write_message(proc, message, step)
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+    while True:
+        remaining = deadline - loop.time()
+        if remaining <= 0.0:
+            raise MCPHandshakeError(
+                f"stdio handshake failed during {step}: "
+                f"no response within {timeout:g} seconds"
+            )
+        try:
+            raw = await asyncio.wait_for(proc.stdout.readline(), remaining)  # type: ignore[union-attr]
+        except TimeoutError as exc:
+            raise MCPHandshakeError(
+                f"stdio handshake failed during {step}: "
+                f"no response within {timeout:g} seconds"
+            ) from exc
+        if not raw:
+            code = proc.returncode
+            raise MCPHandshakeError(
+                f"stdio handshake failed during {step}: "
+                f"the process exited with code {code} before it answered"
+            )
+        try:
+            response = json.loads(raw.decode("utf-8"))
+        except (UnicodeDecodeError, ValueError) as exc:
+            raise MCPHandshakeError(
+                f"stdio handshake failed during {step}: invalid JSON response"
+            ) from exc
+        if not isinstance(response, dict):
+            raise MCPHandshakeError(
+                f"stdio handshake failed during {step}: "
+                "the response is not an object"
+            )
+        if response.get("id") != message["id"]:
+            # A notification (no id) or a response to another request.
+            continue
+        break
     if "error" in response:
         raise MCPHandshakeError(
             f"stdio handshake failed during {step}: "
@@ -136,6 +184,34 @@ async def _exchange(
             f"stdio handshake failed during {step}: the result is not an object"
         )
     return result
+
+
+async def _handshake(
+    proc: asyncio.subprocess.Process,
+    timeout: float,
+) -> None:
+    """Run the schema-correct initialize exchange.
+
+    The request carries ``protocolVersion``, ``capabilities`` and ``clientInfo``;
+    the response is followed by the ``notifications/initialized`` notification
+    the schema requires before any other request.
+    """
+    await _exchange(
+        proc,
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": _initialize_params(),
+        },
+        timeout,
+        "initialize",
+    )
+    await _write_message(
+        proc,
+        {"jsonrpc": "2.0", "method": "notifications/initialized"},
+        "notifications/initialized",
+    )
 
 
 async def _discover_stdio(command: str, timeout: float) -> list[dict[str, Any]]:
@@ -161,17 +237,7 @@ async def _discover_stdio(command: str, timeout: float) -> list[dict[str, Any]]:
             f"stdio handshake failed: cannot start the process: {exc}"
         ) from exc
     try:
-        await _exchange(
-            proc,
-            {
-                "jsonrpc": "2.0",
-                "id": 1,
-                "method": "initialize",
-                "params": {"client": "vigil", "version": "1.0"},
-            },
-            timeout,
-            "initialize",
-        )
+        await _handshake(proc, timeout)
         result = await _exchange(
             proc,
             {"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}},
@@ -322,17 +388,7 @@ async def _call_stdio_tool(
         limit=MAX_LINE_BYTES,
     )
     try:
-        await _exchange(
-            proc,
-            {
-                "jsonrpc": "2.0",
-                "id": 1,
-                "method": "initialize",
-                "params": {"client": "vigil", "version": "1.0"},
-            },
-            timeout,
-            "initialize",
-        )
+        await _handshake(proc, timeout)
         result = await _exchange(
             proc,
             {

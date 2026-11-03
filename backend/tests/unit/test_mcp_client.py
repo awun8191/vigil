@@ -152,3 +152,53 @@ async def test_server_without_transport_fails_closed(tmp_path: Path) -> None:
     )
     assert result.is_error is True
     assert "no usable transport" in str(result.output)
+
+
+async def test_initialize_payload_matches_schema_on_tool_call(tmp_path: Path) -> None:
+    """tools/call sends the schema initialize request, then the initialized notification."""
+    command, log_path = write_scripted_server(tmp_path)
+    service = ConnectorsService(session=None, settings=Settings(APP_ENV="test"))
+    await service.register_mcp_server(
+        name="schema-server", transport="stdio", command=command
+    )
+    assert read_log(log_path)
+    log_path.write_text("", encoding="utf-8")
+
+    result = await make_host().execute_tool(
+        "schema-server", "echo_ext", {"msg": "hi"}, tool_call_id="call-4"
+    )
+    assert result.is_error is False, result.output
+    assert result.output == "ECHO:hi|initialized=True"
+
+    entries = read_log(log_path)
+    assert [entry["method"] for entry in entries] == [
+        "initialize",
+        "notifications/initialized",
+        "tools/call",
+    ]
+    params = entries[0]["params"]
+    assert params["protocolVersion"] == "2024-11-05"
+    assert params["capabilities"] == {}
+    assert params["clientInfo"] == {"name": "vigil", "version": "1.0"}
+    # The notification is a notification: no id, so no response is expected.
+    assert entries[1]["id"] is None
+
+
+async def test_initialize_payload_matches_schema_on_discovery(tmp_path: Path) -> None:
+    """The discovery path sends the same initialize request and notification."""
+    command, log_path = write_scripted_server(tmp_path)
+    service = ConnectorsService(session=None, settings=Settings(APP_ENV="test"))
+    await service.register_mcp_server(
+        name="discovery-server", transport="stdio", command=command
+    )
+
+    entries = read_log(log_path)
+    assert [entry["method"] for entry in entries] == [
+        "initialize",
+        "notifications/initialized",
+        "tools/list",
+    ]
+    params = entries[0]["params"]
+    assert params["protocolVersion"] == "2024-11-05"
+    assert params["capabilities"] == {}
+    assert params["clientInfo"] == {"name": "vigil", "version": "1.0"}
