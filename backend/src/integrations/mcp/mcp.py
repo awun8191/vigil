@@ -1,14 +1,27 @@
 """External MCP server client: stdio and SSE transport, handshake, tool discovery.
 
-The client speaks a minimal newline-delimited JSON-RPC dialect: one ``initialize``
-request, then one ``tools/list`` request. Each message is a single JSON object per
-line, matched by ``id``. Only the background worker calls this module. Request
-handlers never spawn a process: registration enqueues a ``discover_mcp_tools``
-job and returns 202, and the worker runs discovery there.
+The stdio transport speaks a minimal newline-delimited JSON-RPC dialect: one
+``initialize`` request carrying ``protocolVersion``, ``capabilities`` and
+``clientInfo``, the ``notifications/initialized`` notification, then the work
+request (``tools/list`` or ``tools/call``). Each message is a single JSON object
+per line, matched by ``id``.
+
+The SSE transport does not do that. It posts one ``tools/list`` or ``tools/call``
+request and reads the answer, with no ``initialize`` request and no
+``notifications/initialized`` notification, so a server that enforces the
+handshake rejects it. TODO(StreamMCP): open the session (the ``GET`` event
+stream), keep the session id it returns, echo that id on every ``POST``, and
+send the initialize request and the initialized notification before the work
+request.
+
+Only the background worker calls this module. Request handlers never spawn a
+process: registration enqueues a ``discover_mcp_tools`` job and returns
+202, and the worker runs discovery there.
 """
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import shlex
 from asyncio.subprocess import PIPE
@@ -28,6 +41,24 @@ SSE_TIMEOUT_SECONDS = 10.0
 
 #: Largest single protocol line accepted from a third party server.
 MAX_LINE_BYTES = 1_048_576
+
+#: Protocol version announced in the initialize request.
+MCP_PROTOCOL_VERSION = "2024-11-05"
+
+#: Client name announced in ``clientInfo``.
+MCP_CLIENT_NAME = "vigil"
+
+#: Client version announced in ``clientInfo``.
+MCP_CLIENT_VERSION = "1.0"
+
+#: Trailing bytes of a server's stderr kept for the error message.
+STDERR_TAIL_BYTES = 4096
+
+#: Longest wait for a terminated server to exit before it is killed, in seconds.
+STOP_TIMEOUT_SECONDS = 5.0
+
+#: Longest bounded wait for the stderr drain to reach EOF before the tail is read.
+STDERR_DRAIN_JOIN_SECONDS = 0.2
 
 
 class MCPHandshakeError(ValueError):
@@ -85,13 +116,57 @@ def _normalize_tools(raw: Any) -> list[dict[str, Any]]:
     return tools
 
 
-async def _exchange(
+class _StderrTail:
+    """Bounded tail of a server's stderr, kept for the error message only."""
+
+    def __init__(self, limit: int = STDERR_TAIL_BYTES) -> None:
+        self._limit = limit
+        self._buffer = bytearray()
+
+    def feed(self, chunk: bytes) -> None:
+        self._buffer.extend(chunk)
+        excess = len(self._buffer) - self._limit
+        if excess > 0:
+            del self._buffer[:excess]
+
+    def text(self) -> str:
+        return bytes(self._buffer).decode("utf-8", "replace").strip()
+
+
+async def _drain_stderr(
+    stream: asyncio.StreamReader | None,
+    tail: _StderrTail,
+) -> None:
+    """Read a server's stderr until EOF so a chatty server never blocks the pipe.
+
+    A server writing more than one pipe buffer of diagnostics would block on its
+    own ``write`` call, never answer the request, and hang the call until the
+    timeout. Draining concurrently is the only way to keep the exchange moving.
+    """
+    if stream is None:
+        return
+    while True:
+        chunk = await stream.read(4096)
+        if not chunk:
+            return
+        tail.feed(chunk)
+
+
+def _initialize_params() -> dict[str, Any]:
+    """Build the initialize params the MCP schema requires."""
+    return {
+        "protocolVersion": MCP_PROTOCOL_VERSION,
+        "capabilities": {},
+        "clientInfo": {"name": MCP_CLIENT_NAME, "version": MCP_CLIENT_VERSION},
+    }
+
+
+async def _write_message(
     proc: asyncio.subprocess.Process,
     message: dict[str, Any],
-    timeout: float,
     step: str,
-) -> dict[str, Any]:
-    """Send one request line and return the parsed response object."""
+) -> None:
+    """Write one JSON-RPC line to the server's stdin."""
     line = (json.dumps(message) + "\n").encode("utf-8")
     try:
         proc.stdin.write(line)  # type: ignore[union-attr]
@@ -102,29 +177,58 @@ async def _exchange(
             f"stdio handshake failed during {step}: "
             f"the process exited with code {code}"
         ) from exc
-    try:
-        raw = await asyncio.wait_for(proc.stdout.readline(), timeout)  # type: ignore[union-attr]
-    except TimeoutError as exc:
-        raise MCPHandshakeError(
-            f"stdio handshake failed during {step}: "
-            f"no response within {timeout:g} seconds"
-        ) from exc
-    if not raw:
-        code = proc.returncode
-        raise MCPHandshakeError(
-            f"stdio handshake failed during {step}: "
-            f"the process exited with code {code} before it answered"
-        )
-    try:
-        response = json.loads(raw.decode("utf-8"))
-    except (UnicodeDecodeError, ValueError) as exc:
-        raise MCPHandshakeError(
-            f"stdio handshake failed during {step}: invalid JSON response"
-        ) from exc
-    if not isinstance(response, dict) or response.get("id") != message["id"]:
-        raise MCPHandshakeError(
-            f"stdio handshake failed during {step}: mismatched response id"
-        )
+
+
+async def _exchange(
+    proc: asyncio.subprocess.Process,
+    message: dict[str, Any],
+    timeout: float,
+    step: str,
+) -> dict[str, Any]:
+    """Send one request line and return the response object with the matching id.
+
+    A server may interleave notifications (logging, progress) with responses,
+    so lines without our id are skipped until the answer arrives. The whole
+    wait, not each line, is bounded by ``timeout``.
+    """
+    await _write_message(proc, message, step)
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+    while True:
+        remaining = deadline - loop.time()
+        if remaining <= 0.0:
+            raise MCPHandshakeError(
+                f"stdio handshake failed during {step}: "
+                f"no response within {timeout:g} seconds"
+            )
+        try:
+            raw = await asyncio.wait_for(proc.stdout.readline(), remaining)  # type: ignore[union-attr]
+        except TimeoutError as exc:
+            raise MCPHandshakeError(
+                f"stdio handshake failed during {step}: "
+                f"no response within {timeout:g} seconds"
+            ) from exc
+        if not raw:
+            code = proc.returncode
+            raise MCPHandshakeError(
+                f"stdio handshake failed during {step}: "
+                f"the process exited with code {code} before it answered"
+            )
+        try:
+            response = json.loads(raw.decode("utf-8"))
+        except (UnicodeDecodeError, ValueError) as exc:
+            raise MCPHandshakeError(
+                f"stdio handshake failed during {step}: invalid JSON response"
+            ) from exc
+        if not isinstance(response, dict):
+            raise MCPHandshakeError(
+                f"stdio handshake failed during {step}: "
+                "the response is not an object"
+            )
+        if response.get("id") != message["id"]:
+            # A notification (no id) or a response to another request.
+            continue
+        break
     if "error" in response:
         raise MCPHandshakeError(
             f"stdio handshake failed during {step}: "
@@ -138,8 +242,38 @@ async def _exchange(
     return result
 
 
-async def _discover_stdio(command: str, timeout: float) -> list[dict[str, Any]]:
-    """Run the handshake against a stdio server command and return raw tools."""
+async def _handshake(
+    proc: asyncio.subprocess.Process,
+    timeout: float,
+) -> None:
+    """Run the schema-correct initialize exchange.
+
+    The request carries ``protocolVersion``, ``capabilities`` and ``clientInfo``;
+    the response is followed by the ``notifications/initialized`` notification
+    the schema requires before any other request.
+    """
+    await _exchange(
+        proc,
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": _initialize_params(),
+        },
+        timeout,
+        "initialize",
+    )
+    await _write_message(
+        proc,
+        {"jsonrpc": "2.0", "method": "notifications/initialized"},
+        "notifications/initialized",
+    )
+
+
+async def _spawn_stdio(
+    command: str,
+) -> tuple[asyncio.subprocess.Process, _StderrTail, asyncio.Task[None]]:
+    """Start a stdio server and drain its stderr concurrently from the first byte."""
     try:
         argv = shlex.split(command, posix=True)
     except ValueError as exc:
@@ -160,18 +294,85 @@ async def _discover_stdio(command: str, timeout: float) -> list[dict[str, Any]]:
         raise MCPHandshakeError(
             f"stdio handshake failed: cannot start the process: {exc}"
         ) from exc
+    tail = _StderrTail()
+    stderr_task = asyncio.create_task(_drain_stderr(proc.stderr, tail))
+    return proc, tail, stderr_task
+
+
+async def _join_drain(
+    stderr_task: asyncio.Task[None],
+    timeout: float = STDERR_DRAIN_JOIN_SECONDS,
+) -> None:
+    """Wait a short bounded time for the stderr drain to reach EOF.
+
+    The tail is read right after this call, so a drain that is still running
+    must not be racing the read. A server that is still alive never reaches EOF,
+    so the wait is bounded: it gives up and leaves the drain running for
+    ``_stop_stdio`` to cancel.
+    """
+    if stderr_task.done():
+        return
     try:
-        await _exchange(
-            proc,
-            {
-                "jsonrpc": "2.0",
-                "id": 1,
-                "method": "initialize",
-                "params": {"client": "vigil", "version": "1.0"},
-            },
-            timeout,
-            "initialize",
-        )
+        await asyncio.wait_for(asyncio.shield(stderr_task), timeout)
+    except TimeoutError:
+        return
+
+
+async def _terminate(proc: asyncio.subprocess.Process) -> None:
+    """Terminate a server, kill it when it ignores SIGTERM, then reap it.
+
+    Both waits are shielded: a cancellation raises out of this coroutine but
+    never cancels the wait itself, so the child is still reaped.
+    """
+    if proc.returncode is not None:
+        return
+    try:
+        proc.terminate()
+    except ProcessLookupError:
+        return
+    try:
+        await asyncio.wait_for(asyncio.shield(proc.wait()), STOP_TIMEOUT_SECONDS)
+        return
+    except TimeoutError:
+        pass
+    try:
+        proc.kill()
+    except ProcessLookupError:
+        return
+    with contextlib.suppress(TimeoutError):
+        await asyncio.wait_for(asyncio.shield(proc.wait()), STOP_TIMEOUT_SECONDS)
+
+
+async def _stop_stdio(
+    proc: asyncio.subprocess.Process,
+    stderr_task: asyncio.Task[None],
+) -> None:
+    """Stop the stderr drain first, then terminate the server and reap it.
+
+    The drain goes first: a cancellation that arrives during worker shutdown
+    would otherwise escape on the terminate wait and leave the drain task
+    running against a dead pipe. A cancellation during the terminate still
+    kills the child before it propagates, so no process leaks.
+    """
+    stderr_task.cancel()
+    try:
+        await _terminate(proc)
+    except asyncio.CancelledError:
+        with contextlib.suppress(ProcessLookupError):
+            proc.kill()
+        raise
+    finally:
+        # The drain is already cancelled, so this join cannot block.
+        if not stderr_task.done():
+            with contextlib.suppress(asyncio.CancelledError, RuntimeError):
+                await stderr_task
+
+
+async def _discover_stdio(command: str, timeout: float) -> list[dict[str, Any]]:
+    """Run the handshake against a stdio server command and return raw tools."""
+    proc, tail, stderr_task = await _spawn_stdio(command)
+    try:
+        await _handshake(proc, timeout)
         result = await _exchange(
             proc,
             {"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}},
@@ -179,16 +380,16 @@ async def _discover_stdio(command: str, timeout: float) -> list[dict[str, Any]]:
             "tools/list",
         )
         return _normalize_tools(result.get("tools"))
+    except MCPHandshakeError as exc:
+        # Let the drain finish reading what the server already wrote before
+        # the tail is read, or the message loses the server's own words.
+        await _join_drain(stderr_task)
+        detail = tail.text()
+        if not detail:
+            raise
+        raise MCPHandshakeError(f"{exc} (server stderr: {detail})") from exc
     finally:
-        if proc.returncode is None:
-            try:
-                proc.terminate()
-                await asyncio.wait_for(proc.wait(), 5.0)
-            except (TimeoutError, ProcessLookupError):
-                try:
-                    proc.kill()
-                except ProcessLookupError:
-                    pass
+        await _stop_stdio(proc, stderr_task)
 
 
 async def _discover_sse(server_url: str, timeout: float) -> list[dict[str, Any]]:
@@ -313,26 +514,9 @@ async def _call_stdio_tool(
     timeout: float = HANDSHAKE_TIMEOUT_SECONDS,
 ) -> tuple[str, bool]:
     """Invoke tools/call on a stdio MCP server and return (output, is_error)."""
-    argv = shlex.split(command, posix=True)
-    proc = await asyncio.create_subprocess_exec(
-        *argv,
-        stdin=PIPE,
-        stdout=PIPE,
-        stderr=PIPE,
-        limit=MAX_LINE_BYTES,
-    )
+    proc, tail, stderr_task = await _spawn_stdio(command)
     try:
-        await _exchange(
-            proc,
-            {
-                "jsonrpc": "2.0",
-                "id": 1,
-                "method": "initialize",
-                "params": {"client": "vigil", "version": "1.0"},
-            },
-            timeout,
-            "initialize",
-        )
+        await _handshake(proc, timeout)
         result = await _exchange(
             proc,
             {
@@ -355,16 +539,16 @@ async def _call_stdio_tool(
         if isinstance(content, str):
             return content, is_error
         return json.dumps(result), is_error
+    except MCPHandshakeError as exc:
+        # Let the drain finish reading what the server already wrote before
+        # the tail is read, or the message loses the server's own words.
+        await _join_drain(stderr_task)
+        detail = tail.text()
+        if not detail:
+            raise
+        raise MCPHandshakeError(f"{exc} (server stderr: {detail})") from exc
     finally:
-        if proc.returncode is None:
-            try:
-                proc.terminate()
-                await asyncio.wait_for(proc.wait(), 5.0)
-            except (TimeoutError, ProcessLookupError):
-                try:
-                    proc.kill()
-                except ProcessLookupError:
-                    pass
+        await _stop_stdio(proc, stderr_task)
 
 
 async def _call_sse_tool(
@@ -373,7 +557,12 @@ async def _call_sse_tool(
     arguments: dict[str, Any],
     timeout: float = HANDSHAKE_TIMEOUT_SECONDS,
 ) -> tuple[str, bool]:
-    """Invoke tools/call on an SSE / StreamMCP server URL and return (output, is_error)."""
+    """Invoke tools/call on an SSE / StreamMCP server URL and return (output, is_error).
+
+    The method fails closed. A reply it cannot parse, and a reply that carries
+    no ``result`` object, both return ``is_error=True``: neither proves the
+    server ran the tool, and a success would hand the model an invented result.
+    """
     payload = {
         "jsonrpc": "2.0",
         "id": 1,
@@ -406,10 +595,27 @@ async def _call_sse_tool(
             try:
                 data = resp.json()
             except ValueError:
-                return body[:1000], False
+                return (
+                    "SSE tools/call failed: the reply body is neither a JSON "
+                    f"object nor an SSE event; tool {tool_name!r} was not run: "
+                    f"{body[:300]!r}",
+                    True,
+                )
+        if not isinstance(data, dict):
+            return (
+                f"SSE tools/call failed: the reply is not a JSON object; "
+                f"tool {tool_name!r} was not run",
+                True,
+            )
         if "error" in data:
             return f"MCP server error: {data['error']}", True
-        result = data.get("result", {})
+        result = data.get("result")
+        if not isinstance(result, dict):
+            return (
+                f"SSE tools/call failed: the reply carries no result object; "
+                f"tool {tool_name!r} was not run",
+                True,
+            )
         is_error = bool(result.get("isError", False))
         content = result.get("content")
         if isinstance(content, list):
@@ -458,11 +664,48 @@ class MCPHostClient:
 
         server = ConnectorsService._mcp_servers_by_name.get(connector_id)
         if server is None:
-            for (sid, tname), _tool in ConnectorsService._mcp_tools.items():
-                if tname == tool_name:
-                    server = ConnectorsService._mcp_servers.get(sid)
-                    break
-        if server is not None and server.transport == "stdio" and server.command:
+            # No server carries ``connector_id`` as its name, and the builder
+            # never sets a real one: the tool name is the only remaining handle.
+            # Resolve by name only when exactly one registered server owns it,
+            # because a call addressed to one server must never run on another.
+            owners = sorted(
+                {
+                    sid
+                    for (sid, tname) in ConnectorsService._mcp_tools
+                    if tname == tool_name
+                }
+            )
+            if len(owners) > 1:
+                names = sorted(
+                    ConnectorsService._mcp_servers[sid].name
+                    if sid in ConnectorsService._mcp_servers
+                    else str(sid)
+                    for sid in owners
+                )
+                return MCPToolResultDTO(
+                    tool_call_id=tool_call_id,
+                    output=(
+                        f"MCP tool {tool_name!r} is ambiguous: servers "
+                        f"{', '.join(repr(name) for name in names)} all expose it "
+                        f"and connector {connector_id!r} names none of them; "
+                        "the tool was not run"
+                    ),
+                    is_error=True,
+                )
+            if len(owners) == 1:
+                server = ConnectorsService._mcp_servers.get(owners[0])
+        if server is None:
+            # Never report success for a tool that was not run: an invented
+            # result would be fed back to the model as a real tool result.
+            return MCPToolResultDTO(
+                tool_call_id=tool_call_id,
+                output=(
+                    f"MCP server {connector_id!r} is not registered or has no "
+                    f"transport; tool {tool_name!r} was not run"
+                ),
+                is_error=True,
+            )
+        if server.transport == "stdio" and server.command:
             try:
                 output, is_error = await _call_stdio_tool(
                     server.command, tool_name, dict(arguments)
@@ -474,7 +717,7 @@ class MCPHostClient:
                 return MCPToolResultDTO(
                     tool_call_id=tool_call_id, output=str(exc), is_error=True
                 )
-        if server is not None and server.transport == "sse" and server.url:
+        if server.transport == "sse" and server.url:
             try:
                 output, is_error = await _call_sse_tool(
                     server.url, tool_name, dict(arguments)
@@ -487,7 +730,12 @@ class MCPHostClient:
                     tool_call_id=tool_call_id, output=str(exc), is_error=True
                 )
         return MCPToolResultDTO(
-            tool_call_id=tool_call_id, output="mock tool output", is_error=False
+            tool_call_id=tool_call_id,
+            output=(
+                f"MCP server {server.name!r} has no usable transport "
+                f"(transport={server.transport!r}); tool {tool_name!r} was not run"
+            ),
+            is_error=True,
         )
 
     async def get_tool_approval_policy(
