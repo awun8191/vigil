@@ -462,7 +462,18 @@ class MCPHostClient:
                 if tname == tool_name:
                     server = ConnectorsService._mcp_servers.get(sid)
                     break
-        if server is not None and server.transport == "stdio" and server.command:
+        if server is None:
+            # Never report success for a tool that was not run: an invented
+            # result would be fed back to the model as a real tool result.
+            return MCPToolResultDTO(
+                tool_call_id=tool_call_id,
+                output=(
+                    f"MCP server {connector_id!r} is not registered or has no "
+                    f"transport; tool {tool_name!r} was not run"
+                ),
+                is_error=True,
+            )
+        if server.transport == "stdio" and server.command:
             try:
                 output, is_error = await _call_stdio_tool(
                     server.command, tool_name, dict(arguments)
@@ -474,7 +485,7 @@ class MCPHostClient:
                 return MCPToolResultDTO(
                     tool_call_id=tool_call_id, output=str(exc), is_error=True
                 )
-        if server is not None and server.transport == "sse" and server.url:
+        if server.transport == "sse" and server.url:
             try:
                 output, is_error = await _call_sse_tool(
                     server.url, tool_name, dict(arguments)
@@ -487,7 +498,12 @@ class MCPHostClient:
                     tool_call_id=tool_call_id, output=str(exc), is_error=True
                 )
         return MCPToolResultDTO(
-            tool_call_id=tool_call_id, output="mock tool output", is_error=False
+            tool_call_id=tool_call_id,
+            output=(
+                f"MCP server {server.name!r} has no usable transport "
+                f"(transport={server.transport!r}); tool {tool_name!r} was not run"
+            ),
+            is_error=True,
         )
 
     async def get_tool_approval_policy(
