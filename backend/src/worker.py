@@ -363,26 +363,12 @@ def reap_is_due(
     return (now_monotonic - last_reap) >= interval_seconds
 
 
-def _session_needs_rollback(session: Any | None) -> bool:
-    """Return True when a failed flush left the transaction unusable.
-
-    A store flushes and never rolls back, so a constraint violation aborts the
-    transaction and every later call raises until the boundary rolls it back.
-    A plain handler error leaves the transaction usable, and the rows the handler
-    already wrote belong to a job the queue is about to record as failed.
-    """
-    sync_session = getattr(session, "sync_session", None)
-    if sync_session is None:
-        return False
-    return not bool(getattr(sync_session, "is_active", True))
-
-
 async def commit_job_outcome(session: Any | None, log: Any) -> None:
     """Commit the outcome of one job on the session that owns its transaction.
 
-    The stores flush instead of committing, so this is the commit that makes the
-    rows a handler wrote, and the outcome the queue recorded, durable. A
-    sessionless context (the dispatch unit tests) has no transaction to commit.
+    The stores flush instead of committing, so this is the only commit that
+    makes the rows a handler wrote, and the outcome the queue recorded, durable.
+    A sessionless context (the dispatch unit tests) has no transaction to commit.
 
     Raises:
         Exception: The commit failed, so the outcome is not durable and the
@@ -397,18 +383,23 @@ async def commit_job_outcome(session: Any | None, log: Any) -> None:
         raise
 
 
-async def discard_aborted_transaction(session: Any | None, log: Any) -> None:
-    """Roll back a transaction that a failed flush left unusable.
+async def rollback_failed_job(session: Any | None, log: Any) -> None:
+    """Discard the uncommitted writes of a job that raised.
+
+    The stores flush and never commit, so a failed job leaves its writes in the
+    open transaction. A retry must start from the last durable checkpoint, not
+    from a half-applied run. The steps the loop checkpointed are already
+    committed and survive this rollback by design.
 
     Raises nothing: the job already failed, and a rollback error must not mask
     the error that caused it.
     """
-    if session is None or not _session_needs_rollback(session):
+    if session is None:
         return
     try:
         await session.rollback()
     except Exception as exc:  # noqa: BLE001 - must not mask the handler error
-        log.error("Cannot roll back the aborted job transaction", error=str(exc))
+        log.error("Cannot roll back the failed job transaction", error=str(exc))
 
 
 async def process_job(
@@ -423,9 +414,10 @@ async def process_job(
     Dispatch one claimed job, record the outcome, and commit it.
 
     An unknown job type and a handler error both go to the failure path. Only a
-    handler that returns without an error marks the job completed. Each path
-    ends with one commit on the session that owns the job, so a job outcome
-    survives the process that ran it.
+    handler that returns without an error marks the job completed. A failed job
+    rolls back its uncommitted writes before the queue records the outcome, and
+    each path ends with exactly one commit on the session that owns the job, so
+    a job outcome survives the process that ran it.
 
     Args:
         job: The claimed job.
@@ -449,7 +441,7 @@ async def process_job(
         )
     except UnknownJobTypeError as err:
         log.error("Unknown job type", job_id=str(job.id), job_type=job.type)
-        await discard_aborted_transaction(context.session, log)
+        await rollback_failed_job(context.session, log)
         await jobs_service.mark_failed(job.id, error=str(err), permanent=True)
         await commit_job_outcome(context.session, log)
         return
@@ -460,7 +452,7 @@ async def process_job(
             job_type=job.type,
             error=str(err),
         )
-        await discard_aborted_transaction(context.session, log)
+        await rollback_failed_job(context.session, log)
         await jobs_service.mark_failed(
             job.id, error=str(err), retry_delay_seconds=JOB_RETRY_DELAY_SECONDS
         )
