@@ -630,8 +630,12 @@ class InMemoryRunJournal:
     async def append_step(self, data: RunStepCreateDTO) -> RunStepDTO:
         steps = self.steps.setdefault(data.run_id, [])
         # Mirror SqlRunJournal: the stored number is the greater of the request
-        # and the next free slot, so a caller may pass 0 to let it allocate.
-        step_number = max(data.step_number, len(steps) + 1)
+        # and one above the highest number already stored, so a caller may pass
+        # 0 to let the journal allocate. Counting the rows instead would hand out
+        # a number below an existing one as soon as the history has a gap, and a
+        # decreasing number is dropped by the step stream.
+        highest = max((step.step_number for step in steps), default=0)
+        step_number = max(data.step_number, highest + 1)
         step = RunStepDTO(
             id=uuid4(),
             run_id=data.run_id,
