@@ -95,7 +95,7 @@ class Settings(BaseSettings):
     # Tier 3: Reasoning LLM (Agent event loop execution & complex synthesis)
     REASONING_LLM_BASE_URL: str = "https://api.openai.com/v1"
     REASONING_LLM_API_KEY: str = ""
-    REASONING_LLM_MODEL: str = "gpt-4o"
+    REASONING_LLM_MODEL: str = "muse-spark-1.3-contributor"
 
     # --- Local Embedding Model (bge-small-en-v1.5, int8 ONNX) ---
     # The embedding path is local and offline. No embedding API is called.

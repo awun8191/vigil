@@ -174,7 +174,7 @@ These keys matter most:
 | `PORT` | `8000` | API port. |
 | `JEV_API_KEY` | empty | Key for the cheap triage classifier. |
 | `FAST_LLM_MODEL` | `gpt-4o-mini` | Model for summaries and compaction. |
-| `REASONING_LLM_MODEL` | `gpt-4o` | Model for the tool loop. |
+| `REASONING_LLM_MODEL` | `muse-spark-1.3-contributor` | Model for the tool loop. |
 | `EMBEDDING_MODEL` | `bge-small-en-v1.5` | Local int8 ONNX embedder, 384 dimensions, CLS pooling. |
 | `MEMORY_RETRIEVAL_HALF_LIFE_DAYS` | `30.0` | Decay rate for memory scores. |
 | `SANDBOX_IMAGE` | `vigil-sandbox:latest` | Image for the sandbox runner. |

@@ -34,7 +34,7 @@ def test_default_settings():
     assert "openai.com" in settings.FAST_LLM_BASE_URL
     assert settings.FAST_LLM_MODEL == "gpt-4o-mini"
     assert "openai.com" in settings.REASONING_LLM_BASE_URL
-    assert settings.REASONING_LLM_MODEL == "gpt-4o"
+    assert settings.REASONING_LLM_MODEL == "muse-spark-1.3-contributor"
     assert settings.EMBEDDING_MODEL == "bge-small-en-v1.5"
     assert settings.EMBEDDING_DIMENSIONS == 384
 
