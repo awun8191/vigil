@@ -1,0 +1,51 @@
+{
+  "cli_version": "0.12.2",
+  "checkpoint_id": "01M6Y1X9TH8P3YG0P2J1MQDJ3F",
+  "session_id": "d8172fbc-0993-4ecc-87a7-55cc2bc0ab09",
+  "strategy": "manual-commit",
+  "created_at": "2026-11-08T17:04:48.779415048Z",
+  "branch": "main",
+  "checkpoints_count": 3,
+  "save_step_count": 3,
+  "files_touched": [
+    "CONTRIBUTING.md",
+    "README.md",
+    "backend/README.md",
+    "backend/src/modules/chat/data.py",
+    "backend/src/modules/chat/state.py",
+    "backend/src/modules/runs/core_context.py",
+    "backend/src/modules/runs/data.py",
+    "backend/src/modules/runs/loop.py",
+    "backend/tests/unit/test_chat_sql_paging.py",
+    "backend/tests/unit/test_domain_modules.py",
+    "deploy/Dockerfile.sandbox",
+    "scripts/start.sh",
+    "start.sh",
+    "web/README.md",
+    "web/src/components/chat/MarkdownContent.tsx",
+    "web/src/components/chat/MessageItem.tsx",
+    "web/src/components/chat/ThinkingCapsule.tsx",
+    "web/src/routes/ChatRoute.tsx",
+    "web/src/types/index.ts"
+  ],
+  "agent": "Antigravity",
+  "model": "gemini-3.8-flash-high",
+  "turn_id": "c250fb3f4361",
+  "redaction": {
+    "replacements": 18,
+    "layers": {
+      "betterleaks": 4,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 10,
+      "credentialed_uri": 5,
+      "entropy": 9,
+      "key_context": 0,
+      "provider_token": 0,
+      "shell_stdin": 0
+    }
+  },
+  "session_metrics": {
+    "turn_count": 3
+  }
+}

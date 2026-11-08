@@ -1,0 +1,50 @@
+{
+  "cli_version": "0.12.2",
+  "checkpoint_id": "01M6Y1X9TH8P3YG0P2J1MQDJ3F",
+  "strategy": "manual-commit",
+  "branch": "main",
+  "checkpoints_count": 3,
+  "files_touched": [
+    "CONTRIBUTING.md",
+    "README.md",
+    "backend/README.md",
+    "backend/src/modules/chat/data.py",
+    "backend/src/modules/chat/state.py",
+    "backend/src/modules/runs/core_context.py",
+    "backend/src/modules/runs/data.py",
+    "backend/src/modules/runs/loop.py",
+    "backend/tests/unit/test_chat_sql_paging.py",
+    "backend/tests/unit/test_domain_modules.py",
+    "deploy/Dockerfile.sandbox",
+    "scripts/start.sh",
+    "start.sh",
+    "web/README.md",
+    "web/src/components/chat/MarkdownContent.tsx",
+    "web/src/components/chat/MessageItem.tsx",
+    "web/src/components/chat/ThinkingCapsule.tsx",
+    "web/src/routes/ChatRoute.tsx",
+    "web/src/types/index.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": "/0/prompt.txt"
+    }
+  ],
+  "redaction": {
+    "replacements": 18,
+    "layers": {
+      "betterleaks": 4,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 10,
+      "credentialed_uri": 5,
+      "entropy": 9,
+      "key_context": 0,
+      "provider_token": 0,
+      "shell_stdin": 0
+    }
+  }
+}
