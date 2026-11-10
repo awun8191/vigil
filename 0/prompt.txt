@@ -1,0 +1,65 @@
+Please, I need you to take a look at the chat section for the AI agent. The way it goes about wrapping text is not good. I need you to help me polish it; it's very important. I don't like the way it does it. The whole chat bubble design is not ideal. I don't like the way it does it. I need you to help me with that. The way it showcases information, I don't like the way it showcases information. The LaTeX support can be better, and so on. The ability to send documents from the agent's sandbox to any chat interface can be considered. Maybe not right now, but it's something that should be put up for consideration. It's very important that the interface is overlapping, technically even overflowing, like it is flowing past the boundaries of the chat itself. So, I need you to help me fix that. Then the next thing is the thinking process. The thinking process design is not ideal. It should be more creative. It should make use of cards and so on. Command executions should be rendered appropriately. Tool calls should be rendered appropriately, and so on. It should be its own thing. It should be creative. It should be well-designed.
+
+---
+
+go ahead
+
+---
+
+Please polish this design so it looks cleaner
+
+---
+
+Go ahead
+
+---
+
+await route.handle(scope, receive, send)
+[api]   File "/home/nasbombz/Documents/Projects/vigil-agent/backend/.venv/lib/python3.12/site-packages/fastapi/routing.py", line 1839, in handle
+[api]     await self.original_router.handle(scope, receive, send)
+[api]   File "/home/nasbombz/Documents/Projects/vigil-agent/backend/.venv/lib/python3.12/site-packages/fastapi/routing.py", line 2894, in handle
+[api]     await included_router._handle_selected(scope, receive, send)
+[api]   File "/home/nasbombz/Documents/Projects/vigil-agent/backend/.venv/lib/python3.12/site-packages/fastapi/routing.py", line 1865, in _handle_selected
+[api]     await original_route.handle(scope, receive, send)
+[api]   File "/home/nasbombz/Documents/Projects/vigil-agent/backend/.venv/lib/python3.12/site-packages/fastapi/routing.py", line 1328, in handle
+[api]     await effective_context.app(scope, receive, send)
+[api]   File "/home/nasbombz/Documents/Projects/vigil-agent/backend/.venv/lib/python3.12/site-packages/fastapi/routing.py", line 166, in app
+[api]     await wrap_app_handling_exceptions(app, request)(scope, receive, send)
+[api]   File "/home/nasbombz/Documents/Projects/vigil-agent/backend/.venv/lib/python3.12/site-packages/starlette/_exception_handler.py", line 53, in wrapped_app
+[api]     raise exc
+[api]   File "/home/nasbombz/Documents/Projects/vigil-agent/backend/.venv/lib/python3.12/site-packages/starlette/_exception_handler.py", line 42, in wrapped_app
+[api]     await app(scope, receive, sender)
+[api]   File "/home/nasbombz/Documents/Projects/vigil-agent/backend/.venv/lib/python3.12/site-packages/fastapi/routing.py", line 152, in app
+[api]     response = await f(request)
+[api]                ^^^^^^^^^^^^^^^^
+[api]   File "/home/nasbombz/Documents/Projects/vigil-agent/backend/.venv/lib/python3.12/site-packages/fastapi/routing.py", line 745, in app
+[api]     raw_response = await run_endpoint_function(
+[api]                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[api]   File "/home/nasbombz/Documents/Projects/vigil-agent/backend/.venv/lib/python3.12/site-packages/fastapi/routing.py", line 372, in run_endpoint_function
+[api]     return await dependant.call(**values)
+[api]            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[api]   File "/home/nasbombz/Documents/Projects/vigil-agent/backend/src/modules/runs/router.py", line 202, in cancel_run
+[api]     run = await service.cancel_run(run_id)
+[api]           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[api]   File "/home/nasbombz/Documents/Projects/vigil-agent/backend/src/modules/runs/service.py", line 601, in cancel_run
+[api]     updated = await self._cancel_one(run_id)
+[api]               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[api]   File "/home/nasbombz/Documents/Projects/vigil-agent/backend/src/modules/runs/service.py", line 609, in _cancel_one
+[api]     updated = await self.update_run_status(run_id, status="failed")
+[api]               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[api]   File "/home/nasbombz/Documents/Projects/vigil-agent/backend/src/modules/runs/service.py", line 363, in update_run_status
+[api]     RunStateMachine.require(run.status, status, run_id)
+[api]   File "/home/nasbombz/Documents/Projects/vigil-agent/backend/src/modules/runs/state.py", line 186, in require
+[api]     raise InvalidRunTransition(source, target, run_id)
+[api] src.modules.runs.state.InvalidRunTransition: run status cannot change from 'completed' to 'failed' for run bc97adea-621f-43c4-ad64-3347dec0cf6a
+[worker] {"job_id": "df3da94f-affc-4309-99d5-643ea7389d0d", "job_type": "execute_run", "priority": 90, "attempt": 1, "event": "Claimed job", "level": "info", "timestamp": "2026-11-08T17:22:12.999814Z"}
+[worker] {"event": "HTTP Request: POST https://api.meta.ai/v1/chat/completions \"HTTP/1.1 200 OK\"", "level": "info", "timestamp": "2026-11-08T17:22:14.911242Z"}
+[worker] {"event": "HTTP Request: POST https://api.meta.ai/v1/chat/completions \"HTTP/1.1 200 OK\"", "level": "info", "timestamp": "2026-11-08T17:22:26.590645Z"}
+[worker] {"event": "HTTP Request: POST https://api.meta.ai/v1/chat/completions \"HTTP/1.1 200 OK\"", "level": "info", "timestamp": "2026-11-08T17:22:31.972650Z"}
+[worker] {"event": "HTTP Request: POST https://api.meta.ai/v1/chat/completions \"HTTP/1.1 200 OK\"", "level": "info", "timestamp": "2026-11-08T17:22:40.915986Z"}
+
+---
+
+yes.
+
+Also, it seems that when the agent is running the states doesn't update properly until I refresh. And often when there is a connecting to VIGIL indicator that is always rolling even when nothing is happening. My guess is that it's probably just trying to pull the API to establish a connection, but I'm not sure pulling the API is ideal, especially in a production environment, so maybe we need to review that. I'm not sure if a web socket is better or how you want to go about it, but I don't think this is an ideal thing to do.
