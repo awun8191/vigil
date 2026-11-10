@@ -1,0 +1,13 @@
+@[docs/agent-compact-proposal.md] look at this document
+
+---
+
+yes
+
+---
+
+Alo add support for images
+
+---
+
+So, here's the thing, I need you to help me split the repo into two given sections. Get the website and put it in a separate folder called the mansora-website. Then another one is mansora-backend. The reason for that is that I have already created two separate GitHub repositories and added myself as collaborators to both of them. You can use the GH CLI to identify them, but I would want us to commit them to these respective repositories to ensure we have a proper separation of concerns in case the team expands.
