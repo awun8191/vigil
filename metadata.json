@@ -3,7 +3,7 @@
   "checkpoint_id": "01M75W9QS4EJ0RX0CM2ECR0DQ7",
   "strategy": "manual-commit",
   "branch": "main",
-  "checkpoints_count": 7,
+  "checkpoints_count": 8,
   "files_touched": [
     ".commandcode/taste/taste.md",
     ".commandcode/taste/taste/taste.md",
@@ -43,17 +43,23 @@
       "transcript": "/2/full.jsonl",
       "content_hash": "/2/content_hash.txt",
       "prompt": ""
+    },
+    {
+      "metadata": "/3/metadata.json",
+      "transcript": "/3/full.jsonl",
+      "content_hash": "/3/content_hash.txt",
+      "prompt": ""
     }
   ],
   "redaction": {
-    "replacements": 59,
+    "replacements": 68,
     "layers": {
       "betterleaks": 13,
       "connection_string": 0,
       "credential_key": 0,
-      "credential_value": 33,
+      "credential_value": 36,
       "credentialed_uri": 2,
-      "entropy": 19,
+      "entropy": 25,
       "key_context": 0,
       "provider_token": 0,
       "shell_stdin": 0
