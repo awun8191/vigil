@@ -3,7 +3,7 @@
   "checkpoint_id": "01M75FAR8DHSKK06TEY2P3774P",
   "strategy": "manual-commit",
   "branch": "main",
-  "checkpoints_count": 8,
+  "checkpoints_count": 9,
   "files_touched": [
     "CONTRIBUTING.md",
     "PROJECT.md",
@@ -127,17 +127,23 @@
       "transcript": "/7/full.jsonl",
       "content_hash": "/7/content_hash.txt",
       "prompt": ""
+    },
+    {
+      "metadata": "/8/metadata.json",
+      "transcript": "/8/full.jsonl",
+      "content_hash": "/8/content_hash.txt",
+      "prompt": ""
     }
   ],
   "redaction": {
-    "replacements": 95,
+    "replacements": 97,
     "layers": {
       "betterleaks": 1,
       "connection_string": 0,
       "credential_key": 0,
       "credential_value": 13,
       "credentialed_uri": 0,
-      "entropy": 82,
+      "entropy": 84,
       "key_context": 0,
       "provider_token": 0,
       "shell_stdin": 0
