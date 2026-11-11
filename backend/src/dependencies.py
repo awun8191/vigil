@@ -566,6 +566,7 @@ def get_notification_dispatcher(
 DELIVERY_ARTIFACT_KINDS: dict[str, str] = {
     "deliver_file": "document",
     "generate_document": "document",
+    "browser_navigate": "screenshot",
 }
 """Artifact kind for each tool that delivers a file to the user."""
 
@@ -609,6 +610,7 @@ class RunToolExecutor:
         delivery_dir: Any | None = None,
         connector_id: str = "default",
         llm: Any | None = None,
+        secrets: Mapping[str, str] | None = None,
     ) -> None:
         self.session = session
         self.settings = settings
@@ -617,6 +619,9 @@ class RunToolExecutor:
         self.mcp_host = mcp_host
         self.connector_id = connector_id
         self.llm = llm
+        self._tool_secrets: dict[str, str] | None = (
+            dict(secrets) if secrets is not None else None
+        )
         base_path = Path(settings.WORKSPACE_BASE_PATH)
         if delivery_dir is None:
             try:
@@ -652,7 +657,8 @@ class RunToolExecutor:
         return self._container_id
 
     async def close(self) -> None:
-        """Snapshot the workspace and tear down the run container."""
+        """Close the live browser session, snapshot the workspace, and tear down the container."""
+        await self._close_browser_session()
         if self._container_id is not None:
             container_id = self._container_id
             self._container_id = None
@@ -693,6 +699,64 @@ class RunToolExecutor:
         )
         return str(created.container_id)
 
+    async def _load_tool_secrets(self) -> Mapping[str, str]:
+        """Resolve vault secrets that host-side tools need.
+
+        The browser tools read the Firecrawl key from the vault of the run owner.
+        A vault read never breaks a tool call: a failure degrades to the settings
+        fallback inside the tool.
+        """
+        if self._tool_secrets is not None:
+            return self._tool_secrets
+        secrets: dict[str, str] = {}
+        if self.session is not None:
+            try:
+                user_id = await self._run_owner_id()
+                if user_id is not None:
+                    from src.modules.settings.vault import KeyVaultService
+
+                    vault = KeyVaultService(session=self.session, settings=self.settings)
+                    for key in ("FIRECRAWL_API_KEY",):
+                        value = await vault.get_secret(user_id, key)
+                        if value:
+                            secrets[key] = value
+            except Exception:  # noqa: BLE001 - a missing vault row must not fail the run
+                secrets = {}
+        self._tool_secrets = secrets
+        return secrets
+
+    async def _run_owner_id(self) -> UUID | None:
+        """Return the user that owns this run, through its card or its chat thread."""
+        from sqlalchemy import select
+
+        from src.schemas.runtime import MessageModel, RunModel, ThreadModel
+        from src.schemas.triage import CardModel
+
+        session = self.session
+        assert session is not None
+        card_id = (
+            await session.execute(
+                select(RunModel.card_id).where(RunModel.id == self.run_id)
+            )
+        ).scalar_one_or_none()
+        if card_id is not None:
+            owner = (
+                await session.execute(
+                    select(CardModel.user_id).where(CardModel.id == card_id)
+                )
+            ).scalar_one_or_none()
+            if owner is not None:
+                return owner
+        return (
+            await session.execute(
+                select(ThreadModel.user_id)
+                .select_from(ThreadModel)
+                .join(MessageModel, MessageModel.session_id == ThreadModel.id)
+                .where(MessageModel.run_id == self.run_id)
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+
     async def execute(
         self, name: str, arguments: Mapping[str, Any]
     ) -> Mapping[str, Any]:
@@ -708,6 +772,7 @@ class RunToolExecutor:
             container_id=container_id,
             delivery_dir=Path(self.delivery_dir),
             llm=self.llm,
+            secrets=await self._load_tool_secrets(),
         )
         result = await invoke_tool(name, dict(arguments), context)
         if result.ok and result.artifact_ref:
@@ -771,6 +836,22 @@ class RunToolExecutor:
         if isinstance(result.content, dict):
             result.content.setdefault("preview", preview)
 
+    async def _close_browser_session(self) -> None:
+        """Close the live Firecrawl session of this run, best effort."""
+        try:
+            from src.modules.runs.tools.browser import close_browser_session
+
+            secrets = self._tool_secrets or {}
+            api_key = (
+                secrets.get("FIRECRAWL_API_KEY")
+                or self.settings.FIRECRAWL_API_KEY
+            )
+            await close_browser_session(
+                self.delivery_dir, api_key, self.settings.FIRECRAWL_BASE_URL
+            )
+        except Exception:  # noqa: BLE001 - cleanup must not mask the run outcome
+            pass
+
 
 def _build_artifact_preview(path: Path, max_chars: int = 500) -> str | None:
     """Build a short text preview (up to 500 chars) for an artifact file."""
@@ -804,23 +885,6 @@ def _build_artifact_preview(path: Path, max_chars: int = 500) -> str | None:
     except Exception:  # noqa: BLE001
         return None
 
-    async def close(self) -> None:
-        """Snapshot /workspace and remove the run container. A missing container is not an error."""
-        container_id = self._container_id
-        self._container_id = None
-        if container_id is None:
-            return
-        snapshot: Any = getattr(self.sandbox, "snapshot_workspace", None)
-        if callable(snapshot):
-            try:
-                await snapshot(container_id, str(self.snapshot_tar))
-            except Exception:  # noqa: BLE001 - best-effort workspace snapshot before container teardown
-                pass
-        try:
-            await self.sandbox.stop_and_remove(container_id)
-        except Exception:  # noqa: BLE001 - cleanup must not mask the run outcome
-            pass
-
 
 def build_tool_executor(
     session: AsyncSession | None,
@@ -831,6 +895,7 @@ def build_tool_executor(
     mcp_host: MCPHostProtocol | None = None,
     delivery_dir: Any | None = None,
     llm: LLMClientProtocol | None = None,
+    secrets: Mapping[str, str] | None = None,
 ) -> RunToolExecutor:
     """Build the tool executor of one run from the real adapters."""
     return RunToolExecutor(
@@ -841,6 +906,7 @@ def build_tool_executor(
         mcp_host=mcp_host if mcp_host is not None else get_mcp_host(settings),
         delivery_dir=delivery_dir,
         llm=llm if llm is not None else get_llm_client(settings),
+        secrets=secrets,
     )
 
 

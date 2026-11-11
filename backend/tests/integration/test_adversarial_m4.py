@@ -41,7 +41,7 @@ import pytest
 
 from src.config.security import SecurityError, decrypt_secret, encrypt_secret
 from src.config.settings import Settings
-from src.dependencies import get_current_user
+from src.dependencies import get_current_user, get_key_vault_service
 from src.main import create_app
 from src.modules.auth.repository import UserDTO
 from src.modules.runs.tools import ToolContext, invoke_tool
@@ -52,9 +52,20 @@ from src.modules.runs.tools.browser import (
     browser_extract,
     browser_navigate,
 )
-from src.modules.settings.vault import KeyVaultService, mask_secret_value
+from src.modules.settings.vault import (
+    InMemoryVaultStore,
+    KeyVaultService,
+    mask_secret_value,
+)
 
 VOICE_AUTH = {"Authorization": "Bearer dev"}
+
+
+def isolate_vault(app) -> None:
+    """Keep the dev database vault out of a test that assumes no stored key."""
+    app.dependency_overrides[get_key_vault_service] = lambda: KeyVaultService(
+        settings=Settings(), store=InMemoryVaultStore()
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -514,6 +525,7 @@ class TestVoiceTranscriptionAdversarial:
         without crashing and returns fallback mock response.
         """
         app = create_app()
+        isolate_vault(app)
         transport = ASGITransport(app=app, raise_app_exceptions=False)
 
         test_payloads = [
@@ -539,6 +551,7 @@ class TestVoiceTranscriptionAdversarial:
     async def test_transcribe_empty_file_and_large_file_stress(self) -> None:
         """Verify endpoint behavior with 0-byte empty file and 5MB large payload."""
         app = create_app()
+        isolate_vault(app)
         transport = ASGITransport(app=app, raise_app_exceptions=False)
 
         async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
@@ -577,6 +590,7 @@ class TestVoiceTranscriptionAdversarial:
             GROQ_BASE_URL="https://api.groq.com/openai/v1",
         )
         app = create_app(custom_settings)
+        isolate_vault(app)
         transport = ASGITransport(app=app, raise_app_exceptions=False)
 
         upstream_cases = [
@@ -621,6 +635,7 @@ class TestVoiceTranscriptionAdversarial:
     async def test_transcribe_malformed_http_requests(self) -> None:
         """Verify endpoint returns 422 when required multipart file is absent or misnamed."""
         app = create_app()
+        isolate_vault(app)
         transport = ASGITransport(app=app, raise_app_exceptions=False)
 
         async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:

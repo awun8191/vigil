@@ -14,9 +14,16 @@ from src.config.settings import Settings
 from src.dependencies import get_current_user, get_key_vault_service
 from src.main import create_app
 from src.modules.auth.repository import UserDTO
-from src.modules.settings.vault import KeyVaultService
+from src.modules.settings.vault import KeyVaultService, InMemoryVaultStore
 
 AUTH_HEADERS = {"Authorization": "Bearer dev"}
+
+
+def isolate_vault(app) -> None:
+    """Keep the dev database vault out of a test that assumes no stored key."""
+    app.dependency_overrides[get_key_vault_service] = lambda: KeyVaultService(
+        settings=Settings(), store=InMemoryVaultStore()
+    )
 
 
 def _voice_files(name: str = "test_recording.webm", content: bytes = b"RIFF....WAVEfmt ....data...."):
@@ -27,6 +34,7 @@ def _voice_files(name: str = "test_recording.webm", content: bytes = b"RIFF....W
 async def test_transcribe_fallback_without_groq_key() -> None:
     """Verify POST /api/v1/voice/transcribe returns deterministic mock when no key is configured."""
     app = create_app(Settings(GROQ_API_KEY=None))
+    isolate_vault(app)
     transport = ASGITransport(app=app, raise_app_exceptions=False)
 
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
@@ -48,6 +56,7 @@ async def test_transcribe_groq_api_success() -> None:
         GROQ_BASE_URL="https://api.groq.com/openai/v1",
     )
     app = create_app(custom_settings)
+    isolate_vault(app)
     transport = ASGITransport(app=app, raise_app_exceptions=False)
 
     fake_result = (200, {"text": "Schedule a meeting with Sarah tomorrow at 10 AM"})
@@ -79,6 +88,7 @@ async def test_transcribe_uses_vault_key_when_env_is_unset() -> None:
     """A key saved in the vault is used even when GROQ_API_KEY is unset."""
     custom_settings = Settings(GROQ_API_KEY=None)
     app = create_app(custom_settings)
+    isolate_vault(app)
     user_id = uuid4()
     now = datetime.now(timezone.utc)
     mock_user = UserDTO(
@@ -88,7 +98,7 @@ async def test_transcribe_uses_vault_key_when_env_is_unset() -> None:
         created_at=now,
         updated_at=now,
     )
-    vault = KeyVaultService(settings=custom_settings)
+    vault = KeyVaultService(settings=custom_settings, store=InMemoryVaultStore())
     await vault.set_secret(user_id, "GROQ_API_KEY", "gsk_vault_key_12345")
 
     app.dependency_overrides[get_current_user] = lambda: mock_user
@@ -120,6 +130,7 @@ async def test_transcribe_upstream_401_is_a_real_error() -> None:
         GROQ_BASE_URL="https://api.groq.com/openai/v1",
     )
     app = create_app(custom_settings)
+    isolate_vault(app)
     transport = ASGITransport(app=app, raise_app_exceptions=False)
 
     with patch(
@@ -147,6 +158,7 @@ async def test_transcribe_upstream_500_is_a_real_error() -> None:
         GROQ_BASE_URL="https://api.groq.com/openai/v1",
     )
     app = create_app(custom_settings)
+    isolate_vault(app)
     transport = ASGITransport(app=app, raise_app_exceptions=False)
 
     with patch(
@@ -167,6 +179,7 @@ async def test_transcribe_upstream_500_is_a_real_error() -> None:
 async def test_transcribe_missing_file_returns_422() -> None:
     """Verify POST /api/v1/voice/transcribe without a file produces 422 Unprocessable Entity."""
     app = create_app()
+    isolate_vault(app)
     transport = ASGITransport(app=app, raise_app_exceptions=False)
 
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:

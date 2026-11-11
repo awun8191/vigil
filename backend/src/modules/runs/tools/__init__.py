@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import inspect
 from collections.abc import Awaitable, Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Literal
@@ -79,6 +79,8 @@ class ToolContext:
     delivery_dir: Path
     llm: Any | None = None
     """Model client for tools that need inference, such as ``view_image``."""
+    secrets: Mapping[str, str] = field(default_factory=dict)
+    """Vault secrets resolved for the run owner, keyed by environment name."""
 
 
 Handler = Callable[[Any, ToolContext], Awaitable[ToolResult]]

@@ -25,6 +25,7 @@ import pytest
 from pydantic import BaseModel
 
 from src.config.settings import Settings
+from src.dependencies import get_key_vault_service
 from src.main import create_app
 from src.integrations.mcp.factory import (
     MCP_PRESETS,
@@ -42,7 +43,14 @@ from src.modules.runs.tools.browser import (
     browser_navigate,
 )
 from src.modules.runs.tools.mcp_bridge import MCPToolAdapterFactory
-from src.modules.settings.vault import KeyVaultService
+from src.modules.settings.vault import InMemoryVaultStore, KeyVaultService
+
+
+def isolate_vault(app) -> None:
+    """Keep the dev database vault out of a test that assumes no stored key."""
+    app.dependency_overrides[get_key_vault_service] = lambda: KeyVaultService(
+        settings=Settings(), store=InMemoryVaultStore()
+    )
 
 
 def make_tool_context(delivery_dir: Path) -> ToolContext:
@@ -189,6 +197,7 @@ async def test_adversarial_browser_extract_scheme_handling(tmp_path: Path) -> No
 async def test_adversarial_voice_transcribe_filename_traversal() -> None:
     """Verify voice transcription handles path traversal in audio filename safely."""
     app = create_app()
+    isolate_vault(app)
     transport = ASGITransport(app=app, raise_app_exceptions=False)
 
     malicious_filename = "../../../../../../../../tmp/evil.wav"
@@ -211,6 +220,7 @@ async def test_adversarial_voice_transcribe_filename_traversal() -> None:
 async def test_adversarial_voice_transcribe_binary_fuzzing() -> None:
     """Verify voice transcription handles random binary garbage without unhandled crash."""
     app = create_app()
+    isolate_vault(app)
     transport = ASGITransport(app=app, raise_app_exceptions=False)
 
     fuzz_bytes = os.urandom(1024)

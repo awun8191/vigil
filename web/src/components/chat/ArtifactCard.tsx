@@ -190,6 +190,29 @@ export function buildDeliverables(
     { name?: string; sha256?: string; sizeBytes?: number; format?: string; preview?: string }
   >();
 
+  // Browser screenshots belong to the live browser panel, not the file list.
+  const browserScreenshotPaths = new Set<string>();
+  for (const step of steps) {
+    if (!step || step.event_type !== 'tool_result') continue;
+    if (String(step.payload.tool_name ?? '') !== 'browser_navigate') continue;
+    const res =
+      typeof step.payload.result === 'object' && step.payload.result !== null
+        ? (step.payload.result as Record<string, unknown>)
+        : null;
+    if (!res) continue;
+    const content =
+      typeof res.content === 'object' && res.content !== null
+        ? (res.content as Record<string, unknown>)
+        : {};
+    const path =
+      typeof content.path === 'string'
+        ? content.path
+        : typeof res.artifact_ref === 'string'
+          ? res.artifact_ref
+          : '';
+    if (path) browserScreenshotPaths.add(path);
+  }
+
   for (let i = 0; i < steps.length; i += 1) {
     const step = steps[i];
     if (!step) continue;
@@ -242,6 +265,7 @@ export function buildDeliverables(
 
   for (const art of artifacts) {
     seenPaths.add(art.path);
+    if (browserScreenshotPaths.has(art.path)) continue;
     const baseName = art.path.split('/').pop() ?? art.path;
     const stepMeta = stepMetaByPath.get(art.path) ?? stepMetaByPath.get(`name:${baseName}`);
     const name = stepMeta?.name ?? baseName;

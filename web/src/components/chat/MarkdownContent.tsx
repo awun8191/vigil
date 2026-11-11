@@ -93,7 +93,7 @@ interface MarkdownContentProps {
 export function MarkdownContent({ content, className = '' }: MarkdownContentProps) {
   return (
     <div
-      className={`w-full max-w-full min-w-0 text-[15px] leading-[1.7] text-[var(--text)] [overflow-wrap:anywhere] ${className}`}
+      className={`w-full max-w-full min-w-0 text-[14px] leading-[1.35] text-[var(--text)] [overflow-wrap:anywhere] ${className}`}
     >
       <ReactMarkdown
         remarkPlugins={[remarkGfm, remarkMath]}
@@ -120,24 +120,24 @@ export function MarkdownContent({ content, className = '' }: MarkdownContentProp
             return <>{children}</>;
           },
           p({ children }) {
-            return <p className="mb-3.5 last:mb-0 leading-[1.72] [overflow-wrap:anywhere]">{children}</p>;
+            return <p className="mb-2.5 last:mb-0 leading-[1.35] [overflow-wrap:anywhere]">{children}</p>;
           },
           ul({ children }) {
             return (
-              <ul className="mb-3.5 last:mb-0 list-disc space-y-1.5 pl-5 marker:text-[var(--text-muted)]">
+              <ul className="mb-2.5 last:mb-0 list-disc space-y-1 pl-5 marker:text-[var(--text-muted)]">
                 {children}
               </ul>
             );
           },
           ol({ children }) {
             return (
-              <ol className="mb-3.5 last:mb-0 list-decimal space-y-1.5 pl-5 marker:font-medium marker:text-[var(--text-muted)]">
+              <ol className="mb-2.5 last:mb-0 list-decimal space-y-1 pl-5 marker:font-medium marker:text-[var(--text-muted)]">
                 {children}
               </ol>
             );
           },
           li({ children }) {
-            return <li className="leading-[1.68] pl-0.5 [overflow-wrap:anywhere]">{children}</li>;
+            return <li className="leading-[1.35] pl-0.5 [overflow-wrap:anywhere]">{children}</li>;
           },
           h1({ children }) {
             return (

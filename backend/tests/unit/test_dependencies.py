@@ -74,6 +74,13 @@ EXPECTED_PROVIDERS = [
 ]
 
 
+def test_run_tool_executor_exposes_close() -> None:
+    """The executor cleanup must be a real method, not nested in a helper."""
+    from src.dependencies import RunToolExecutor
+
+    assert callable(getattr(RunToolExecutor, "close", None))
+
+
 def test_dependencies_all_exports_the_expected_providers() -> None:
     """Verify that src.dependencies.__all__ holds exactly the expected providers."""
     assert hasattr(deps, "__all__"), "src.dependencies must define __all__"

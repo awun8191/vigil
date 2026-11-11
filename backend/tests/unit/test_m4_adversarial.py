@@ -36,7 +36,7 @@ import pytest
 
 from src.config.security import SecurityError, decrypt_secret, encrypt_secret
 from src.config.settings import Settings
-from src.dependencies import get_current_user
+from src.dependencies import get_current_user, get_key_vault_service
 from src.main import create_app
 from src.modules.auth.repository import UserDTO
 from src.modules.runs.tools import ToolContext, invoke_tool
@@ -47,9 +47,20 @@ from src.modules.runs.tools.browser import (
     browser_extract,
     browser_navigate,
 )
-from src.modules.settings.vault import KeyVaultService, mask_secret_value
+from src.modules.settings.vault import (
+    InMemoryVaultStore,
+    KeyVaultService,
+    mask_secret_value,
+)
 
 VOICE_AUTH = {"Authorization": "Bearer dev"}
+
+
+def isolate_vault(app) -> None:
+    """Keep the dev database vault out of a test that assumes no stored key."""
+    app.dependency_overrides[get_key_vault_service] = lambda: KeyVaultService(
+        settings=Settings(), store=InMemoryVaultStore()
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -504,6 +515,7 @@ class TestVoiceSTTAdversarial:
     async def test_voice_zero_byte_audio_file(self) -> None:
         """Verify 0-byte audio file does not crash the server and returns deterministic fallback."""
         app = create_app()
+        isolate_vault(app)
         transport = ASGITransport(app=app, raise_app_exceptions=False)
 
         empty_file = {"file": ("empty.webm", io.BytesIO(b""), "audio/webm")}
@@ -521,6 +533,7 @@ class TestVoiceSTTAdversarial:
     async def test_voice_huge_audio_file_stress(self) -> None:
         """Stress test endpoint with a large 8MB audio payload."""
         app = create_app()
+        isolate_vault(app)
         transport = ASGITransport(app=app, raise_app_exceptions=False)
 
         large_payload = b"RIFF" + os.urandom(8 * 1024 * 1024)
@@ -537,6 +550,7 @@ class TestVoiceSTTAdversarial:
     async def test_voice_corrupted_and_non_audio_payloads(self) -> None:
         """Verify corrupted formats (PDF, PNG, random binary noise, plain text) are safely handled."""
         app = create_app()
+        isolate_vault(app)
         transport = ASGITransport(app=app, raise_app_exceptions=False)
 
         test_payloads = [
@@ -558,6 +572,7 @@ class TestVoiceSTTAdversarial:
     async def test_voice_fallback_when_groq_key_is_none(self) -> None:
         """Verify immediate deterministic mock when GROQ_API_KEY is None."""
         app = create_app(Settings(GROQ_API_KEY=None))
+        isolate_vault(app)
         transport = ASGITransport(app=app, raise_app_exceptions=False)
 
         files = {"file": ("recording.webm", io.BytesIO(b"webm_bytes"), "audio/webm")}
@@ -570,6 +585,7 @@ class TestVoiceSTTAdversarial:
     async def test_voice_reports_a_rejected_groq_key(self) -> None:
         """A 401 from Groq is a real error, not a mock success."""
         app = create_app(Settings(GROQ_API_KEY="gsk_invalid_expired_token_12345"))
+        isolate_vault(app)
         transport = ASGITransport(app=app, raise_app_exceptions=False)
 
         files = {"file": ("recording.webm", io.BytesIO(b"audio_bytes"), "audio/webm")}
@@ -590,6 +606,7 @@ class TestVoiceSTTAdversarial:
     async def test_voice_reports_groq_upstream_errors(self) -> None:
         """Every upstream failure surfaces with a status, never a fake transcript."""
         app = create_app(Settings(GROQ_API_KEY="gsk_configured_key"))
+        isolate_vault(app)
         transport = ASGITransport(app=app, raise_app_exceptions=False)
 
         error_cases = [
@@ -630,6 +647,7 @@ class TestVoiceSTTAdversarial:
     async def test_voice_missing_and_malformed_requests(self) -> None:
         """Verify 422 Unprocessable Entity when request body is missing or malformed."""
         app = create_app()
+        isolate_vault(app)
         transport = ASGITransport(app=app, raise_app_exceptions=False)
 
         async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
@@ -659,6 +677,7 @@ class TestVoiceSTTAdversarial:
     async def test_voice_concurrent_transcriptions(self) -> None:
         """Stress-test 25 concurrent transcription requests simultaneously."""
         app = create_app()
+        isolate_vault(app)
         transport = ASGITransport(app=app, raise_app_exceptions=False)
 
         async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:

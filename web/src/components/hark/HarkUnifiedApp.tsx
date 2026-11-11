@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import { FolderPlus, MessageSquare } from 'lucide-react';
 
@@ -11,6 +11,7 @@ import { HarkProactivityPill } from './HarkProactivityPill';
 import { MessageStream } from '@/components/chat/MessageStream';
 import { InputPill } from '@/components/chat/InputPill';
 import { ThinkingCapsule } from '@/components/chat/ThinkingCapsule';
+import { LiveBrowserCard, buildBrowserPreviews } from '@/components/chat/LiveBrowserCard';
 import { useCards } from '@/queries/cards';
 import { useAgentChat, useCreateSession, useMessages, useSessions } from '@/queries/chat';
 import { compareCards, timeOfDayGreeting } from '@/lib/format';
@@ -249,6 +250,12 @@ export function HarkUnifiedApp() {
   const showThinking = chat.streaming;
   const railOpen = leftRailMode !== 'collapsed';
 
+  const liveBrowserPreview = useMemo(() => {
+    if (!chat.streaming) return null;
+    const previews = buildBrowserPreviews(chat.steps);
+    return previews.length > 0 ? previews[previews.length - 1] ?? null : null;
+  }, [chat.streaming, chat.steps]);
+
   return (
     <div className="relative h-dvh w-full overflow-hidden">
       <HarkTopChrome
@@ -288,7 +295,16 @@ export function HarkUnifiedApp() {
                 messages={messages}
                 streamedText={chat.streamedText}
                 streaming={chat.streaming}
-                trailing={showThinking ? <ThinkingCapsule active steps={chat.steps} /> : null}
+                trailing={
+                  showThinking ? (
+                    <div className="w-full min-w-0 space-y-2">
+                      <ThinkingCapsule active steps={chat.steps} />
+                      {liveBrowserPreview ? (
+                        <LiveBrowserCard preview={liveBrowserPreview} live />
+                      ) : null}
+                    </div>
+                  ) : null
+                }
                 emptyHint={
                   <EmptyBriefing
                     onCard={openCard}

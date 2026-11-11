@@ -42,6 +42,15 @@ export function HarkSearchModal({ open, onClose, onSearch }: Props) {
             className="fixed inset-0 bg-black/40 backdrop-blur-2xl"
           />
 
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close search"
+            className="hark-card fixed left-6 top-4 z-20 grid h-10 w-10 place-items-center rounded-full text-[var(--hark-card-fg)] transition-transform hover:scale-105 active:scale-95"
+          >
+            <X size={17} strokeWidth={1.75} />
+          </button>
+
           {/* Centered Floating Search Pill (Screenshot 6) */}
           <motion.div
             initial={{ opacity: 0, scale: 0.95, y: -10 }}

@@ -6,6 +6,7 @@ import { Bubble, BubbleContent } from '@/components/ui/c-message-3-utils/bubble'
 import { MarkdownContent } from './MarkdownContent';
 import { ThinkingCapsule } from './ThinkingCapsule';
 import { ArtifactCard, buildDeliverables } from './ArtifactCard';
+import { LiveBrowserCard, buildBrowserPreviews } from './LiveBrowserCard';
 import { useRunArtifacts, useRunSteps } from '@/queries/runs';
 
 interface Props {
@@ -68,6 +69,9 @@ export function MessageItem({ message, divider, staggerIndex = 0 }: Props) {
 
   const deliverables = message.run_id
     ? buildDeliverables(runArtifactsQuery.data ?? [], mappedSteps)
+    : [];
+  const browserPreviews = message.run_id
+    ? buildBrowserPreviews(mappedSteps, runArtifactsQuery.data ?? [])
     : [];
 
   const hasSemanticSteps = mappedSteps.some(
@@ -152,6 +156,14 @@ export function MessageItem({ message, divider, staggerIndex = 0 }: Props) {
             <Bubble variant="assistant" className="w-fit max-w-full">
               <MarkdownContent content={message.content} />
             </Bubble>
+
+            {browserPreviews.length > 0 ? (
+              <div className="w-full min-w-0 space-y-2 pt-1">
+                {browserPreviews.map((preview) => (
+                  <LiveBrowserCard key={preview.id} preview={preview} />
+                ))}
+              </div>
+            ) : null}
 
             {deliverables.length > 0 ? (
               <div className="w-full min-w-0 space-y-2 pt-1">
