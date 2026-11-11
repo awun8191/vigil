@@ -3,7 +3,7 @@
   "checkpoint_id": "01M75FAR8DHSKK06TEY2P3774P",
   "strategy": "manual-commit",
   "branch": "main",
-  "checkpoints_count": 42,
+  "checkpoints_count": 43,
   "files_touched": [
     "CONTRIBUTING.md",
     "PROJECT.md",
@@ -76,6 +76,12 @@
     "web/src/components/chat/MessageItem.tsx",
     "web/src/components/chat/MessageStream.tsx",
     "web/src/components/chat/ThinkingCapsule.tsx",
+    "web/src/components/hark/HarkEmailCard.tsx",
+    "web/src/components/hark/HarkLeftRail.tsx",
+    "web/src/components/hark/HarkLiveBrowserCard.tsx",
+    "web/src/components/hark/HarkProactivityPill.tsx",
+    "web/src/components/hark/HarkProfileSheet.tsx",
+    "web/src/components/hark/HarkSearchModal.tsx",
     "web/src/components/hark/HarkTopChrome.tsx",
     "web/src/components/hark/HarkUnifiedApp.tsx",
     "web/src/components/home/HomeView.tsx",
@@ -100,6 +106,7 @@
     "web/src/store/useSession.ts",
     "web/src/styles/tokens.css",
     "web/src/types/index.ts",
+    "web/tests/challenger_m4_2_gen3_empirical.mjs",
     "web/tests/challenger_m4_2_gen4_empirical.mjs",
     "web/tests/m4_frontend_stress.mjs",
     "web/vite.config.ts"
@@ -332,19 +339,25 @@
       "transcript": "/37/full.jsonl",
       "content_hash": "/37/content_hash.txt",
       "prompt": ""
+    },
+    {
+      "metadata": "/38/metadata.json",
+      "transcript": "/38/full.jsonl",
+      "content_hash": "/38/content_hash.txt",
+      "prompt": ""
     }
   ],
   "redaction": {
-    "replacements": 412,
+    "replacements": 416,
     "layers": {
       "betterleaks": 39,
       "connection_string": 0,
       "credential_key": 0,
-      "credential_value": 112,
+      "credential_value": 115,
       "credentialed_uri": 6,
       "entropy": 275,
       "key_context": 0,
-      "provider_token": 0,
+      "provider_token": 1,
       "shell_stdin": 0
     }
   }
