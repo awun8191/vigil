@@ -2,7 +2,7 @@
 Unit tests for the central dependency hub (src/dependencies.py).
 
 Invariants Enforced:
-1. __all__ explicitly defines exactly the expected 23 dependency providers.
+1. __all__ explicitly defines exactly the expected 26 dependency providers.
 2. Every symbol exported in __all__ exists and is callable.
 3. get_settings() returns a valid Settings instance.
 4. get_db_session() yields an AsyncSession (or valid session protocol).
@@ -64,6 +64,7 @@ EXPECTED_PROVIDERS = [
     "get_settings_service",
     "get_audit_service",
     "get_jobs_service",
+    "get_key_vault_service",
     # External integrations (5)
     "get_jev_client",
     "get_llm_client",

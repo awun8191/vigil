@@ -2,6 +2,7 @@ import type {
   Approval,
   ApprovalDecisionRequest,
   ApprovalDecisionResponse,
+  Artifact,
   AuthMe,
   Card,
   CardFeedbackRequest,
@@ -26,7 +27,11 @@ import type {
   SystemLimits,
   UserSettings,
   UserSettingsUpdateRequest,
+  VaultSecretDTO,
+  SetVaultSecretRequest,
+  VaultValidationResult,
 } from '@/types';
+
 import type { VigilApi } from './contract';
 import { ApiError, AuthError, NetworkError } from './errors';
 import { idempotencyKey } from './idempotency';
@@ -34,6 +39,9 @@ import { createEventStream } from './sse';
 import { mockApi } from './mock';
 
 const BASE = (import.meta.env['VITE_API_BASE'] as string | undefined) ?? '/api/v1';
+
+/** Base path for the few callers that need raw fetch (voice upload). */
+export const API_BASE = BASE;
 
 export const IS_MOCK = import.meta.env['VITE_VIGIL_MOCK'] === '1';
 
@@ -52,6 +60,14 @@ export function setBearerToken(token: string | null): void {
 
 export function getBearerToken(): string | null {
   return bearerToken;
+}
+
+/**
+ * The token a request actually carries. In dev the backend accepts a deterministic
+ * token, so a raw fetch (voice upload) must use the same fallback as `request()`.
+ */
+export function getEffectiveBearerToken(): string | null {
+  return bearerToken ?? (import.meta.env.DEV ? 'vgt_testtoken' : null);
 }
 
 export function setAuthFailureHandler(handler: (() => void) | null): void {
@@ -104,7 +120,8 @@ async function request<T>(path: string, init: RequestInit_ = {}): Promise<T> {
 
   const headers: Record<string, string> = { Accept: 'application/json' };
   if (init.body !== undefined) headers['Content-Type'] = 'application/json';
-  if (bearerToken) headers['Authorization'] = `Bearer ${bearerToken}`;
+  const effectiveToken = getEffectiveBearerToken();
+  if (effectiveToken) headers['Authorization'] = `Bearer ${effectiveToken}`;
 
   if (isMutating) {
     // Frontend policy, not a backend contract: the idempotency middleware only manages requests
@@ -222,6 +239,56 @@ const liveApi: VigilApi = {
 
   getRunMessages(runId) {
     return request<RunMessageResponse[]>(`/runs/${runId}/messages`);
+  },
+
+  listRunArtifacts(runId) {
+    return request<Artifact[]>(`/artifacts/run/${runId}`);
+  },
+
+  async downloadArtifactBlob(artifactId) {
+    const headers: Record<string, string> = {};
+    const effectiveToken = getEffectiveBearerToken();
+  if (effectiveToken) headers['Authorization'] = `Bearer ${effectiveToken}`;
+    let response: Response;
+    try {
+      response = await fetch(buildUrl(`/artifacts/${artifactId}/stream`), {
+        method: 'GET',
+        headers,
+      });
+    } catch (error) {
+      throw new NetworkError(error instanceof Error ? error.message : 'Network request failed');
+    }
+    if (!response.ok) {
+      if (response.status === 401) {
+        notifyAuthFailure();
+        throw new AuthError(401, null as never);
+      }
+      throw new ApiError(response.status, null as never);
+    }
+    return response.blob();
+  },
+
+  async getArtifactText(artifactId) {
+    const headers: Record<string, string> = {};
+    const effectiveToken = getEffectiveBearerToken();
+    if (effectiveToken) headers['Authorization'] = `Bearer ${effectiveToken}`;
+    let response: Response;
+    try {
+      response = await fetch(buildUrl(`/artifacts/${artifactId}/text`), {
+        method: 'GET',
+        headers,
+      });
+    } catch (error) {
+      throw new NetworkError(error instanceof Error ? error.message : 'Network request failed');
+    }
+    if (!response.ok) {
+      if (response.status === 401) {
+        notifyAuthFailure();
+        throw new AuthError(401, null as never);
+      }
+      throw new ApiError(response.status, null as never);
+    }
+    return response.text();
   },
 
   getDefaultAgentConfig() {
@@ -363,7 +430,42 @@ const liveApi: VigilApi = {
       scope,
     });
   },
+
+  listVaultSecrets() {
+    return request<VaultSecretDTO[]>('/settings/vault');
+  },
+
+  setVaultSecret(body: SetVaultSecretRequest, scope: string) {
+    return request<{ ok: boolean; key: string }>('/settings/vault', {
+      method: 'POST',
+      body,
+      scope,
+    });
+  },
+
+  deleteVaultSecret(key: string, scope: string) {
+    return request<void>(`/settings/vault/${encodeURIComponent(key)}`, {
+      method: 'DELETE',
+      scope,
+    });
+  },
+
+  testVaultSecret(body: SetVaultSecretRequest, scope: string) {
+    return request<VaultValidationResult>('/settings/vault/test', {
+      method: 'POST',
+      body,
+      scope,
+    });
+  },
+
+  validateVaultSecret(key: string, scope: string) {
+    return request<VaultValidationResult>(
+      `/settings/vault/${encodeURIComponent(key)}/validate`,
+      { method: 'POST', scope },
+    );
+  },
 };
+
 
 /**
  * Selected at build time. Never at runtime: a user who loses their token must see an error,

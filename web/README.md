@@ -5,24 +5,30 @@ The full specification is `../design.md`.
 
 ## Run
 
+### All-in-one (recommended)
+From the repository root, start the web client, the agents API, and the worker together:
+```sh
+./start.sh
+```
+
+### Standalone Web Client
 ```sh
 npm install
-npm run dev          # proxies /api to 127.0.0.1:8000
+npm run dev          # live mode: proxies /api to 127.0.0.1:8000
 ```
 
 The app requires a paired device. Pairing codes are printed by the backend as an ASCII QR on boot
-(`VIG-XXXXXX`).
+(`VIG-XXXXXX`). Enter the code at `http://localhost:5173/pair`.
 
-## Simulation mode
+## Simulation mode (Mock)
 
 ```sh
-npm run dev          # fixtures, no backend (the default)
-npm run dev:live     # talks to the FastAPI backend on :8000
+npm run dev:mock     # fixture data, no backend required
 ```
 
-`dev` serves fixture data with no backend at all. This is a build-time switch (`VITE_VIGIL_MOCK=1`) and can
-never activate at runtime: a device that loses its token must see an error, not fabricated cards.
-A persistent banner marks the mode.
+`dev:mock` runs with fixture data and does not connect to the backend. This is a build-time switch (`VITE_VIGIL_MOCK=1`) and can
+never activate accidentally at runtime: a device that loses its token in live mode will see an error, not fabricated cards.
+A persistent banner marks simulation mode.
 
 ## Build
 

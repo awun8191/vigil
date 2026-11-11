@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/lib/api';
 import { userMessageOf } from '@/lib/errors';
 import { releaseIdempotencyKey } from '@/lib/idempotency';
-import type { ChatSession, Run, RunStepEvent, StreamMessage, StreamState } from '@/types';
+import type { ChatSession, RunStepEvent, StreamMessage, StreamState } from '@/types';
 import { runKey, useCancelRun, useDefaultAgentConfig, useRun } from './runs';
 
 export const SESSIONS_KEY = ['chat', 'sessions'] as const;
@@ -60,7 +60,7 @@ export interface AgentChat {
   /** True when the run parked on an approval, the Approvals page holds the decision. */
   awaitingApproval: boolean;
   lastPrompt: string | null;
-  send: (prompt: string) => void;
+  send: (prompt: string, overrideSessionId?: string) => void;
   retry: () => void;
   stop: () => void;
 }
@@ -86,15 +86,24 @@ export function useAgentChat(sessionId: string | null): AgentChat {
   const steps = subscription.steps;
   const run = subscription.run;
 
-  // Live typing text: every message_delta frame is one batch of the reply.
-  const streamedText = useMemo(
-    () =>
-      steps
-        .filter((s) => s.event_type === 'message_delta')
-        .map((s) => (typeof s.payload['delta'] === 'string' ? (s.payload['delta'] as string) : ''))
-        .join(''),
-    [steps],
-  );
+  // Live typing text: only concatenate message_delta frames from the current model generation
+  // turn (after the latest thought / tool_call / tool_result step), so intermediate narration
+  // from earlier tool iterations never gets smashed onto the front of the final reply.
+  const streamedText = useMemo(() => {
+    let lastBoundary = -1;
+    for (let i = steps.length - 1; i >= 0; i -= 1) {
+      const t = steps[i]?.event_type;
+      if (t && t !== 'message_delta' && t !== 'run_completed' && t !== 'run_failed') {
+        lastBoundary = i;
+        break;
+      }
+    }
+    return steps
+      .slice(lastBoundary + 1)
+      .filter((s) => s.event_type === 'message_delta')
+      .map((s) => (typeof s.payload['delta'] === 'string' ? (s.payload['delta'] as string) : ''))
+      .join('');
+  }, [steps]);
 
   // Rehydrate after a reload: the newest session run may still be live. One attempt per
   // session; terminal runs stay for history instead of a re-subscription.
@@ -169,6 +178,7 @@ export function useAgentChat(sessionId: string | null): AgentChat {
         role: 'assistant',
         content: '',
         created_at: new Date().toISOString(),
+        run_id: activeRunId,
         ...patch,
       };
       if (!answer.content && !answer.local_state) return;
@@ -213,15 +223,34 @@ export function useAgentChat(sessionId: string | null): AgentChat {
   }, [activeRunId, finalisedRunId, steps, run, queryClient, clearOptimisticFlag]);
 
   const send = useCallback(
-    (prompt: string) => {
+    async (prompt: string, overrideSessionId?: string) => {
       const trimmed = prompt.trim();
-      const target = sessionIdRef.current;
-      if (!trimmed || !target) return;
+      let target = overrideSessionId ?? sessionIdRef.current;
+      if (!trimmed) return;
 
-      const configId = defaultConfig.data?.id;
+      if (!target) {
+        try {
+          const newSession = await api.createSession(
+            trimmed.slice(0, 30),
+            `chat:create-session:${Date.now()}`,
+          );
+          target = newSession.session_id;
+          sessionIdRef.current = target;
+        } catch (cause) {
+          setError(userMessageOf(cause));
+          return;
+        }
+      }
+
+      let configId = defaultConfig.data?.id;
       if (!configId) {
-        setError('The agent configuration is not ready yet. Try again in a moment.');
-        return;
+        try {
+          const cfg = await api.getDefaultAgentConfig();
+          configId = cfg.id;
+        } catch (cause) {
+          setError(userMessageOf(cause));
+          return;
+        }
       }
 
       const localId = `local-user-${Date.now()}`;
@@ -231,7 +260,7 @@ export function useAgentChat(sessionId: string | null): AgentChat {
       queryClient.setQueryData<StreamMessage[]>(messagesKey(target), (current) => {
         const optimistic: StreamMessage = {
           id: localId,
-          session_id: target,
+          session_id: target!,
           role: 'user',
           content: trimmed,
           created_at: new Date().toISOString(),
@@ -240,38 +269,36 @@ export function useAgentChat(sessionId: string | null): AgentChat {
         return current ? [...current, optimistic] : [optimistic];
       });
 
-      void api
-        .createRun(
+      try {
+        const run = await api.createRun(
           {
             config_id: configId,
             session_id: target,
             initial_prompt: trimmed,
           },
           `chat:send:${target}:${Date.now()}`,
-        )
-        .then((run: Run) => {
-          setActiveRunId(run.id);
-          queryClient.setQueryData(runKey(run.id), run);
-          if (optimisticIdRef.current) {
-            clearOptimisticFlag(optimisticIdRef.current);
-          }
-        })
-        .catch((cause: unknown) => {
-          optimisticIdRef.current = null;
-          if (target) {
-            const reason = userMessageOf(cause);
-            queryClient.setQueryData<StreamMessage[]>(messagesKey(target), (current) =>
-              current
-                ? current.map((m) =>
-                    m.id === localId
-                      ? { ...m, local_state: 'failed', failure_class: 'network', failure_reason: reason }
-                      : m,
-                  )
-                : current,
-            );
-          }
-          setError(userMessageOf(cause));
-        });
+        );
+        setActiveRunId(run.id);
+        queryClient.setQueryData(runKey(run.id), run);
+        if (optimisticIdRef.current) {
+          clearOptimisticFlag(optimisticIdRef.current);
+        }
+      } catch (cause: unknown) {
+        optimisticIdRef.current = null;
+        if (target) {
+          const reason = userMessageOf(cause);
+          queryClient.setQueryData<StreamMessage[]>(messagesKey(target), (current) =>
+            current
+              ? current.map((m) =>
+                  m.id === localId
+                    ? { ...m, local_state: 'failed', failure_class: 'network', failure_reason: reason }
+                    : m,
+                )
+              : current,
+          );
+        }
+        setError(userMessageOf(cause));
+      }
     },
     [defaultConfig.data, queryClient, clearOptimisticFlag],
   );

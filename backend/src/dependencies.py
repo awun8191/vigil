@@ -131,7 +131,7 @@ async def get_db_session(
 # =============================================================================
 
 async def get_current_device(
-    authorization: str = Header(..., description="Device Bearer token: 'Bearer vgt_...'"),
+    authorization: str | None = Header(None, description="Device Bearer token: 'Bearer vgt_...'"),
     settings: Settings = Depends(get_settings),
     session: AsyncSession = Depends(get_db_session),
 ) -> Any:
@@ -270,6 +270,17 @@ get_audit_service = _resolve_service_dependency("audit", "get_audit_service")
 get_jobs_service = _resolve_service_dependency("jobs", "get_jobs_service")
 
 
+def get_key_vault_service(
+    session: AsyncSession = Depends(get_db_session),
+    settings: Settings = Depends(get_settings),
+) -> Any:
+    """Dependency provider for the durable KeyVaultService."""
+    from src.modules.settings.vault import KeyVaultService
+
+    return KeyVaultService(session=session, settings=settings)
+
+
+
 # =============================================================================
 # External Integration Client Providers (with robust stub fallbacks)
 # =============================================================================
@@ -281,9 +292,32 @@ class _StubJevClient:
         questions: dict[str, str],
         model: str | None = None,
     ) -> JevEvaluationResultDTO:
+        content_len = len(str(state.get("content", "")))
+        is_tool = state.get("kind") in ("tool_result", "tool") or bool(state.get("tool_name"))
+        is_bulk = content_len > 250 or is_tool
+        is_needed = state.get("kind") in ("approval", "decision") or state.get("role") == "user"
+
+        answers: dict[str, str] = {}
+        probabilities: dict[str, float] = {}
+        for k in questions:
+            k_lower = k.lower()
+            if "bulk" in k_lower:
+                answers[k] = "yes" if is_bulk else "no"
+                probabilities[k] = 0.88 if is_bulk else 0.10
+            elif "needed" in k_lower:
+                answers[k] = "yes" if is_needed else "no"
+                probabilities[k] = 0.85 if is_needed else 0.15
+            elif "user_fact" in k_lower:
+                is_user = state.get("role") == "user"
+                answers[k] = "yes" if is_user else "no"
+                probabilities[k] = 0.90 if is_user else 0.05
+            else:
+                answers[k] = "no"
+                probabilities[k] = 0.50
+
         return JevEvaluationResultDTO(
-            answers={k: "yes" for k in questions},
-            probabilities={k: 0.9 for k in questions},
+            answers=answers,
+            probabilities=probabilities,
             model_version=model or "jev-classifier-v1",
         )
 
@@ -343,6 +377,15 @@ class _StubLLMClient:
             yield LLMStreamChunkDTO(delta_content="Mock", done=False)
             yield LLMStreamChunkDTO(delta_content=" completion", done=True)
         return _generator()
+
+    async def describe_image(
+        self,
+        image_bytes: bytes,
+        media_type: str,
+        question: str | None = None,
+        max_tokens: int = 1024,
+    ) -> str:
+        raise RuntimeError("the stub LLM client cannot view images")
 
     async def embed_texts(
         self,
@@ -544,8 +587,16 @@ class RunToolExecutor:
     #: ``ask_user``, only return a pending marker. ``execute`` gives them the
     #: ``host-only`` container id so no sandbox is created for them.
     HOST_ONLY_TOOLS: frozenset[str] = frozenset(
-        {"web_search", "web_fetch", "manage_tasks", "ask_user"}
+        {
+            "web_search",
+            "web_fetch",
+            "manage_tasks",
+            "ask_user",
+            "browser_navigate",
+            "browser_extract",
+        }
     )
+
 
     def __init__(
         self,
@@ -557,6 +608,7 @@ class RunToolExecutor:
         mcp_host: MCPHostProtocol,
         delivery_dir: Any | None = None,
         connector_id: str = "default",
+        llm: Any | None = None,
     ) -> None:
         self.session = session
         self.settings = settings
@@ -564,6 +616,7 @@ class RunToolExecutor:
         self.sandbox = sandbox
         self.mcp_host = mcp_host
         self.connector_id = connector_id
+        self.llm = llm
         base_path = Path(settings.WORKSPACE_BASE_PATH)
         if delivery_dir is None:
             try:
@@ -597,6 +650,25 @@ class RunToolExecutor:
                 except Exception:  # noqa: BLE001
                     pass
         return self._container_id
+
+    async def close(self) -> None:
+        """Snapshot the workspace and tear down the run container."""
+        if self._container_id is not None:
+            container_id = self._container_id
+            self._container_id = None
+            snapshot: Any = getattr(self.sandbox, "snapshot_workspace", None)
+            if callable(snapshot):
+                try:
+                    self.snapshot_tar.parent.mkdir(parents=True, exist_ok=True)
+                    await snapshot(container_id, str(self.snapshot_tar))
+                except Exception:  # noqa: BLE001
+                    pass
+            stop: Any = getattr(self.sandbox, "stop_and_remove", None)
+            if callable(stop):
+                try:
+                    await stop(container_id)
+                except Exception:  # noqa: BLE001
+                    pass
 
     async def _create_container(self) -> str:
         """Create a live container through the runner spec path when it exists."""
@@ -635,6 +707,7 @@ class RunToolExecutor:
             runner=self.sandbox,
             container_id=container_id,
             delivery_dir=Path(self.delivery_dir),
+            llm=self.llm,
         )
         result = await invoke_tool(name, dict(arguments), context)
         if result.ok and result.artifact_ref:
@@ -670,24 +743,66 @@ class RunToolExecutor:
     async def _register_artifact(self, tool_name: str, result: Any) -> None:
         """Write one artifact row for a file that a tool delivered.
 
-        The row joins the transaction that owns the session; the worker that
-        runs the job commits it with the rest of the run's writes.
+        Uses ArtifactsService so both database-backed and sessionless runs
+        register the artifact with a preview snippet for rich UI rendering.
         """
-        if self.session is None or not result.artifact_ref:
+        if not result.artifact_ref:
             return
-        from src.schemas.runtime import ArtifactModel
+        from src.modules.artifacts.repository import ArtifactCreateDTO
+        from src.modules.artifacts.service import ArtifactsService
 
         path = Path(str(result.artifact_ref))
-        self.session.add(
-            ArtifactModel(
+        is_file = path.is_file()
+        size_bytes = path.stat().st_size if is_file else 0
+        preview: str | None = None
+        if is_file and size_bytes > 0:
+            preview = _build_artifact_preview(path)
+
+        service = ArtifactsService(session=self.session, settings=self.settings)
+        await service.save_artifact(
+            ArtifactCreateDTO(
                 run_id=self.run_id,
-                kind=DELIVERY_ARTIFACT_KINDS.get(tool_name, "file"),
+                kind=DELIVERY_ARTIFACT_KINDS.get(tool_name, "document"),
                 path=str(path),
-                size_bytes=path.stat().st_size if path.is_file() else 0,
-                preview=None,
+                size_bytes=size_bytes,
+                preview=preview,
             )
         )
-        await self.session.flush()
+        if isinstance(result.content, dict):
+            result.content.setdefault("preview", preview)
+
+
+def _build_artifact_preview(path: Path, max_chars: int = 500) -> str | None:
+    """Build a short text preview (up to 500 chars) for an artifact file."""
+    ext = path.suffix.lower()
+    if ext in (".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".ico"):
+        return None
+    try:
+        raw = path.read_bytes()
+    except OSError:
+        return None
+    if ext in (".pdf", ".docx", ".xlsx"):
+        try:
+            from src.modules.runs.tools.files import (
+                _extract_docx_text,
+                _extract_pdf_text,
+                _extract_xlsx_text,
+            )
+
+            if ext == ".pdf":
+                text = _extract_pdf_text(raw)
+            elif ext == ".docx":
+                text = _extract_docx_text(raw)
+            else:
+                text = _extract_xlsx_text(raw)
+            return text[:max_chars] if text else None
+        except Exception:  # noqa: BLE001
+            return None
+    try:
+        text = raw[: max_chars * 4].decode("utf-8", errors="replace").strip()
+        return text[:max_chars] if text else None
+    except Exception:  # noqa: BLE001
+        return None
 
     async def close(self) -> None:
         """Snapshot /workspace and remove the run container. A missing container is not an error."""
@@ -715,6 +830,7 @@ def build_tool_executor(
     sandbox: SandboxRunnerProtocol | None = None,
     mcp_host: MCPHostProtocol | None = None,
     delivery_dir: Any | None = None,
+    llm: LLMClientProtocol | None = None,
 ) -> RunToolExecutor:
     """Build the tool executor of one run from the real adapters."""
     return RunToolExecutor(
@@ -724,6 +840,7 @@ def build_tool_executor(
         sandbox=sandbox if sandbox is not None else get_sandbox_runner(settings),
         mcp_host=mcp_host if mcp_host is not None else get_mcp_host(settings),
         delivery_dir=delivery_dir,
+        llm=llm if llm is not None else get_llm_client(settings),
     )
 
 
@@ -791,10 +908,16 @@ def build_runs_service(
     """
     from src.modules.runs.service import RunsService
 
+    resolved_llm = llm if llm is not None else get_llm_client(settings)
     executor = tools
     if executor is None and run_id is not None:
         executor = build_tool_executor(
-            session, settings, run_id, sandbox=sandbox, mcp_host=mcp_host
+            session,
+            settings,
+            run_id,
+            sandbox=sandbox,
+            mcp_host=mcp_host,
+            llm=resolved_llm,
         )
     resolved_compactor = (
         compactor
@@ -805,7 +928,7 @@ def build_runs_service(
         session=session,
         settings=settings,
         sandbox=sandbox,
-        llm=llm if llm is not None else get_llm_client(settings),
+        llm=resolved_llm,
         tools=executor,
         pricing=build_pricing_service(session),
         compactor=resolved_compactor,
@@ -851,6 +974,9 @@ __all__ = [
     "get_settings_service",
     "get_audit_service",
     "get_jobs_service",
+    "get_key_vault_service",
+
+
     # External Integration Client Providers (5)
     "get_jev_client",
     "get_llm_client",

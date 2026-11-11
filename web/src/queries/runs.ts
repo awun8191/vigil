@@ -2,10 +2,11 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/lib/api';
 import { releaseIdempotencyKey } from '@/lib/idempotency';
-import type { AgentConfigResponse, Run, RunStatus, RunStep, RunStepEvent } from '@/types';
+import type { AgentConfigResponse, Artifact, Run, RunStatus, RunStep, RunStepEvent } from '@/types';
 
 export const runKey = (runId: string) => ['runs', runId] as const;
 export const runStepsKey = (runId: string) => ['runs', runId, 'steps'] as const;
+export const runArtifactsKey = (runId: string) => ['runs', runId, 'artifacts'] as const;
 export const RUN_CONFIG_KEY = ['runs', 'default-config'] as const;
 
 /** The pinned server-side default agent config, created on the first call, cached for the
@@ -206,6 +207,14 @@ export function useRunSteps(runId: string | null, sinceStep = 0) {
   return useQuery<RunStep[]>({
     queryKey: [...runStepsKey(runId ?? 'none'), sinceStep],
     queryFn: () => api.getRunSteps(runId as string, sinceStep),
+    enabled: Boolean(runId),
+  });
+}
+
+export function useRunArtifacts(runId: string | null) {
+  return useQuery<Artifact[]>({
+    queryKey: runArtifactsKey(runId ?? 'none'),
+    queryFn: () => api.listRunArtifacts(runId as string),
     enabled: Boolean(runId),
   });
 }

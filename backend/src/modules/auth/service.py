@@ -112,6 +112,22 @@ class AuthService:
         """Ensure default local user account exists."""
         return await self._store.get_or_create_default_user(display_name)
 
+    async def get_or_create_default_device(self, name: str = "Test Device") -> tuple[DeviceDTO, UserDTO]:
+        """Ensure a default local device and user exist for local development and testing."""
+        user = await self.get_or_create_default_user()
+        token_hash_val = hash_token("vgt_testtoken")
+        device = await self.get_device_by_token_hash(token_hash_val)
+        if not device:
+            device = await self.create_device(
+                DeviceCreateDTO(
+                    user_id=user.id,
+                    name=name,
+                    token_hash=token_hash_val,
+                    push_token=None,
+                )
+            )
+        return device, user
+
     async def get_user_by_id(self, user_id: UUID) -> UserDTO | None:
         """Retrieve user record by ID."""
         user = await self._store.get_user_by_id(user_id)

@@ -38,7 +38,9 @@ MODULE_FACTORIES: list[tuple[str, str]] = [
     ("settings", "build_settings_router"),
     ("audit", "build_audit_router"),
     ("jobs", "build_jobs_router"),
+    ("voice", "build_voice_router"),
 ]
+
 
 
 def create_api_router(settings: Settings) -> APIRouter:

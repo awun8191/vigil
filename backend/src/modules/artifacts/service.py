@@ -18,6 +18,37 @@ from src.modules.artifacts.repository import (
 )
 from src.schemas.runtime import ArtifactModel
 
+ARTIFACT_MEDIA_TYPES: dict[str, str] = {
+    ".md": "text/markdown; charset=utf-8",
+    ".markdown": "text/markdown; charset=utf-8",
+    ".txt": "text/plain; charset=utf-8",
+    ".log": "text/plain; charset=utf-8",
+    ".diff": "text/plain; charset=utf-8",
+    ".patch": "text/plain; charset=utf-8",
+    ".csv": "text/csv; charset=utf-8",
+    ".html": "text/html; charset=utf-8",
+    ".htm": "text/html; charset=utf-8",
+    ".json": "application/json; charset=utf-8",
+    ".pdf": "application/pdf",
+    ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".gif": "image/gif",
+    ".webp": "image/webp",
+    ".bmp": "image/bmp",
+    ".ico": "image/x-icon",
+    ".svg": "image/svg+xml",
+}
+
+
+def resolve_media_type(filename: str) -> str:
+    """Resolve the HTTP Content-Type for an artifact filename."""
+    ext = Path(filename).suffix.lower()
+    return ARTIFACT_MEDIA_TYPES.get(ext, "application/octet-stream")
+
 
 class ArtifactsService:
     """
@@ -136,7 +167,7 @@ class ArtifactsService:
             raise NotFoundError(f"Artifact {artifact_id} not found")
 
         filename = os.path.basename(artifact.path) or "artifact.bin"
-        media_type = "application/octet-stream"
+        media_type = resolve_media_type(filename)
         file_path = Path(artifact.path)
         is_file = await asyncio.to_thread(file_path.is_file)
         size_bytes = (
@@ -160,3 +191,42 @@ class ArtifactsService:
                 await asyncio.to_thread(handle.close)
 
         return file_chunks(), filename, media_type, size_bytes
+
+    async def get_artifact_text(
+        self,
+        artifact_id: UUID,
+        max_chars: int = 400_000,
+    ) -> str:
+        """Return the artifact body as text for the document viewers.
+
+        PDF, DOCX and XLSX files are extracted with the same readers the
+        ``read_document`` tool uses. Text files are decoded directly. The read
+        runs in a worker thread so a large document never blocks the loop.
+        """
+        artifact = await self.get_artifact_by_id(artifact_id)
+        if not artifact:
+            raise NotFoundError(f"Artifact {artifact_id} not found")
+
+        file_path = Path(artifact.path)
+        if not await asyncio.to_thread(file_path.is_file):
+            raise NotFoundError(f"Artifact file for {artifact_id} is missing")
+
+        def read_text() -> str:
+            suffix = file_path.suffix.lower()
+            if suffix in {".pdf", ".docx", ".xlsx"}:
+                from src.modules.runs.tools.files import (
+                    _extract_docx_text,
+                    _extract_pdf_text,
+                    _extract_xlsx_text,
+                )
+
+                data = file_path.read_bytes()
+                if suffix == ".pdf":
+                    return _extract_pdf_text(data)
+                if suffix == ".docx":
+                    return _extract_docx_text(data)
+                return _extract_xlsx_text(data)
+            return file_path.read_text(encoding="utf-8", errors="replace")
+
+        text = await asyncio.to_thread(read_text)
+        return text[:max_chars]

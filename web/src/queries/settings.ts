@@ -9,13 +9,18 @@ import type {
   SystemLimits,
   UserSettings,
   UserSettingsUpdateRequest,
+  VaultSecretDTO,
+  SetVaultSecretRequest,
 } from '@/types';
+
 
 export const HEALTH_KEY = ['health'] as const;
 export const SETTINGS_KEY = ['settings'] as const;
 export const LIMITS_KEY = ['settings', 'limits'] as const;
 export const CONNECTORS_KEY = ['connectors'] as const;
 export const MCP_KEY = ['connectors', 'mcp'] as const;
+export const VAULT_KEY = ['settings', 'vault'] as const;
+
 
 export function useHealth() {
   return useQuery<HealthStatus>({
@@ -155,4 +160,80 @@ export function useUnregisterMCPServer() {
     },
   });
 }
+
+/* --- Key Vault ---------------------------------------------------------------------------- */
+
+export function useVaultSecrets() {
+  return useQuery<VaultSecretDTO[]>({
+    queryKey: VAULT_KEY,
+    queryFn: () => api.listVaultSecrets(),
+  });
+}
+
+export function useSetVaultSecret() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({ body, scope }: { body: SetVaultSecretRequest; scope: string }) =>
+      api.setVaultSecret(body, scope),
+
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: VAULT_KEY });
+    },
+
+    onSettled: (_data, _error, variables) => {
+      releaseIdempotencyKey(variables.scope);
+    },
+  });
+}
+
+export function useTestVaultSecret() {
+  return useMutation({
+    mutationFn: ({ body, scope }: { body: SetVaultSecretRequest; scope: string }) =>
+      api.testVaultSecret(body, scope),
+
+    onSettled: (_data, _error, variables) => {
+      releaseIdempotencyKey(variables.scope);
+    },
+  });
+}
+
+export function useValidateVaultSecret() {
+  return useMutation({
+    mutationFn: ({ key, scope }: { key: string; scope: string }) =>
+      api.validateVaultSecret(key, scope),
+
+    onSettled: (_data, _error, variables) => {
+      releaseIdempotencyKey(variables.scope);
+    },
+  });
+}
+
+export function useDeleteVaultSecret() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({ key, scope }: { key: string; scope: string }) =>
+      api.deleteVaultSecret(key, scope),
+
+    onMutate: async ({ key }) => {
+      await queryClient.cancelQueries({ queryKey: VAULT_KEY });
+      const previous = queryClient.getQueryData<VaultSecretDTO[]>(VAULT_KEY);
+      queryClient.setQueryData<VaultSecretDTO[]>(VAULT_KEY, (current) =>
+        current ? current.filter((secret) => secret.key_name !== key) : current,
+      );
+      return { previous };
+    },
+
+    onError: (_error, _variables, context) => {
+      if (context?.previous) queryClient.setQueryData(VAULT_KEY, context.previous);
+    },
+
+    onSettled: (_data, _error, variables) => {
+      releaseIdempotencyKey(variables.scope);
+      void queryClient.invalidateQueries({ queryKey: VAULT_KEY });
+    },
+  });
+}
+
 

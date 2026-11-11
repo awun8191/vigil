@@ -1,8 +1,13 @@
-"""Settings router factory providing preference management and audit log inspection."""
+from typing import Any
 from fastapi import APIRouter, Depends, Query, status
 
+from src.config.exceptions import NotFoundError, ValidationError
 from src.config.settings import Settings
-from src.dependencies import get_current_user, get_settings_service
+from src.dependencies import (
+    get_current_user,
+    get_key_vault_service,
+    get_settings_service,
+)
 from src.modules.auth.repository import UserDTO
 from src.modules.settings.data import (
     AuditLogResponse,
@@ -11,6 +16,16 @@ from src.modules.settings.data import (
     UserSettingsUpdateRequest,
 )
 from src.modules.settings.repository import SettingsRepository
+from src.modules.settings.vault import (
+    KeyVaultService,
+    SetSecretRequest,
+    VaultSecretDTO,
+)
+from src.modules.settings.validators import (
+    ValidateSecretRequest,
+    VaultValidationResponse,
+    validate_api_key,
+)
 
 
 def build_settings_router(settings: Settings) -> APIRouter:
@@ -30,7 +45,7 @@ def build_settings_router(settings: Settings) -> APIRouter:
         status_code=status.HTTP_200_OK,
         summary="Get User Settings",
     )
-    async def get_settings(
+    async def get_user_settings(
         service: SettingsRepository = Depends(get_settings_service),
         user: UserDTO = Depends(get_current_user),
     ) -> UserSettingsResponse:
@@ -81,4 +96,83 @@ def build_settings_router(settings: Settings) -> APIRouter:
         entries = await service.list_audit_entries(limit=limit, offset=offset)
         return [AuditLogResponse.model_validate(e) for e in entries]
 
+    @router.get(
+        "/vault",
+        response_model=list[VaultSecretDTO],
+        status_code=status.HTTP_200_OK,
+        summary="List Stored Vault Secrets",
+    )
+    async def list_vault_secrets(
+        vault: KeyVaultService = Depends(get_key_vault_service),
+        user: UserDTO = Depends(get_current_user),
+    ) -> list[VaultSecretDTO]:
+        return await vault.list_secrets(user.id)
+
+    @router.post(
+        "/vault",
+        status_code=status.HTTP_200_OK,
+        summary="Store or Update Vault Secret",
+    )
+    async def set_vault_secret(
+        payload: SetSecretRequest,
+        vault: KeyVaultService = Depends(get_key_vault_service),
+        user: UserDTO = Depends(get_current_user),
+    ) -> dict[str, Any]:
+        try:
+            await vault.set_secret(user.id, payload.key, payload.value)
+        except ValueError as exc:
+            raise ValidationError(str(exc)) from exc
+        return {"ok": True, "key": payload.key}
+
+    @router.post(
+        "/vault/test",
+        response_model=VaultValidationResponse,
+        status_code=status.HTTP_200_OK,
+        summary="Validate a Secret Before Storing It",
+    )
+    async def test_vault_secret(
+        payload: ValidateSecretRequest,
+        _user: UserDTO = Depends(get_current_user),
+    ) -> VaultValidationResponse:
+        """Run the provider check for a key without storing it."""
+        return await validate_api_key(payload.key, payload.value, settings)
+
+    @router.post(
+        "/vault/{key}/validate",
+        response_model=VaultValidationResponse,
+        status_code=status.HTTP_200_OK,
+        summary="Validate a Stored Vault Secret",
+    )
+    async def validate_stored_secret(
+        key: str,
+        vault: KeyVaultService = Depends(get_key_vault_service),
+        user: UserDTO = Depends(get_current_user),
+    ) -> VaultValidationResponse:
+        """Read a stored key and run the provider check for it."""
+        try:
+            value = await vault.get_secret(user.id, key)
+        except ValueError as exc:
+            raise ValidationError(str(exc)) from exc
+        if value is None:
+            raise NotFoundError(f"Secret {key!r} not found in vault")
+        return await validate_api_key(key, value, settings)
+
+    @router.delete(
+        "/vault/{key}",
+        status_code=status.HTTP_204_NO_CONTENT,
+        summary="Delete Stored Vault Secret",
+    )
+    async def delete_vault_secret(
+        key: str,
+        vault: KeyVaultService = Depends(get_key_vault_service),
+        user: UserDTO = Depends(get_current_user),
+    ) -> None:
+        try:
+            deleted = await vault.delete_secret(user.id, key)
+        except ValueError as exc:
+            raise ValidationError(str(exc)) from exc
+        if not deleted:
+            raise NotFoundError(f"Secret {key!r} not found in vault")
+
     return router
+

@@ -1,6 +1,7 @@
 import type {
   AgentConfigResponse,
   Approval,
+  Artifact,
   Card,
   CardListResponse,
   ChatMessage,
@@ -20,7 +21,10 @@ import type {
   SystemLimits,
   UserSettings,
   UserSettingsUpdateRequest,
+  VaultSecretDTO,
+  VaultValidationResult,
 } from '@/types';
+
 import type { VigilApi } from './contract';
 
 /**
@@ -129,16 +133,28 @@ const messages: Record<string, ChatMessage[]> = {
       id: 'm-1',
       session_id: 's-1',
       role: 'user',
-      content: 'Can you pull the two figures I confirmed for the Q4 budget reply?',
+      content: 'Can you pull the two figures I confirmed for the Q4 budget reply and check the burn-rate projection?',
       created_at: iso(-110),
     },
     {
       id: 'm-2',
       session_id: 's-1',
       role: 'assistant',
-      content:
-        'The two figures you confirmed yesterday were 42,800 for tooling and 118,000 for contractor spend. Both are in the draft reply to Sarah, which is waiting on your approval on Home.',
+      content: `The two figures you confirmed yesterday are **$42,800** for infrastructure tooling and **$118,000** for contractor spend. Both are staged in the draft reply to Sarah.
+
+| Line Item | Confirmed Allocation | Share of Q4 Cap | Status |
+| :--- | ---: | ---: | :--- |
+| Cloud & Sandbox Tooling | $42,800 | 26.6% | Locked |
+| Contractor Spend (incl. Retainer) | $118,000 | 73.4% | Pending Sarah's sign-off |
+| **Total Committed** | **$160,800** | **100.0%** | **Ready** |
+
+Using the continuous runway decay model:
+
+$$R(t) = R_0 - \\int_0^t \\left( B_{\\text{fixed}} + \\gamma \\cdot C_{\\text{var}}(\\tau) \\right) d\\tau$$
+
+With $\\gamma = 1.08$ for peak Q4 load, our monthly burn settles at $\\approx \\$53.6\\text{k}/\\text{mo}$, keeping a **14.2% safety margin** below the ceiling.`,
       created_at: iso(-108),
+      run_id: 'r-seed-1',
     },
     {
       id: 'm-3',
@@ -152,7 +168,7 @@ const messages: Record<string, ChatMessage[]> = {
       session_id: 's-1',
       role: 'assistant',
       content:
-        'Yes. 118,000 includes the 24,000 retainer and 94,000 of hourly work. The draft reply states it that way.',
+        'Yes — `$118,000` combines the `$24,000` fixed retainer and `$94,000` of milestone-based engineering hours:\n\n```python\nretainer = 24_000\nmilestone_hours = 94_000\ntotal_contractor_budget = retainer + milestone_hours  # $118,000\n```\n\nThe generated reconciliation brief is attached above if you want to forward it directly.',
       created_at: iso(-10),
     },
   ],
@@ -274,11 +290,35 @@ interface MockRun {
   createdAt: string;
 }
 
-let runs = new Map<string, MockRun>();
+let runs = new Map<string, MockRun>([
+  [
+    'r-seed-1',
+    {
+      run: {
+        id: 'r-seed-1',
+        config_id: 'cfg-1',
+        card_id: null,
+        parent_run_id: null,
+        depth: 0,
+        status: 'completed',
+        started_at: iso(-110),
+        ended_at: iso(-108),
+        token_usage: { prompt: 1240, completion: 620 },
+        cost_micros: 4200,
+        cost_usd: 0.0042,
+      },
+      cancelled: false,
+      prompt: 'Can you pull the two figures I confirmed for the Q4 budget reply and check the burn-rate projection?',
+      sessionId: 's-1',
+      createdAt: iso(-110),
+    },
+  ],
+]);
 let runCounter = 0;
 
 const defaultAgentTools = [
   'read',
+  'read_document',
   'write',
   'edit',
   'bash',
@@ -287,6 +327,8 @@ const defaultAgentTools = [
   'ask_user',
   'manage_tasks',
   'skill_load',
+  'web_search',
+  'web_fetch',
 ];
 
 const defaultAgentSkills = [
@@ -295,7 +337,35 @@ const defaultAgentSkills = [
   'design-taste-frontend',
   'literature-search-arxiv',
   'literature-search-openalex',
+  'plus-ultra',
+  'ultrawork',
+  'marketing-psychology',
 ];
+
+const mockArtifactsByRun: Record<string, Artifact[]> = {
+  'r-seed-1': [
+    {
+      id: 'art-seed-md',
+      run_id: 'r-seed-1',
+      kind: 'document',
+      path: '/var/vigil/deliveries/q4-budget-reconciliation.md',
+      size_bytes: 1420,
+      preview:
+        '# Q4 Budget Reconciliation Brief\n\n## Executive Summary\n- **Tooling Allocation:** $42,800\n- **Contractor Allocation:** $118,000 (includes $24,000 retainer)\n- **Status:** Verified against Q4 ledger.',
+      created_at: iso(-108),
+    },
+    {
+      id: 'art-seed-xlsx',
+      run_id: 'r-seed-1',
+      kind: 'document',
+      path: '/var/vigil/deliveries/q4-ledger-summary.xlsx',
+      size_bytes: 4820,
+      preview:
+        '[sheet: Q4 Allocation]\nLine Item\tConfirmed Allocation\tShare of Cap\tStatus\nCloud & Sandbox Tooling\t$42,800\t26.6%\tLocked\nContractor Spend\t$118,000\t73.4%\tPending Sign-off\nTotal Committed\t$160,800\t100.0%\tReady',
+      created_at: iso(-108),
+    },
+  ],
+};
 
 const mockRunRun = (runId: string, cardId: string | null): Run => ({
   id: runId,
@@ -320,11 +390,87 @@ function mockRunFinal(entry: MockRun): string {
 }
 
 const stepScript: Array<{ event_type: RunStep['event_type']; payload: Record<string, unknown> }> = [
-  { event_type: 'thought', payload: { text: 'Reading the drafted reply and the two confirmed figures.' } },
-  { event_type: 'thought', payload: { text: 'Checking the thread history for anything the draft missed.' } },
-  { event_type: 'tool_call', payload: { tool_name: 'gmail_send', arguments: { to: 'sarah@example.com', subject: 'Q4 budget, revised line items' } } },
-  { event_type: 'tool_result', payload: { tool_name: 'gmail_send', ok: true, message_id: 'g-8841' } },
-  { event_type: 'run_completed', payload: { summary: 'Reply sent to Sarah with both revised figures.' } },
+  {
+    event_type: 'thought',
+    payload: {
+      content:
+        'Cross-referencing the Q4 budget ledger in /workspace/finance/q4_ledger.csv and verifying contractor retainer bounds before generating the reconciliation brief.',
+      total_tokens: 384,
+    },
+  },
+  {
+    event_type: 'tool_call',
+    payload: {
+      tool_call_id: 'call_bash_1',
+      tool_name: 'bash',
+      arguments: {
+        command: 'python3 -c "import csv; print(\' tooling: 42800\\n contractor: 118000\')"',
+        timeout_seconds: 30,
+      },
+    },
+  },
+  {
+    event_type: 'tool_result',
+    payload: {
+      tool_call_id: 'call_bash_1',
+      tool_name: 'bash',
+      result: {
+        ok: true,
+        content: 'exit_code: 0\n--- stdout ---\ntooling: 42800\ncontractor: 118000\n--- stderr ---\n',
+      },
+    },
+  },
+  {
+    event_type: 'tool_call',
+    payload: {
+      tool_call_id: 'call_read_1',
+      tool_name: 'read',
+      arguments: { path: '/workspace/notes/sarah_thread.md' },
+    },
+  },
+  {
+    event_type: 'tool_result',
+    payload: {
+      tool_call_id: 'call_read_1',
+      tool_name: 'read',
+      result: {
+        ok: true,
+        content: '# Sarah Thread Summary\nConfirmed $42,800 tooling and $118,000 contractor spend ($24k retainer + $94k hourly).',
+      },
+    },
+  },
+  {
+    event_type: 'tool_call',
+    payload: {
+      tool_call_id: 'call_doc_1',
+      tool_name: 'generate_document',
+      arguments: {
+        filename: 'q4-budget-reconciliation.md',
+        format: 'markdown',
+        title: 'Q4 Budget Reconciliation Brief',
+        content:
+          '## Executive Summary\n- **Tooling Allocation:** $42,800\n- **Contractor Allocation:** $118,000 (includes $24,000 retainer)\n- **Status:** Verified against Q4 ledger.',
+      },
+    },
+  },
+  {
+    event_type: 'tool_result',
+    payload: {
+      tool_call_id: 'call_doc_1',
+      tool_name: 'generate_document',
+      result: {
+        ok: true,
+        artifact_ref: '/var/vigil/deliveries/q4-budget-reconciliation.md',
+        content: {
+          path: '/var/vigil/deliveries/q4-budget-reconciliation.md',
+          name: 'q4-budget-reconciliation.md',
+          size_bytes: 1420,
+          sha256: '9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08',
+          format: 'markdown',
+        },
+      },
+    },
+  },
 ];
 
 function mockStepRecord(runId: string, index: number): RunStep {
@@ -450,6 +596,30 @@ export const mockApi: VigilApi = {
     ]);
   },
 
+  listRunArtifacts(runId): Promise<Artifact[]> {
+    return later([...(mockArtifactsByRun[runId] ?? [])]);
+  },
+
+  downloadArtifactBlob(artifactId): Promise<Blob> {
+    for (const list of Object.values(mockArtifactsByRun)) {
+      const found = list.find((a) => a.id === artifactId);
+      if (found) {
+        return later(new Blob([found.preview ?? ''], { type: 'text/plain;charset=utf-8' }));
+      }
+    }
+    return later(new Blob([''], { type: 'application/octet-stream' }));
+  },
+
+  getArtifactText(artifactId): Promise<string> {
+    for (const list of Object.values(mockArtifactsByRun)) {
+      const found = list.find((a) => a.id === artifactId);
+      if (found) {
+        return later(found.preview ?? '');
+      }
+    }
+    return later('');
+  },
+
   getDefaultAgentConfig(): Promise<AgentConfigResponse> {
     return later({
       id: 'cfg-1',
@@ -519,15 +689,15 @@ export const mockApi: VigilApi = {
 
     const terminalStep = mockStepRecord(runId, total - 1);
     terminalStep.event_type = terminal;
-    terminalStep.step_number = total;
+    terminalStep.step_number = total + 1;
     timers.push(
       setTimeout(() => {
         handlers.onEvent({
           type: terminal,
-          id: String(total),
+          id: String(total + 1),
           data: JSON.stringify({
             run_id: runId,
-            step_number: total,
+            step_number: total + 1,
             event_type: terminal,
             payload:
               terminal === 'run_completed'
@@ -714,4 +884,96 @@ export const mockApi: VigilApi = {
     mcpServers = mcpServers.filter((server) => server.name !== name);
     return later(undefined);
   },
+
+  listVaultSecrets() {
+    return later([...mockVaultSecrets]);
+  },
+
+  setVaultSecret(body) {
+    const masked = body.value.length > 8 ? `${body.value.slice(0, 3)}****${body.value.slice(-4)}` : '****';
+    const now = new Date().toISOString();
+    const existing = mockVaultSecrets.find((s) => s.key_name === body.key);
+    if (existing) {
+      existing.masked_value = masked;
+      existing.updated_at = now;
+    } else {
+      mockVaultSecrets.push({
+        key_name: body.key,
+        masked_value: masked,
+        created_at: now,
+        updated_at: now,
+      });
+    }
+    return later({ ok: true, key: body.key });
+  },
+
+  deleteVaultSecret(key) {
+    mockVaultSecrets = mockVaultSecrets.filter((s) => s.key_name !== key);
+    return later(undefined);
+  },
+
+  testVaultSecret(body) {
+    return later(mockValidateSecret(body.key, body.value));
+  },
+
+  validateVaultSecret(key) {
+    const stored = mockVaultSecrets.find((s) => s.key_name === key);
+    if (!stored) {
+      return Promise.reject(new Error(`Secret ${key} not found in vault`));
+    }
+    return later({
+      key_name: key,
+      provider: mockProvider(key),
+      valid: true,
+      status_code: 200,
+      message: 'Simulated provider accepted the stored key.',
+    });
+  },
 };
+
+function mockProvider(key: string): string {
+  return key.trim().toUpperCase() === 'GROQ_API_KEY' ? 'groq' : 'unknown';
+}
+
+function mockValidateSecret(key: string, value: string): VaultValidationResult {
+  const keyName = key.trim();
+  const provider = mockProvider(keyName);
+
+  if (provider === 'groq') {
+    const token = value.trim().replace(/^bearer\s+/i, '');
+    const valid = token.startsWith('gsk_') && token.length > 8;
+    return {
+      key_name: keyName,
+      provider,
+      valid,
+      status_code: valid ? 200 : 401,
+      message: valid
+        ? 'Groq accepted the key.'
+        : 'Groq rejected the key (HTTP 401). Check that it is a Groq API key.',
+    };
+  }
+
+  return {
+    key_name: keyName,
+    provider: 'unknown',
+    valid: false,
+    status_code: null,
+    message: `No key validator is configured for ${JSON.stringify(keyName)} yet.`,
+  };
+}
+
+let mockVaultSecrets: VaultSecretDTO[] = [
+  {
+    key_name: 'FIRECRAWL_API_KEY',
+    masked_value: 'fc-****4321',
+    created_at: new Date(Date.now() - 86400000).toISOString(),
+    updated_at: new Date(Date.now() - 86400000).toISOString(),
+  },
+  {
+    key_name: 'GROQ_API_KEY',
+    masked_value: 'gsk****8899',
+    created_at: new Date(Date.now() - 43200000).toISOString(),
+    updated_at: new Date(Date.now() - 43200000).toISOString(),
+  },
+];
+

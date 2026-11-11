@@ -1,4 +1,4 @@
-"""Unit tests validating all 20 SQLAlchemy 2.0 declarative models and metadata contracts."""
+"""Unit tests validating all 25 SQLAlchemy 2.0 declarative models and metadata contracts."""
 from __future__ import annotations
 
 import uuid
@@ -35,6 +35,7 @@ from src.schemas import (
     ThreadModel,
     TriageDecisionModel,
     UserModel,
+    VaultSecretModel,
 )
 
 EXPECTED_TABLES = {
@@ -62,14 +63,15 @@ EXPECTED_TABLES = {
     "skills",
     "audit_log",
     "mcp_servers",
+    "vault_secrets",
 }
 
 
 def test_central_schema_exports_all_tables() -> None:
-    """Verify that exactly 24 tables are registered in the centralized Base metadata."""
+    """Verify that exactly 25 tables are registered in the centralized Base metadata."""
     registered_tables = set(Base.metadata.tables.keys())
     assert registered_tables == EXPECTED_TABLES
-    assert len(registered_tables) == 24
+    assert len(registered_tables) == 25
 
 
 def test_models_map_to_expected_table_names() -> None:
@@ -98,14 +100,16 @@ def test_models_map_to_expected_table_names() -> None:
         AgentConfigModel: "agent_configs",
         SkillModel: "skills",
         AuditLogModel: "audit_log",
-        MCPServerModel: "mcp_servers",    }
+        MCPServerModel: "mcp_servers",
+        VaultSecretModel: "vault_secrets",
+    }
     for model, expected_table in model_table_map.items():
         assert model.__tablename__ == expected_table
         assert model.__table__.name == expected_table
 
 
 def test_primary_keys() -> None:
-    """Verify primary key columns across all 24 models."""
+    """Verify primary key columns across all 25 models."""
     for table_name in EXPECTED_TABLES:
         table = Base.metadata.tables[table_name]
         pk_cols = [c.name for c in table.primary_key.columns]
@@ -194,6 +198,15 @@ def test_unique_constraints() -> None:
     )
     assert items_uq is not None
     assert [c.name for c in items_uq.columns] == ["connector_account_id", "external_id"]
+
+    # vault_secrets: (user_id, key_name)
+    vault_secrets = Base.metadata.tables["vault_secrets"]
+    vault_uq = next(
+        (uq for uq in vault_secrets.constraints if isinstance(uq, sa.UniqueConstraint) and uq.name == "uq_vault_secrets_user_key"),
+        None,
+    )
+    assert vault_uq is not None
+    assert [c.name for c in vault_uq.columns] == ["user_id", "key_name"]
 
     # triage_decisions: a re-triage is legal, so uniqueness is (item_id, model_version)
     triage = Base.metadata.tables["triage_decisions"]

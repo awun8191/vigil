@@ -233,8 +233,23 @@ async def test_runs_service_lifecycle() -> None:
     )
     assert step.step_number == 1
 
+    delta_step = await service.save_run_step(
+        RunStepCreateDTO(
+            run_id=run.id,
+            step_number=2,
+            event_type="message_delta",
+            payload={"delta": "hello"},
+        )
+    )
+    assert delta_step.step_number == 2
+
+    from src.modules.runs.data import RunStepResponse
+    validated = [RunStepResponse.model_validate(s) for s in [step, delta_step]]
+    assert len(validated) == 2
+    assert validated[1].event_type == "message_delta"
+
     steps = await service.get_steps_since(run.id, 0)
-    assert len(steps) == 1
+    assert len(steps) == 2
 
     # Save and fetch messages
     msg = await service.save_message(

@@ -15,9 +15,28 @@
     sans-serif;
 
   --letter-spacing-heading: -0.015em;
-  --ease-spring: cubic-bezier(0.25, 1, 0.5, 1);
+  --ease-spring: linear(
+    0, 0.006, 0.025 2.8%, 0.101 6.1%, 0.539 18.9%, 0.721 23.4%,
+    0.849 28%, 0.937 32.6%, 0.995 37.6%, 1.019 42.2%, 1.026 47.1%, 1.021 54%,
+    1.001 68.8%, 0.996 82.5%, 1
+  );
 
-  --animate-rise: rise 0.6s cubic-bezier(0.25, 1, 0.5, 1) both;
+  /* Hark Pro Squircle Geometry Radii */
+  --r-squircle-sm: 18px;
+  --r-squircle-md: 20px;
+  --r-squircle-lg: 24px;
+  --r-squircle-xl: 28px;
+  --r-inner: 12px;
+  --r-control: 14px;
+  --r-card: 28px;
+
+  --radius-squircle-sm: 18px;
+  --radius-squircle-md: 20px;
+  --radius-squircle-lg: 24px;
+  --radius-squircle-xl: 26px;
+  --radius-full: 9999px;
+
+  --animate-rise: rise 0.6s linear(0, 0.006, 0.025 2.8%, 0.101 6.1%, 0.539 18.9%, 0.721 23.4%, 0.849 28%, 0.937 32.6%, 0.995 37.6%, 1.019 42.2%, 1.026 47.1%, 1.021 54%, 1.001 68.8%, 0.996 82.5%, 1) both;
   --animate-drift: drift 18s ease-in-out infinite;
   --animate-wave: wave 0.9s ease-in-out infinite;
 
@@ -60,61 +79,261 @@
 
 :root,
 [data-theme='dark'] {
+  color-scheme: dark;
+
+  /* Spring easing & squircle geometry */
+  --ease-spring: linear(0, 0.006, 0.025 2.8%, 0.101 6.1%, 0.539 18.9%, 0.721 23.4%, 0.849 28%, 0.937 32.6%, 0.995 37.6%, 1.019 42.2%, 1.026 47.1%, 1.021 54%, 1.001 68.8%, 0.996 82.5%, 1);
+  --r-squircle-sm: 18px;
+  --r-squircle-md: 20px;
+  --r-squircle-lg: 24px;
+  --r-squircle-xl: 28px;
+  --r-inner: 12px;
+  --r-control: 14px;
+  --r-card: 28px;
+
+  /* Typography */
+  --font-sans: 'Plus Jakarta Sans Variable', 'Plus Jakarta Sans', ui-sans-serif, system-ui, sans-serif;
+  --letter-spacing-heading: -0.015em;
+
+  /* Monochrome black canvas, lifted with white light and neutral gray surfaces */
   --bg-from: #000000;
-  --bg-to: #060606;
-  --card: rgba(255, 255, 255, 0.05);
-  --card-hover: rgba(255, 255, 255, 0.075);
-  --card-strong: rgba(255, 255, 255, 0.08);
+  --bg-mid: #080808;
+  --bg-to: #1a1a1a;
+  --surface-solid: #101010;
+  --card: rgba(26, 26, 26, 0.70);
+  --card-hover: rgba(36, 36, 36, 0.86);
+  --card-strong: rgba(46, 46, 46, 0.94);
   --card-highlight: rgba(255, 255, 255, 0.08);
   --border: rgba(255, 255, 255, 0.09);
-  --border-strong: rgba(255, 255, 255, 0.2);
-  --accent: #ffffff;
-  --accent-ink: #000000;
-  --text: #ffffff;
-  --text-muted: rgba(255, 255, 255, 0.55);
-  --glass: rgba(0, 0, 0, 0.55);
-  --surface-solid: #0d0d0d;
-  --shadow: 0 20px 50px rgba(0, 0, 0, 0.45), 0 4px 14px rgba(0, 0, 0, 0.3);
-  --btn-primary-bg: #ffffff;
-  --btn-primary-ink: #000000;
-  --cloud-1: rgba(255, 255, 255, 0.045);
-  --cloud-2: rgba(255, 255, 255, 0.035);
-  --cloud-3: rgba(232, 132, 73, 0.16);
-  --horizon: rgba(0, 0, 0, 0.82);
-  --grain-opacity: 0.07;
-  --sky-accent: #ffffff;
-  --sun-accent: #ffffff;
-  --focus-ring: #ffffff;
-  color-scheme: dark;
+  --border-strong: rgba(255, 255, 255, 0.20);
+
+  /* Specular Rim Catchlight */
+  --shadow-rim: inset 0 1px 0 0 rgba(255, 255, 255, 0.08);
+  --specular-rim: inset 0 1px 0 0 rgba(255, 255, 255, 0.08);
+  --specular-rim-strong: inset 0 1px 0 0 rgba(255, 255, 255, 0.15);
+
+  --accent: #f5f5f5;
+  --accent-ink: #0a0a0a;
+  --accent-soft: rgba(255, 255, 255, 0.10);
+  --accent-glow: rgba(255, 255, 255, 0.20);
+  --text: #f5f5f5;
+  --text-secondary: #c7c7c7;
+  --text-muted: #8f8f8f;
+  --glass: rgba(8, 8, 8, 0.74);
+  --shadow: 0 20px 50px rgba(0, 0, 0, 0.62), 0 4px 14px rgba(0, 0, 0, 0.42);
+
+  /* Floating chrome: white controls on black, dark glass for the mode switch */
+  --chrome-home-bg: rgba(250, 250, 250, 0.94);
+  --chrome-home-ink: #0a0a0a;
+  --chrome-control-border: rgba(255, 255, 255, 0.16);
+  --chrome-pill-bg: rgba(18, 18, 18, 0.76);
+  --chrome-pill-border: rgba(255, 255, 255, 0.11);
+  --chrome-active-bg: #fafafa;
+  --chrome-active-ink: #0a0a0a;
+  --chrome-inactive: #a3a3a3;
+
+  /* Conversation surfaces */
+  --bubble-assistant: rgba(26, 26, 26, 0.84);
+  --bubble-assistant-border: rgba(255, 255, 255, 0.08);
+  --bubble-user: rgba(52, 52, 52, 0.90);
+  --bubble-user-border: rgba(255, 255, 255, 0.11);
+
+  /* Adaptive rail panels */
+  --panel-bg: rgba(20, 20, 20, 0.72);
+  --panel-border: rgba(255, 255, 255, 0.09);
+  --panel-inset: rgba(255, 255, 255, 0.055);
+  --panel-inset-strong: rgba(255, 255, 255, 0.09);
+
+  /* Composer */
+  --composer-bg: #0c0c0c;
+  --composer-border: rgba(255, 255, 255, 0.11);
+  --composer-shadow: 0 18px 44px rgba(0, 0, 0, 0.45);
+
+  /* Proactivity Tags: state color is functional, never decorative */
+  --tag-urgent-bg: rgba(239, 68, 68, 0.14);
+  --tag-urgent-text: #fca5a5;
+  --tag-urgent-border: rgba(239, 68, 68, 0.28);
+
+  --tag-decision-bg: rgba(245, 158, 11, 0.14);
+  --tag-decision-text: #fcd34d;
+  --tag-decision-border: rgba(245, 158, 11, 0.28);
+
+  --tag-autonomous-bg: rgba(255, 255, 255, 0.08);
+  --tag-autonomous-text: #e5e5e5;
+  --tag-autonomous-border: rgba(255, 255, 255, 0.18);
+
+  --tag-proactive-bg: rgba(255, 255, 255, 0.08);
+  --tag-proactive-text: #e5e5e5;
+  --tag-proactive-border: rgba(255, 255, 255, 0.18);
+
+  /* Urgency Rails (3px border indicator) */
+  --urgency-critical: #f87171;
+  --urgency-high: #fb923c;
+  --urgency-medium: #a3a3a3;
+  --urgency-low: #737373;
+
+  /* Verb Pills */
+  --btn-primary-bg: #fafafa;
+  --btn-primary-ink: #0a0a0a;
+  --verb-pill-bg: #fafafa;
+  --verb-pill-text: #0a0a0a;
+  --verb-pill-hover-bg: #ffffff;
+  --verb-pill-secondary-bg: rgba(255, 255, 255, 0.08);
+  --verb-pill-secondary-text: #fafafa;
+  --verb-pill-secondary-border: rgba(255, 255, 255, 0.14);
+  --verb-pill-secondary-hover-bg: rgba(255, 255, 255, 0.12);
+
+  /* Approval Surfaces */
+  --approval-bg: rgba(245, 158, 11, 0.08);
+  --approval-border: rgba(245, 158, 11, 0.25);
+  --approval-text: #fde68a;
+  --approval-text-muted: #fcd34d;
+  --surface-approval: rgba(245, 158, 11, 0.08);
+  --border-approval: rgba(245, 158, 11, 0.25);
+
+  /* Background atmosphere: true black lifted by faint white cloud light */
+  --cloud-1: rgba(255, 255, 255, 0.12);
+  --cloud-2: rgba(255, 255, 255, 0.06);
+  --cloud-3: rgba(255, 255, 255, 0.09);
+  --horizon: rgba(0, 0, 0, 0.80);
+  --grain-opacity: 0.06;
+  --sky-accent: #f5f5f5;
+  --sun-accent: #d4d4d4;
+  --focus-ring: #f5f5f5;
+  --hark-card-bg: #0c0c0c;
+  --hark-card-fg: #fff;
+  --hark-card-border: rgba(255, 255, 255, 0.14);
+  --hark-control-bg: #fff;
+  --hark-control-fg: #000;
 }
 
 [data-theme='light'] {
-  --bg-from: #f7fbff;
-  --bg-to: #eaf3fa;
-  --card: rgba(255, 255, 255, 0.62);
-  --card-hover: rgba(255, 255, 255, 0.78);
-  --card-strong: rgba(255, 255, 255, 0.9);
-  --card-highlight: rgba(255, 255, 255, 0.85);
-  --border: rgba(66, 103, 137, 0.14);
-  --border-strong: rgba(66, 103, 137, 0.25);
-  --accent: #152536;
-  --accent-ink: #f7fbff;
-  --text: #152536;
-  --text-muted: rgba(42, 66, 87, 0.66);
-  --glass: rgba(247, 251, 255, 0.72);
-  --surface-solid: #f7fbff;
-  --shadow: 0 22px 60px rgba(65, 100, 130, 0.1), 0 3px 14px rgba(65, 100, 130, 0.05);
-  --btn-primary-bg: #152536;
-  --btn-primary-ink: #f7fbff;
-  --cloud-1: rgba(244, 166, 108, 0.22);
-  --cloud-2: rgba(121, 187, 232, 0.2);
-  --cloud-3: rgba(112, 178, 226, 0.12);
-  --horizon: rgba(234, 244, 251, 0.38);
-  --grain-opacity: 0.025;
-  --sky-accent: #397ca8;
-  --sun-accent: #b96836;
-  --focus-ring: #2f6f9c;
   color-scheme: light;
+
+  /* Spring easing & squircle geometry */
+  --ease-spring: linear(0, 0.006, 0.025 2.8%, 0.101 6.1%, 0.539 18.9%, 0.721 23.4%, 0.849 28%, 0.937 32.6%, 0.995 37.6%, 1.019 42.2%, 1.026 47.1%, 1.021 54%, 1.001 68.8%, 0.996 82.5%, 1);
+  --r-squircle-sm: 18px;
+  --r-squircle-md: 20px;
+  --r-squircle-lg: 24px;
+  --r-squircle-xl: 28px;
+  --r-inner: 12px;
+  --r-control: 14px;
+  --r-card: 28px;
+
+  /* Typography */
+  --font-sans: 'Plus Jakarta Sans Variable', 'Plus Jakarta Sans', ui-sans-serif, system-ui, sans-serif;
+  --letter-spacing-heading: -0.015em;
+
+  /* Tactile Alabaster & Warm Sand Palette (Hark Pro Light Mode Capture) */
+  --bg-from: #f6efe6;
+  --bg-mid: #f1e8dc;
+  --bg-to: #ece1d2;
+  --surface-solid: #ffffff;
+  --card: rgba(255, 255, 255, 0.72);
+  --card-hover: rgba(255, 255, 255, 0.88);
+  --card-strong: rgba(255, 255, 255, 0.95);
+  --card-highlight: rgba(255, 255, 255, 0.95);
+  --border: rgba(0, 0, 0, 0.08);
+  --border-strong: rgba(0, 0, 0, 0.18);
+
+  /* Specular Rim Catchlight */
+  --shadow-rim: inset 0 1px 0 0 rgba(255, 255, 255, 0.9);
+  --specular-rim: inset 0 1px 0 0 rgba(255, 255, 255, 0.9);
+  --specular-rim-strong: inset 0 1px 0 0 #ffffff;
+
+  --accent: #111111;
+  --accent-ink: #ffffff;
+  --accent-soft: rgba(0, 0, 0, 0.06);
+  --accent-glow: rgba(0, 0, 0, 0.14);
+  --text: #0f172a;
+  --text-secondary: #334155;
+  --text-muted: #64748b;
+  --glass: rgba(248, 247, 245, 0.75);
+  --shadow: 0 20px 50px rgba(15, 23, 42, 0.06), 0 4px 14px rgba(15, 23, 42, 0.03);
+
+  /* Floating chrome: white controls on the warm canvas, ink-black for the active mode */
+  --chrome-home-bg: rgba(255, 255, 255, 0.82);
+  --chrome-home-ink: #0f172a;
+  --chrome-control-border: rgba(255, 255, 255, 0.72);
+  --chrome-pill-bg: rgba(255, 255, 255, 0.66);
+  --chrome-pill-border: rgba(0, 0, 0, 0.06);
+  --chrome-active-bg: #101014;
+  --chrome-active-ink: #ffffff;
+  --chrome-inactive: #64748b;
+
+  /* Conversation surfaces */
+  --bubble-assistant: rgba(255, 255, 255, 0.68);
+  --bubble-assistant-border: rgba(0, 0, 0, 0.06);
+  --bubble-user: rgba(255, 255, 255, 0.94);
+  --bubble-user-border: rgba(0, 0, 0, 0.08);
+
+  /* Adaptive rail panels */
+  --panel-bg: rgba(255, 255, 255, 0.62);
+  --panel-border: rgba(0, 0, 0, 0.06);
+  --panel-inset: rgba(0, 0, 0, 0.035);
+  --panel-inset-strong: rgba(0, 0, 0, 0.06);
+
+  /* Composer */
+  --composer-bg: #ffffff;
+  --composer-border: rgba(0, 0, 0, 0.07);
+  --composer-shadow: 0 18px 44px rgba(15, 23, 42, 0.10);
+
+  /* Proactivity Tags */
+  --tag-urgent-bg: rgba(220, 38, 38, 0.08);
+  --tag-urgent-text: #b91c1c;
+  --tag-urgent-border: rgba(220, 38, 38, 0.20);
+
+  --tag-decision-bg: rgba(217, 119, 6, 0.08);
+  --tag-decision-text: #b45309;
+  --tag-decision-border: rgba(217, 119, 6, 0.20);
+
+  --tag-autonomous-bg: rgba(0, 0, 0, 0.05);
+  --tag-autonomous-text: #262626;
+  --tag-autonomous-border: rgba(0, 0, 0, 0.14);
+
+  --tag-proactive-bg: rgba(0, 0, 0, 0.05);
+  --tag-proactive-text: #262626;
+  --tag-proactive-border: rgba(0, 0, 0, 0.14);
+
+  /* Urgency Rails (3px border indicator) */
+  --urgency-critical: #dc2626;
+  --urgency-high: #ea580c;
+  --urgency-medium: #64748b;
+  --urgency-low: #94a3b8;
+
+  /* Verb Pills */
+  --btn-primary-bg: #0f172a;
+  --btn-primary-ink: #ffffff;
+  --verb-pill-bg: #0f172a;
+  --verb-pill-text: #ffffff;
+  --verb-pill-hover-bg: #1e293b;
+  --verb-pill-secondary-bg: rgba(15, 23, 42, 0.06);
+  --verb-pill-secondary-text: #0f172a;
+  --verb-pill-secondary-border: rgba(15, 23, 42, 0.12);
+  --verb-pill-secondary-hover-bg: rgba(15, 23, 42, 0.10);
+
+  /* Approval Surfaces */
+  --approval-bg: rgba(217, 119, 6, 0.08);
+  --approval-border: rgba(217, 119, 6, 0.22);
+  --approval-text: #b45309;
+  --approval-text-muted: #92400e;
+  --surface-approval: rgba(217, 119, 6, 0.08);
+  --border-approval: rgba(217, 119, 6, 0.22);
+
+  /* Background atmosphere & clouds (Warm Peach & Soft Sand Cloudscape) */
+  --cloud-1: rgba(241, 187, 151, 0.46);
+  --cloud-2: rgba(228, 205, 183, 0.40);
+  --cloud-3: rgba(213, 180, 157, 0.34);
+  --horizon: rgba(246, 239, 230, 0.42);
+  --grain-opacity: 0.025;
+  --sky-accent: #111111;
+  --sun-accent: #525252;
+  --focus-ring: #111111;
+  --hark-card-bg: #fff;
+  --hark-card-fg: #000;
+  --hark-card-border: rgba(0, 0, 0, 0.10);
+  --hark-control-bg: #000;
+  --hark-control-fg: #fff;
 }
 
 html,
@@ -125,15 +344,25 @@ body,
 
 body {
   margin: 0;
-  font-family: 'Plus Jakarta Sans Variable', 'Plus Jakarta Sans', ui-sans-serif, system-ui, sans-serif;
-  background: linear-gradient(155deg, var(--bg-from), var(--bg-to));
+  font-family: var(--font-sans);
+  background: linear-gradient(155deg, var(--bg-from) 0%, var(--bg-mid) 52%, var(--bg-to) 100%);
   background-attachment: fixed;
   color: var(--text);
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
   transition:
-    background 0.5s cubic-bezier(0.25, 1, 0.5, 1),
+    background 0.5s var(--ease-spring),
     color 0.4s;
+}
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6,
+.tracking-heading {
+  letter-spacing: var(--letter-spacing-heading);
 }
 
 ::selection {
@@ -153,13 +382,119 @@ body {
   box-shadow: var(--shadow);
 }
 
+.composer-black {
+  background: var(--composer-bg);
+  border: 1px solid var(--composer-border);
+  box-shadow: var(--composer-shadow);
+}
+
+.hark-card {
+  background: var(--hark-card-bg);
+  border: 1px solid var(--hark-card-border);
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.28);
+}
+
+/* Keeps the floating chrome legible while the transcript scrolls beneath it */
+.top-fade {
+  background: linear-gradient(
+    to bottom,
+    var(--bg-from) 0%,
+    var(--bg-from) 34%,
+    color-mix(in srgb, var(--bg-from) 58%, transparent) 64%,
+    transparent 100%
+  );
+}
+
+/* Floating control surfaces for the top chrome */
+.chrome-control {
+  background: var(--chrome-home-bg);
+  color: var(--chrome-home-ink);
+  border: 1px solid var(--chrome-control-border);
+  box-shadow: var(--shadow);
+}
+
+.chrome-pill {
+  background: var(--chrome-pill-bg);
+  border: 1px solid var(--chrome-pill-border);
+  box-shadow: var(--shadow), var(--shadow-rim);
+  -webkit-backdrop-filter: blur(24px) saturate(150%);
+  backdrop-filter: blur(24px) saturate(150%);
+}
+
+/* Adaptive rail panels */
+.rail-card {
+  background: var(--panel-bg);
+  border: 1px solid var(--panel-border);
+  border-radius: 20px;
+  box-shadow: var(--shadow), var(--shadow-rim);
+  -webkit-backdrop-filter: blur(22px) saturate(140%);
+  backdrop-filter: blur(22px) saturate(140%);
+}
+
+.rail-inset {
+  background: var(--panel-inset);
+  border: 1px solid color-mix(in srgb, var(--panel-border) 70%, transparent);
+}
+
+/* Conversation bubbles */
+.bubble-user {
+  background: var(--bubble-user);
+  border: 1px solid var(--bubble-user-border);
+  box-shadow: var(--shadow-rim);
+}
+
+.bubble-assistant {
+  background: var(--bubble-assistant);
+  border: 1px solid var(--bubble-assistant-border);
+  box-shadow: var(--shadow-rim);
+  -webkit-backdrop-filter: blur(18px) saturate(130%);
+  backdrop-filter: blur(18px) saturate(130%);
+}
+
+.thinking-dots {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  height: 12px;
+}
+
+.thinking-dots > span {
+  width: 4px;
+  height: 4px;
+  border-radius: 9999px;
+  background: currentColor;
+  opacity: 0.35;
+  animation: thinking-dot 1.2s ease-in-out infinite;
+}
+
+.thinking-dots > span:nth-child(2) {
+  animation-delay: 0.16s;
+}
+
+.thinking-dots > span:nth-child(3) {
+  animation-delay: 0.32s;
+}
+
+@keyframes thinking-dot {
+  0%,
+  60%,
+  100% {
+    opacity: 0.35;
+    transform: translateY(0);
+  }
+  30% {
+    opacity: 1;
+    transform: translateY(-2px);
+  }
+}
+
 .card {
   background: var(--card);
   border: 1px solid var(--border);
-  box-shadow: var(--shadow);
+  box-shadow: var(--shadow), var(--shadow-rim);
   -webkit-backdrop-filter: blur(30px) saturate(140%);
   backdrop-filter: blur(30px) saturate(140%);
-  transition: background 0.4s cubic-bezier(0.25, 1, 0.5, 1);
+  transition: background 0.4s var(--ease-spring);
 }
 .card:hover {
   background: var(--card-hover);
@@ -169,6 +504,7 @@ body {
 .bubble {
   background: var(--card);
   border: 1px solid var(--border);
+  box-shadow: var(--shadow-rim);
   -webkit-backdrop-filter: blur(24px) saturate(140%);
   backdrop-filter: blur(24px) saturate(140%);
 }
@@ -188,7 +524,7 @@ body {
   white-space: nowrap;
   border: 1px solid transparent;
   transition:
-    transform 0.45s cubic-bezier(0.25, 1, 0.5, 1),
+    transform 0.45s var(--ease-spring),
     background 0.3s,
     color 0.3s,
     opacity 0.3s;
@@ -233,6 +569,71 @@ body {
   background: color-mix(in srgb, var(--text) 6%, transparent);
 }
 
+/* Squircle Utilities */
+.rounded-squircle-sm { border-radius: var(--r-squircle-sm); }
+.rounded-squircle-md { border-radius: var(--r-squircle-md); }
+.rounded-squircle-lg { border-radius: var(--r-squircle-lg); }
+.rounded-squircle-xl { border-radius: var(--r-squircle-xl); }
+.rounded-squircle-card {
+  border-radius: var(--r-card);
+  corner-shape: squircle;
+}
+
+/* Verb Pills */
+.verb-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 36px;
+  padding: 0 16px;
+  border-radius: var(--r-squircle-sm);
+  background: var(--verb-pill-bg);
+  color: var(--verb-pill-text);
+  font-size: 13px;
+  font-weight: 600;
+  box-shadow: var(--shadow-rim);
+  transition: transform 0.3s var(--ease-spring), opacity 0.2s, background 0.2s;
+}
+.verb-pill:hover {
+  background: var(--verb-pill-hover-bg);
+  transform: scale(1.02);
+}
+.verb-pill:active {
+  transform: scale(0.97);
+}
+
+.verb-pill-secondary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 36px;
+  padding: 0 16px;
+  border-radius: var(--r-squircle-sm);
+  background: var(--verb-pill-secondary-bg);
+  color: var(--verb-pill-secondary-text);
+  border: 1px solid var(--verb-pill-secondary-border);
+  font-size: 13px;
+  font-weight: 500;
+  transition: transform 0.3s var(--ease-spring), background 0.2s;
+}
+.verb-pill-secondary:hover {
+  background: var(--verb-pill-secondary-hover-bg);
+  transform: scale(1.02);
+}
+.verb-pill-secondary:active {
+  transform: scale(0.97);
+}
+
+/* Approval Surface */
+.approval-surface {
+  background: var(--approval-bg);
+  border: 1px solid var(--approval-border);
+  border-radius: var(--r-squircle-md);
+  box-shadow: var(--shadow-rim);
+}
+
 .scroll-soft {
   scrollbar-width: thin;
   scrollbar-color: color-mix(in srgb, var(--text) 18%, transparent) transparent;
@@ -253,83 +654,22 @@ body {
   font-variant-numeric: tabular-nums;
 }
 
-/* ══ Eye tracker ═══════════════════════════════════════════
-   From Bencho (MIT, bencho.dev/licence). The frame holds the
-   largest ball the Size knob allows, so the wall never
-   rescales it. */
-.eyt {
-  width: 200px;
-  height: 200px;
-  display: grid;
-  place-items: center;}
+/* ══ KaTeX & Markdown Overflow Protection ════════════════════
+   Ensure display math equations scroll horizontally inside their
+   own container and never blow out the chat column width. */
+.katex-display {
+  overflow-x: auto;
+  overflow-y: hidden;
+  max-width: 100%;
+  margin: 0.85em 0 !important;
+  padding: 0.5rem 0.75rem;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--text) 3.5%, transparent);
+  border: 1px solid var(--border);
+  scrollbar-width: thin;
+}
 
-.eyt-ball {
-  width: var(--eyt-size, 100px);
-  height: var(--eyt-size, 100px);
-  overflow: visible;}
-
-/* Token mapping, Vigil side (nothing added as globals): the ball
-   is the ink itself and the eyes the ground it sits on, so the
-   mark inverts with the theme exactly like the rest of the UI.
-   --fill-slab → var(--text), --fill-on → var(--bg-from),
-   --font-ui → inherited app font, --ink/--bg unused (they only
-   fed Bencho's site-chrome rules, not copied here). */
-.eyt-body { fill: var(--text); }
-
-.eyt-eye { fill: var(--bg-from); }
-
-/* a press on the toy opens a chat bubble off its lower right: the
-   pet's bubble, its square corner pointing back at the face */
-.eyt { position: relative; }
-
-/* a press gives a little under the finger and springs back out */
-.eyt-ball[data-poke] {
-  cursor: pointer;
-  transform-origin: center;
-  transition: scale 420ms cubic-bezier(0.24, 1.34, 0.38, 1);
-  -webkit-tap-highlight-color: transparent;}
-
-.eyt-ball[data-poke]:active { scale: 0.96; transition-duration: 160ms; transition-timing-function: ease; }
-
-.eyt-say {
-  position: absolute;
-  left: calc(50% + var(--eyt-size, 100px) * 0.36);
-  top: calc(50% + var(--eyt-size, 100px) * 0.3);
-  display: inline-flex;
-  align-items: center;
-  gap: 2px;
-  min-height: 34px;
-  padding: 0 16px;
-  border-radius: 6px 14px 14px 14px;
-  /* monochrome: ink slab, ground lettering, no colour tints */
-  background: var(--text);
-  color: var(--bg-from);
-  box-shadow: inset 0 -1.5px 0 rgba(0, 0, 0, 0.1);
-  font-family: var(--font-ui, inherit);
-  font-size: 13px;
-  font-weight: 400;
-  white-space: nowrap;
-  transform-origin: top left;
-  opacity: 0;
-  scale: 0.85;
-  pointer-events: none;
-  transition: opacity 160ms ease, scale 220ms cubic-bezier(0.24, 1.34, 0.38, 1), background-color 220ms ease;
-  letter-spacing: 0em;}
-
-.eyt-say[data-on] { opacity: 1; scale: 1; }
-
-.eyt-caret {
-  width: 1.5px;
-  height: 13px;
-  border-radius: 1px;
-  background: var(--bg-from);
-  animation: pet-caret 1s steps(1) infinite;}
-
-@keyframes pet-caret {
-  50% { opacity: 0; }}
-
-/* Inline duty (the navbar mark): drop the 200px bench frame and
-   let the ball take its own size inside the logo row. */
-.eyt-inline .eyt {
-  width: auto;
-  height: auto;}
+.katex {
+  font-size: 1.04em !important;
+  line-height: 1.3;
+}

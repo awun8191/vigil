@@ -41,10 +41,12 @@ def test_module_factories_list_covers_all_modules() -> None:
         "audit",
         "jobs",
         "pricing",
+        "voice",
     }
     registered_modules = {mod for mod, _ in MODULE_FACTORIES}
     assert registered_modules == expected_modules
     assert len(MODULE_FACTORIES) == len(expected_modules)
+
 
 
 def test_no_bare_global_routers_in_config() -> None:

@@ -8,7 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field
 class ArtifactCreateRequest(BaseModel):
     """Inbound request to register an artifact produced by a run."""
     run_id: UUID = Field(..., description="Originating run UUID.")
-    kind: Literal["document", "diff", "log", "export"] = Field(..., description="Artifact category.")
+    kind: Literal["document", "diff", "log", "export", "micro_app", "screenshot"] = Field(..., description="Artifact category.")
     path: str = Field(..., description="Relative file path within the sandbox or workspace.")
     size_bytes: int = Field(..., ge=0, description="File size in bytes.")
     preview: str | None = Field(default=None, max_length=500, description="First 200-500 characters preview.")

@@ -3,6 +3,7 @@ import type {
   Approval,
   ApprovalDecisionRequest,
   ApprovalDecisionResponse,
+  Artifact,
   AuthMe,
   CardFeedbackRequest,
   CardListResponse,
@@ -28,7 +29,11 @@ import type {
   SystemLimits,
   UserSettings,
   UserSettingsUpdateRequest,
+  VaultSecretDTO,
+  SetVaultSecretRequest,
+  VaultValidationResult,
 } from '@/types';
+
 
 export interface StreamHandlers {
   onEvent: (event: SseEvent) => void;
@@ -63,6 +68,9 @@ export interface VigilApi {
   getLatestRun(sessionId: string): Promise<Run | null>;
   getRunSteps(runId: string, sinceStep?: number): Promise<RunStep[]>;
   getRunMessages(runId: string): Promise<RunMessageResponse[]>;
+  listRunArtifacts(runId: string): Promise<Artifact[]>;
+  downloadArtifactBlob(artifactId: string): Promise<Blob>;
+  getArtifactText(artifactId: string): Promise<string>;
   /** Resolves the pinned server-side default agent config, creating it on the first call. */
   getDefaultAgentConfig(): Promise<AgentConfigResponse>;
   cancelRun(runId: string, scope: string): Promise<RunCancelResponse>;
@@ -109,4 +117,14 @@ export interface VigilApi {
   listMCPServers(): Promise<MCPServerResponse[]>;
   registerMCPServer(body: RegisterMCPServerRequest, scope: string): Promise<MCPDiscoveryResponse>;
   unregisterMCPServer(name: string, scope: string): Promise<void>;
+
+  /* Key Vault */
+  listVaultSecrets(): Promise<VaultSecretDTO[]>;
+  setVaultSecret(body: SetVaultSecretRequest, scope: string): Promise<{ ok: boolean; key: string }>;
+  deleteVaultSecret(key: string, scope: string): Promise<void>;
+  /** Check a key against its provider without storing it. */
+  testVaultSecret(body: SetVaultSecretRequest, scope: string): Promise<VaultValidationResult>;
+  /** Check an already-stored key against its provider. */
+  validateVaultSecret(key: string, scope: string): Promise<VaultValidationResult>;
 }
+

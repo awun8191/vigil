@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID, uuid4
 
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import and_, case, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.config.exceptions import NotFoundError
@@ -200,9 +200,15 @@ class SqlChatRepository:
         carries prose: a row that requested tools, or that has no content yet,
         belongs to the run transcript.
         """
-        no_tool_calls = or_(
-            MessageModel.tool_calls.is_(None),
-            func.jsonb_array_length(MessageModel.tool_calls) == 0,
+        no_tool_calls = (
+            case(
+                (
+                    func.jsonb_typeof(MessageModel.tool_calls) == "array",
+                    func.jsonb_array_length(MessageModel.tool_calls),
+                ),
+                else_=0,
+            )
+            == 0
         )
         has_content = and_(
             MessageModel.content.is_not(None),

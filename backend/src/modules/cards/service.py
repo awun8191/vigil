@@ -67,6 +67,8 @@ class CardsService:
             feedback=None,
             created_at=now,
             updated_at=now,
+            proactivity_tag=data.proactivity_tag,
+            verb=data.verb,
         )
         self._cards[card_id] = card
         return card
@@ -92,6 +94,8 @@ class CardsService:
             feedback=data.feedback if data.feedback is not None else existing.feedback,
             created_at=existing.created_at,
             updated_at=now,
+            proactivity_tag=data.proactivity_tag if data.proactivity_tag is not None else existing.proactivity_tag,
+            verb=data.verb if data.verb is not None else existing.verb,
         )
         self._cards[card_id] = updated
         return updated
@@ -132,7 +136,12 @@ class CardsService:
             if existing:
                 updated = await self.update_card(
                     existing.id,
-                    CardUpdateDTO(summary=data.summary, due_at=data.due_at),
+                    CardUpdateDTO(
+                        summary=data.summary,
+                        due_at=data.due_at,
+                        proactivity_tag=data.proactivity_tag,
+                        verb=data.verb,
+                    ),
                 )
                 if updated:
                     return updated

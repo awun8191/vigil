@@ -22,6 +22,16 @@ Start PostgreSQL with the Compose stack:
 docker compose -f deploy/docker-compose.yml up -d postgres
 ```
 
+### Option A: Run everything with the all-in-one startup script (Recommended)
+
+From the project root:
+```bash
+./start.sh
+```
+This runs database migrations, the Agents API, the background worker, and the web client together.
+
+### Option B: Run services individually
+
 Apply the migrations and run the API:
 
 ```bash

@@ -16,6 +16,7 @@ if TYPE_CHECKING:
     from src.schemas.memory import MemoryChunkModel
     from src.schemas.runtime import ThreadModel
     from src.schemas.triage import CardModel
+    from src.schemas.vault import VaultSecretModel
 
 
 class UserModel(Base):
@@ -61,6 +62,9 @@ class UserModel(Base):
     )
     memory_chunks: Mapped[list[MemoryChunkModel]] = relationship(
         "MemoryChunkModel", back_populates="user", cascade="all, delete-orphan"
+    )
+    vault_secrets: Mapped[list[VaultSecretModel]] = relationship(
+        "VaultSecretModel", back_populates="user", cascade="all, delete-orphan"
     )
 
 

@@ -35,3 +35,4 @@ class ChatMessageResponse(BaseModel):
     role: str = Field(..., description="Message role ('user', 'assistant', 'system').")
     content: str = Field(..., description="Message text content.")
     created_at: datetime = Field(..., description="Creation timestamp.")
+    run_id: UUID | None = Field(default=None, description="Optional run UUID.")

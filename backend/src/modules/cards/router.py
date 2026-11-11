@@ -83,6 +83,8 @@ def build_cards_router(settings: Settings) -> APIRouter:
             thread_id=payload.thread_id,
             due_at=payload.due_at,
             actions=[CardActionDTO(**a.model_dump()) for a in payload.actions],
+            proactivity_tag=payload.proactivity_tag,
+            verb=payload.verb,
         )
         created = await service.create_card(dto)
         return CardResponse.model_validate(created)
@@ -121,6 +123,8 @@ def build_cards_router(settings: Settings) -> APIRouter:
                 status=payload.status,
                 summary=payload.summary,
                 due_at=payload.due_at,
+                proactivity_tag=getattr(payload, "proactivity_tag", None),
+                verb=getattr(payload, "verb", None),
             ),
         )
         if not updated:

@@ -1,0 +1,36 @@
+# syntax=docker/dockerfile:1
+FROM python:3.12-slim-bookworm
+
+# Install common utilities for agent execution and testing
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    git \
+    tar \
+    gzip \
+    unzip \
+    procps \
+    ca-certificates \
+    build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Node.js 22 LTS and npm from official Node image
+COPY --from=node:22-bookworm-slim /usr/local/bin /usr/local/bin
+COPY --from=node:22-bookworm-slim /usr/local/lib/node_modules /usr/local/lib/node_modules
+
+# Ensure user 1000 exists (SANDBOX_USER in Vigil is 1000:1000)
+RUN if ! id -u 1000 >/dev/null 2>&1; then \
+        useradd -m -u 1000 -s /bin/bash vigil; \
+    fi
+
+# Configure npm global directory and cache writable by user 1000
+ENV NPM_CONFIG_PREFIX=/workspace/.npm-global \
+    PATH=/workspace/.npm-global/bin:/usr/local/bin:$PATH \
+    NODE_PATH=/usr/local/lib/node_modules
+
+# Create workspace directory with proper permissions
+RUN mkdir -p /workspace && chown -R 1000:1000 /workspace
+
+USER 1000:1000
+WORKDIR /workspace
+
+CMD ["/bin/bash"]

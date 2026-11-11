@@ -1,6 +1,7 @@
 """Tiered LLM client implementation supporting Fast LLM (Tier 2), Reasoning LLM (Tier 3), and Embeddings."""
 from __future__ import annotations
 
+import base64
 import json
 from typing import Any, AsyncIterator
 import httpx
@@ -216,6 +217,87 @@ class LLMClient:
             )
         finally:
             if own_client:
+                await client.aclose()
+
+    async def describe_image(
+        self,
+        image_bytes: bytes,
+        media_type: str,
+        question: str | None = None,
+        max_tokens: int = 1024,
+    ) -> str:
+        """Answer a question about one image through a vision capable model.
+
+        Args:
+            image_bytes: Raw image bytes.
+            media_type: The image MIME type, such as ``image/png``.
+            question: What to extract or answer. Defaults to a full description.
+            max_tokens: Generation cap for the answer.
+
+        Returns:
+            The assistant text. An empty provider answer returns an empty string.
+
+        Raises:
+            RuntimeError: The vision tier has no key, or the provider call fails.
+        """
+        api_key = (
+            self.settings.VISION_LLM_API_KEY
+            or self.settings.FAST_LLM_API_KEY
+            or self.settings.REASONING_LLM_API_KEY
+        )
+        if not api_key or self.settings.APP_ENV == "test":
+            raise RuntimeError(
+                "the vision model is not configured; set VISION_LLM_API_KEY "
+                "or FAST_LLM_API_KEY to view images"
+            )
+
+        base_url = (
+            self.settings.VISION_LLM_BASE_URL
+            or self.settings.FAST_LLM_BASE_URL
+        ).rstrip("/")
+        model = self.settings.VISION_LLM_MODEL or self.settings.FAST_LLM_MODEL
+        prompt = question or (
+            "Describe this image in detail. Cover the visible content, any text, "
+            "the layout, and anything a user would need to act on it."
+        )
+        data_url = (
+            f"data:{media_type};base64,{base64.b64encode(image_bytes).decode('ascii')}"
+        )
+        payload: dict[str, Any] = {
+            "model": model,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": prompt},
+                        {"type": "image_url", "image_url": {"url": data_url}},
+                    ],
+                }
+            ],
+            "temperature": 0.2,
+            "max_tokens": max_tokens,
+        }
+
+        client = self._client or httpx.AsyncClient(timeout=120.0)
+        should_close = self._client is None
+        try:
+            res = await client.post(
+                f"{base_url}/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                    "User-Agent": "vigil-agent/1.0",
+                },
+                json=payload,
+            )
+            res.raise_for_status()
+            choice = res.json()["choices"][0]["message"]
+            content = choice.get("content")
+            return content if isinstance(content, str) else ""
+        except (httpx.HTTPError, KeyError, IndexError, ValueError) as exc:
+            raise RuntimeError(f"the vision request failed: {exc}") from exc
+        finally:
+            if should_close:
                 await client.aclose()
 
     async def embed_texts(

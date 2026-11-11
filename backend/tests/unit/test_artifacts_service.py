@@ -173,3 +173,122 @@ async def test_stream_of_an_unknown_artifact_is_not_found() -> None:
     service = ArtifactsService(session=None, settings=_settings())
     with pytest.raises(NotFoundError):
         await service.get_artifact_stream(UUID(int=0))
+
+
+@pytest.mark.asyncio
+async def test_text_reads_a_plain_text_artifact(tmp_path: Path) -> None:
+    """A text artifact is decoded directly, without extraction."""
+    target = tmp_path / "notes.md"
+    target.write_text("# Notes\n\nOne line.", encoding="utf-8")
+
+    service = ArtifactsService(session=None, settings=_settings())
+    saved = await service.save_artifact(
+        ArtifactCreateDTO(
+            run_id=uuid4(),
+            kind="document",
+            path=str(target),
+            size_bytes=0,
+            preview=None,
+        )
+    )
+
+    assert await service.get_artifact_text(saved.id) == "# Notes\n\nOne line."
+
+
+@pytest.mark.asyncio
+async def test_text_extracts_a_docx_artifact(tmp_path: Path) -> None:
+    """A DOCX artifact is read through the document extractor."""
+    docx = pytest.importorskip("docx")
+    document = docx.Document()
+    document.add_heading("Quarterly review", level=1)
+    document.add_paragraph("Revenue grew.")
+    target = tmp_path / "review.docx"
+    document.save(target)
+
+    service = ArtifactsService(session=None, settings=_settings())
+    saved = await service.save_artifact(
+        ArtifactCreateDTO(
+            run_id=uuid4(),
+            kind="document",
+            path=str(target),
+            size_bytes=target.stat().st_size,
+            preview=None,
+        )
+    )
+
+    text = await service.get_artifact_text(saved.id)
+    assert "Quarterly review" in text
+    assert "Revenue grew." in text
+
+
+@pytest.mark.asyncio
+async def test_text_caps_the_extracted_body(tmp_path: Path) -> None:
+    """The caller's character cap applies to the extracted text."""
+    target = tmp_path / "long.txt"
+    target.write_text("abcdefghij", encoding="utf-8")
+
+    service = ArtifactsService(session=None, settings=_settings())
+    saved = await service.save_artifact(
+        ArtifactCreateDTO(
+            run_id=uuid4(),
+            kind="document",
+            path=str(target),
+            size_bytes=10,
+            preview=None,
+        )
+    )
+
+    assert await service.get_artifact_text(saved.id, max_chars=4) == "abcd"
+
+
+@pytest.mark.asyncio
+async def test_text_of_a_missing_file_is_not_found(tmp_path: Path) -> None:
+    """A row whose file is gone answers NotFound instead of empty text."""
+    from src.config.exceptions import NotFoundError
+
+    service = ArtifactsService(session=None, settings=_settings())
+    saved = await service.save_artifact(
+        ArtifactCreateDTO(
+            run_id=uuid4(),
+            kind="document",
+            path=str(tmp_path / "gone.md"),
+            size_bytes=10,
+            preview=None,
+        )
+    )
+
+    with pytest.raises(NotFoundError):
+        await service.get_artifact_text(saved.id)
+
+
+@pytest.mark.asyncio
+async def test_stream_resolves_media_type_by_extension(tmp_path: Path) -> None:
+    """Known document and image extensions resolve to their specific MIME types."""
+    service = ArtifactsService(session=None, settings=_settings())
+    cases = [
+        ("report.pdf", "application/pdf"),
+        ("memo.docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"),
+        ("sheet.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
+        ("notes.md", "text/markdown; charset=utf-8"),
+        ("table.csv", "text/csv; charset=utf-8"),
+        ("chart.png", "image/png"),
+        ("photo.jpg", "image/jpeg"),
+        ("preview.webp", "image/webp"),
+        ("diagram.svg", "image/svg+xml"),
+        ("raw.bin", "application/octet-stream"),
+    ]
+    for filename, expected_mime in cases:
+        target = tmp_path / filename
+        target.write_bytes(b"data")
+        saved = await service.save_artifact(
+            ArtifactCreateDTO(
+                run_id=uuid4(),
+                kind="file",
+                path=str(target),
+                size_bytes=4,
+                preview=None,
+            )
+        )
+        _, actual_name, media_type, _ = await service.get_artifact_stream(saved.id)
+        assert actual_name == filename
+        assert media_type == expected_mime

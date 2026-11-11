@@ -1,4 +1,4 @@
-import { NavLink, Navigate, useParams } from 'react-router-dom';
+import { NavLink, Navigate, useNavigate, useParams } from 'react-router-dom';
 import {
   Bell,
   CircleUser,
@@ -10,6 +10,7 @@ import {
   SlidersHorizontal,
   Sun,
   UserRound,
+  X,
 } from 'lucide-react';
 import type { ComponentType, ReactNode } from 'react';
 import {
@@ -57,6 +58,7 @@ const SECTION_IDS = new Set(SECTIONS.map((section) => section.id));
 /** The full settings page: section rail on the left, one panel on the right. */
 export function SettingsPage() {
   const { section } = useParams();
+  const navigate = useNavigate();
 
   if (!section || !SECTION_IDS.has(section)) {
     return <Navigate to="/agent/settings/appearance" replace />;
@@ -68,40 +70,51 @@ export function SettingsPage() {
   }
 
   return (
-    <main className="mx-auto w-full max-w-5xl px-6 pb-36 pt-20 md:pb-24 md:pl-24 md:pt-28">
-      {/* Rail: a left column on wide screens, a chip row up top on narrow ones */}
-      <div className="md:grid md:grid-cols-[220px_minmax(0,1fr)] md:gap-12">
-        <nav aria-label="Settings sections" className="animate-rise relative md:top-24">
-          <ul className="-mx-1 flex gap-1 overflow-x-auto pb-2 md:sticky md:top-24 md:mx-0 md:block md:overflow-visible md:pb-0">
-            {SECTIONS.map(({ id, label, Icon }) => {
-              const active = id === current.id;
-              return (
-                <li key={id} className="shrink-0">
-                  <NavLink
-                    to={`/agent/settings/${id}`}
-                    aria-current={active ? 'page' : undefined}
-                    className="flex items-center gap-2.5 whitespace-nowrap rounded-[10px] px-3 py-2 text-[14px] transition-colors"
-                    style={{
-                      color: active ? 'var(--text)' : 'var(--text-muted)',
-                      background: active
-                        ? 'color-mix(in srgb, var(--text) 8%, transparent)'
-                        : undefined,
-                    }}
-                  >
-                    <Icon size={15} strokeWidth={1.5} aria-hidden="true" />
-                    {label}
-                  </NavLink>
-                </li>
-              );
-            })}
-          </ul>
-        </nav>
+    <>
+      <button
+        type="button"
+        onClick={() => navigate('/agent')}
+        aria-label="Close settings"
+        className="hark-card fixed left-6 top-4 z-40 grid h-10 w-10 place-items-center rounded-full text-[var(--hark-card-fg)] transition-transform hover:scale-105 active:scale-95"
+      >
+        <X size={17} strokeWidth={1.75} />
+      </button>
 
-        <div className="animate-rise min-w-0 pt-6 md:pt-3" key={current.id}>
-          {current.body}
+      <main className="mx-auto w-full max-w-5xl px-6 pb-36 pt-20 md:pb-24 md:pl-24 md:pt-28">
+        {/* Rail: a left column on wide screens, a chip row up top on narrow ones */}
+        <div className="md:grid md:grid-cols-[220px_minmax(0,1fr)] md:gap-12">
+          <nav aria-label="Settings sections" className="animate-rise relative md:top-24">
+            <ul className="-mx-1 flex gap-1 overflow-x-auto pb-2 md:sticky md:top-24 md:mx-0 md:block md:overflow-visible md:pb-0">
+              {SECTIONS.map(({ id, label, Icon }) => {
+                const active = id === current.id;
+                return (
+                  <li key={id} className="shrink-0">
+                    <NavLink
+                      to={`/agent/settings/${id}`}
+                      aria-current={active ? 'page' : undefined}
+                      className="flex items-center gap-2.5 whitespace-nowrap rounded-[10px] px-3 py-2 text-[14px] transition-colors"
+                      style={{
+                        color: active ? 'var(--text)' : 'var(--text-muted)',
+                        background: active
+                          ? 'color-mix(in srgb, var(--text) 8%, transparent)'
+                          : undefined,
+                      }}
+                    >
+                      <Icon size={15} strokeWidth={1.5} aria-hidden="true" />
+                      {label}
+                    </NavLink>
+                  </li>
+                );
+              })}
+            </ul>
+          </nav>
+
+          <div className="animate-rise min-w-0 pt-6 md:pt-3" key={current.id}>
+            {current.body}
+          </div>
         </div>
-      </div>
-    </main>
+      </main>
+    </>
   );
 }
 

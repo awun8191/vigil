@@ -31,6 +31,10 @@ dependencies = [
     # Provider tokenizer for context compaction. Tier 1 must count tokens with
     # the tokenizer of the configured model, never with a character estimate.
     "tiktoken>=0.7.0",
+    "pypdf>=4.2.0",
+    "openpyxl>=3.1.0",
+    "python-docx>=1.1.0",
+    "python-multipart>=0.0.33",
 ]
 
 [tool.hatch.build.targets.wheel]

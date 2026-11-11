@@ -105,8 +105,9 @@ class TestAES256GCMAdversarial:
                 decrypt_secret(bad, self.KEY)
             assert "Corrupted base64" in exc_info.value.message or "too short" in exc_info.value.message
 
-        # Mutating characters in base64 that change decoded bytes
-        tampered_b64 = ciphertext[:-2] + ("A" if ciphertext[-2] != "A" else "B") + ciphertext[-1]
+        # Mutating characters in base64 body so it always alters decoded bytes
+        mid = len(ciphertext) // 2
+        tampered_b64 = ciphertext[:mid] + ("A" if ciphertext[mid] != "A" else "B") + ciphertext[mid + 1:]
         with pytest.raises(SecurityError):
             decrypt_secret(tampered_b64, self.KEY)
 

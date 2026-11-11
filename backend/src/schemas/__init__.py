@@ -29,6 +29,7 @@ from src.schemas.system import (
     ModelPriceModel,
 )
 from src.schemas.triage import CardActionModel, CardModel, TriageDecisionModel
+from src.schemas.vault import VaultSecretModel
 
 __all__ = [
     "Base",
@@ -63,4 +64,6 @@ __all__ = [
     "IdempotencyRecordModel",
     "AuditLogModel",
     "ModelPriceModel",
+    # vault.py
+    "VaultSecretModel",
 ]

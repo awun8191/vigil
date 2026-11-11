@@ -24,7 +24,7 @@ export function HomeView() {
       {actionError ? (
         <div
           role="alert"
-          className="card mb-4 flex items-start gap-3 rounded-[10px] px-4 py-3"
+          className="card rounded-squircle-card mb-4 flex items-start gap-3 px-4 py-3"
         >
           <p className="flex-1 text-[13px] leading-relaxed text-[var(--text-muted)]">{actionError}</p>
           <button
@@ -41,7 +41,7 @@ export function HomeView() {
       {isError ? (
         <div
           role="alert"
-          className="card flex items-center gap-3 rounded-[10px] px-4 py-3.5"
+          className="card rounded-squircle-card flex items-center gap-3 px-4 py-3.5"
         >
           <p className="flex-1 text-[14px] leading-relaxed text-[var(--text-muted)]">
             Couldn't reach Vigil. {userMessageOf(error)}
@@ -59,8 +59,8 @@ export function HomeView() {
             <div className="flex flex-col gap-4">
               {isLoading ? (
                 <>
-                  <div className="card h-44 animate-pulse rounded-[14px]" />
-                  <div className="card h-40 animate-pulse rounded-[14px]" />
+                  <div className="card rounded-squircle-card h-44 animate-pulse" />
+                  <div className="card rounded-squircle-card h-40 animate-pulse" />
                 </>
               ) : (
                 <AnimatePresence mode="popLayout">

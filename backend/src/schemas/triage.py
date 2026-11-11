@@ -96,6 +96,10 @@ class CardModel(Base):
     )
     type: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     urgency: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    proactivity_tag: Mapped[str | None] = mapped_column(
+        String(64), nullable=True, index=True
+    )
+    verb: Mapped[str | None] = mapped_column(String(64), nullable=True)
     title: Mapped[str] = mapped_column(String(500), nullable=False)
     summary: Mapped[str | None] = mapped_column(Text, nullable=True)
     due_at: Mapped[datetime | None] = mapped_column(
@@ -159,6 +163,7 @@ class CardActionModel(Base):
     action_key: Mapped[str] = mapped_column(String(64), nullable=False)
     label: Mapped[str] = mapped_column(String(255), nullable=False)
     action_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    verb: Mapped[str | None] = mapped_column(String(64), nullable=True)
     payload: Mapped[dict[str, Any]] = mapped_column(
         JSONB,
         nullable=False,

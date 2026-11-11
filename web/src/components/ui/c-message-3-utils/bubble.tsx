@@ -1,21 +1,19 @@
 import type { HTMLAttributes, ReactNode } from 'react';
 import { cn } from '@/lib/utils';
 
-export type BubbleVariant = 'default' | 'muted';
+export type BubbleVariant = 'user' | 'assistant' | 'default' | 'muted';
 
 /*
- * Alternating fills so the two parties read apart at a glance, both a wash of
- * the ink colour over the page (ties to either theme without new tokens). The
- * fillet corner shapes the card: a tighter corner on the speaker's side, soft
- * 18px elsewhere.
+ * Both roles sit on the same soft, tactile surface. The user bubble is end-aligned with a
+ * tighter bottom-right corner; Vigil's reply is start-aligned with a tighter bottom-left
+ * corner. The asymmetry is the only directional cue, so the palette stays calm.
  */
 const variants: Record<BubbleVariant, string> = {
-  // Own messages: the stronger wash, shaped toward the bottom-right corner.
-  default:
-    'rounded-[18px] rounded-br-[6px] bg-[color-mix(in_srgb,var(--text)_18%,transparent)]',
-  // The other party: the quieter wash, shaped toward the top-left corner.
+  user: 'bubble-user rounded-[20px] rounded-br-[7px]',
+  assistant: 'bubble-assistant rounded-[20px] rounded-bl-[7px]',
+  default: 'bubble-user rounded-[20px] rounded-br-[7px]',
   muted:
-    'rounded-[18px] rounded-tl-[6px] bg-[color-mix(in_srgb,var(--text)_7%,transparent)]',
+    'rounded-[18px] rounded-tl-[6px] border border-[var(--border)] bg-[var(--panel-inset)]',
 };
 
 interface BubbleProps extends HTMLAttributes<HTMLDivElement> {
@@ -23,10 +21,14 @@ interface BubbleProps extends HTMLAttributes<HTMLDivElement> {
   children?: ReactNode;
 }
 
-export function Bubble({ variant = 'default', className, children, ...props }: BubbleProps) {
+export function Bubble({ variant = 'user', className, children, ...props }: BubbleProps) {
   return (
     <div
-      className={cn(variants[variant], 'px-4 py-3 text-[15px] leading-relaxed', className)}
+      className={cn(
+        variants[variant],
+        'min-w-0 max-w-full px-4 py-3 text-[14.5px] leading-[1.68] text-[var(--text)]',
+        className,
+      )}
       {...props}
     >
       {children}
@@ -34,10 +36,13 @@ export function Bubble({ variant = 'default', className, children, ...props }: B
   );
 }
 
-/** Text content inside a bubble: reserves wrapping without stretching the column. */
+/**
+ * Content wrapper inside a bubble: enforces word/identifier wrapping without
+ * applying whitespace-pre-wrap globally (which breaks parsed Markdown block layouts).
+ */
 export function BubbleContent({ className, children, ...props }: HTMLAttributes<HTMLDivElement>) {
   return (
-    <div className={cn('whitespace-pre-wrap break-words', className)} {...props}>
+    <div className={cn('min-w-0 max-w-full [overflow-wrap:anywhere]', className)} {...props}>
       {children}
     </div>
   );

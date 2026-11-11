@@ -154,3 +154,103 @@ async def test_history_page_and_count_come_from_sql() -> None:
             )
             await session.commit()
         await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_history_handles_scalar_jsonb_tool_calls() -> None:
+    """Rows with 'null'::jsonb or empty arrays in tool_calls must not crash jsonb_array_length."""
+    engine, factory = _engine()
+    session_id = uuid4()
+    user_id = DEFAULT_USER_ID
+    started = datetime.now(timezone.utc)
+    try:
+        try:
+            async with factory() as session:
+                session.add(ThreadModel(id=session_id, user_id=user_id, title="Scalar JSONB Test"))
+                # 1. User message
+                session.add(
+                    MessageModel(
+                        id=uuid4(),
+                        session_id=session_id,
+                        role="user",
+                        content="Hello",
+                        created_at=started,
+                    )
+                )
+                # 2. Assistant message with SQL NULL tool_calls
+                session.add(
+                    MessageModel(
+                        id=uuid4(),
+                        session_id=session_id,
+                        role="assistant",
+                        content="Hi there (null)",
+                        tool_calls=None,
+                        created_at=started + timedelta(seconds=1),
+                    )
+                )
+                # 3. Assistant message with empty array []
+                session.add(
+                    MessageModel(
+                        id=uuid4(),
+                        session_id=session_id,
+                        role="assistant",
+                        content="Hi there (empty array)",
+                        tool_calls=[],
+                        created_at=started + timedelta(seconds=2),
+                    )
+                )
+                await session.commit()
+
+                # Raw SQL insert for assistant with scalar 'null'::jsonb
+                scalar_msg_id = uuid4()
+                await session.execute(
+                    text(
+                        "INSERT INTO messages (id, session_id, role, content, tool_calls, created_at) "
+                        "VALUES (:id, :session_id, 'assistant', 'Hi there (jsonb null)', 'null'::jsonb, :created_at)"
+                    ),
+                    {
+                        "id": scalar_msg_id,
+                        "session_id": session_id,
+                        "created_at": started + timedelta(seconds=3),
+                    },
+                )
+                # Tool call row that should be excluded from history
+                await session.execute(
+                    text(
+                        "INSERT INTO messages (id, session_id, role, content, tool_calls, created_at) "
+                        "VALUES (:id, :session_id, 'assistant', 'Calling tool', '[{\"id\": \"1\"}]'::jsonb, :created_at)"
+                    ),
+                    {
+                        "id": uuid4(),
+                        "session_id": session_id,
+                        "created_at": started + timedelta(seconds=4),
+                    },
+                )
+                await session.commit()
+        except OperationalError as exc:
+            await engine.dispose()
+            pytest.skip(f"PostgreSQL is not available: {exc}")
+
+        async with factory() as session:
+            repo = SqlChatRepository(session)
+            thread = await repo.get_session(session_id)
+            assert thread is not None
+            # 1 user + 3 prose assistants = 4 history messages
+            assert thread.message_count == 4
+
+            history = await repo.get_history(session_id)
+            assert len(history) == 4
+            assert [m.content for m in history] == [
+                "Hello",
+                "Hi there (null)",
+                "Hi there (empty array)",
+                "Hi there (jsonb null)",
+            ]
+    finally:
+        async with factory() as session:
+            await session.execute(
+                text("delete from threads where id = cast(:id as uuid)"),
+                {"id": str(session_id)},
+            )
+            await session.commit()
+        await engine.dispose()

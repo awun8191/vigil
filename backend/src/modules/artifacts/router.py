@@ -1,7 +1,7 @@
 """Artifacts router factory providing file metadata, registration, and downloads."""
 from uuid import UUID
 from fastapi import APIRouter, Depends, status
-from fastapi.responses import StreamingResponse
+from fastapi.responses import PlainTextResponse, StreamingResponse
 
 from src.config.exceptions import NotFoundError
 from src.config.settings import Settings
@@ -74,6 +74,35 @@ def build_artifacts_router(settings: Settings) -> APIRouter:
             "Content-Length": str(size),
         }
         return StreamingResponse(stream, media_type=media_type, headers=headers)
+
+    @router.get(
+        "/{artifact_id}/stream",
+        summary="Stream Artifact File Inline",
+    )
+    async def stream_artifact(
+        artifact_id: UUID,
+        service: ArtifactsRepository = Depends(get_artifacts_service),
+        _device: DeviceDTO = Depends(get_current_device),
+    ) -> StreamingResponse:
+        stream, filename, media_type, size = await service.get_artifact_stream(artifact_id)  # type: ignore[attr-defined]
+        headers = {
+            "Content-Disposition": f'inline; filename="{filename}"',
+            "Content-Length": str(size),
+        }
+        return StreamingResponse(stream, media_type=media_type, headers=headers)
+
+    @router.get(
+        "/{artifact_id}/text",
+        response_class=PlainTextResponse,
+        summary="Read Artifact As Text",
+    )
+    async def read_artifact_text(
+        artifact_id: UUID,
+        service: ArtifactsRepository = Depends(get_artifacts_service),
+        _device: DeviceDTO = Depends(get_current_device),
+    ) -> PlainTextResponse:
+        text = await service.get_artifact_text(artifact_id)  # type: ignore[attr-defined]
+        return PlainTextResponse(text)
 
     @router.get(
         "/run/{run_id}",

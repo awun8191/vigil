@@ -105,6 +105,14 @@ export default function PairRoute() {
               {submitting ? 'Pairing...' : 'Pair device'}
               <ArrowRight size={16} strokeWidth={1.75} aria-hidden="true" />
             </button>
+
+            <button
+              type="button"
+              onClick={() => navigate('/', { replace: true })}
+              className="mt-2 inline-flex w-full items-center justify-center gap-2 rounded-[10px] border border-[var(--border)] px-4 py-2 text-[13px] font-medium text-[var(--text-muted)] transition-colors hover:text-[var(--text)] hover:bg-[color-mix(in_srgb,var(--text)_6%,transparent)]"
+            >
+              Skip to Canvas (Developer Mode)
+            </button>
           </form>
 
           <p className="mt-5 flex items-start gap-2 text-[12px] leading-relaxed text-[var(--text-muted)]">

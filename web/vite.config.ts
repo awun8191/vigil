@@ -28,6 +28,7 @@ export default defineConfig({
         // Function form: the object form is not accepted by the rolldown bundler in Vite 8.
         manualChunks(id: string) {
           if (id.includes('node_modules/react-router')) return 'router';
+          if (id.includes('node_modules/react-markdown') || id.includes('node_modules/remark') || id.includes('node_modules/rehype') || id.includes('node_modules/katex') || id.includes('node_modules/micromark') || id.includes('node_modules/mdast') || id.includes('node_modules/hast')) return 'markdown';
           if (id.includes('node_modules/react')) return 'react';
           if (id.includes('node_modules/@tanstack')) return 'query';
           return undefined;

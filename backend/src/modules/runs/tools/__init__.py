@@ -1,4 +1,4 @@
-"""Core tool harness: nine stateless tools over the sandbox runner.
+"""Core tool harness: stateless tools over the sandbox runner and the model clients.
 
 Every tool declares a name, a JSON schema, and an approval level. The level is ``read``,
 ``local`` or ``external``. A call validates its arguments against the tool schema first.
@@ -29,7 +29,7 @@ ApprovalLevel = Literal["read", "local", "external"]
 APPROVAL_LEVELS: tuple[ApprovalLevel, ...] = ("read", "local", "external")
 
 #: The harness exposes built-in tools.
-TOOL_COUNT = 11
+TOOL_COUNT = 15
 
 
 class ToolResult(BaseModel):
@@ -77,6 +77,8 @@ class ToolContext:
     runner: SandboxRunnerProtocol
     container_id: str
     delivery_dir: Path
+    llm: Any | None = None
+    """Model client for tools that need inference, such as ``view_image``."""
 
 
 Handler = Callable[[Any, ToolContext], Awaitable[ToolResult]]
@@ -151,6 +153,7 @@ class Tool:
 
 
 # The tool modules import the shared types above, so they load after the definitions.
+from src.modules.runs.tools.browser import BROWSER_TOOLS  # noqa: E402
 from src.modules.runs.tools.delivery import DELIVERY_TOOLS  # noqa: E402
 from src.modules.runs.tools.files import FILE_TOOLS  # noqa: E402
 from src.modules.runs.tools.human import HUMAN_TOOLS  # noqa: E402
@@ -180,8 +183,10 @@ TOOLS: Mapping[str, Tool] = build_registry(
         *TASK_TOOLS,
         *SKILL_TOOLS,
         *EXA_TOOLS,
+        *BROWSER_TOOLS,
     )
 )
+
 
 
 def get_tool(name: str) -> Tool:

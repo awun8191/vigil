@@ -1,153 +1,111 @@
-# Project: vigil-agent (Phase 1: Foundations & Architecture Scaffold)
+# Project: Vigil — Hark Pro Open-Source Counterpart
 
 ## Architecture
-Vigil is an open-source, self-hostable proactive AI assistant and execution harness. Phase 1 establishes the rock-solid foundations and module-driven architecture scaffold:
-- **FastAPI Backend (`backend/`)**: Modular architecture with dynamic router factories and ASGI middleware pipeline.
-- **Strict Protocol Boundaries**: Every domain module defines persistence and external interaction solely through `@runtime_checkable typing.Protocol` abstractions in `repository.py`. Zero SQL, zero ORM, zero HTTP calls in `repository.py`.
-- **Constructor Dependency Injection**: `service.py` implements all domain logic, accepting `session` and `settings` via constructor injection.
-- **Factory Router Pattern**: Zero bare module-level global `APIRouter`s. Every module exposes `build_<module>_router(settings: Settings) -> APIRouter`.
-- **Central Dependency Hub**: `backend/src/dependencies.py` re-exports all providers for one-stop injection.
-- **Uniform Error Handling**: All errors inherit from `AppException` returning `{"code", "message", "request_id", "details"}` with correlation header `X-Request-ID`.
-- **Security & Pairing**: SHA-256 token hashing, AES-256-GCM secret encryption, startup ASCII QR code pairing flow.
-- **Containerized Deployment**: Multi-service Docker environment (`postgres` with pgvector, `api`, `worker`).
+Vigil is an autonomous, proactive AI executive assistant with an obsidian/alabaster dual theme, streaming chat, inline approval flows, sandboxed micro-app previewing, a pluggable Model Context Protocol (MCP) transport factory, and multi-service connectors.
+
+```
+┌────────────────────────────────────────────────────────────────────────┐
+│                        Web Frontend (React + Vite)                     │
+│  - Dual Theme: Obsidian Horizon (Dark) & Tactile Alabaster (Light)     │
+│  - Minimalist `Vigil ✦` Vector Spark Brand Mark (Mascot Decommissioned)│
+│  - NotificationCard & TaskCard with Urgency Rails & Active Verb Pills  │
+│  - InlineApprovalCard within Chat Stream (Direct Decision Handling)    │
+│  - ArtifactCard Sandboxed Micro-App Preview (Viewport & Pinning)       │
+│  - Settings Connectors Studio (AES-256-GCM Vault & 1-Click MCP Presets)│
+│  - MediaRecorder Voice Recording bound to Groq Whisper STT             │
+└───────────────────────────────────┬────────────────────────────────────┘
+                                    │ HTTP / SSE / Streaming
+                                    ▼
+┌────────────────────────────────────────────────────────────────────────┐
+│                        Backend (FastAPI + AsyncIO)                     │
+│  - Triage Pipeline: Proactivity Tags & Action Verbs                    │
+│  - Artifact Delivery: HTML Micro-Apps, Documents, Screenshots          │
+│  - Voice Router: POST /api/v1/voice/transcribe (Groq Whisper + Mocks)  │
+│  - Pluggable MCP Factory: Stdio (Vault Env) & SSE (Vault Headers)      │
+│  - MCP Tool Bridge: Dynamic Adaptation to Vigil Runtime Tools & Policy │
+│  - Browser Tools: Firecrawl Navigate & Extract + Screenshot Artifacts  │
+│  - Key Vault: AES-256-GCM Cryptographic Storage & Transport Injection  │
+└────────────────────────────────────────────────────────────────────────┘
+```
 
 ## Feature Inventory
 | # | Feature | Description | Milestone | Source |
 |---|---------|-------------|-----------|--------|
-| F01 | Monorepo Directory Scaffolding | Top-level folders: `connectors/gmail/`, `mobile/`, `web/`, `skills/`, `deploy/`, `docs/` | M1 | R1 |
-| F02 | UV Python Environment | `backend/pyproject.toml` targeting Python >=3.12 with all core and test dependencies | M1 | R1 |
-| F03 | Core Settings Configuration | Pydantic v2 `BaseSettings` loading DB, ports, secrets, tiered models, and LLM keys | M2 | R2 |
-| F04 | Uniform Exception Hierarchy | `AppException` with `NotFoundError`, `UnauthorizedError`, `ForbiddenError`, `ConflictError`, `ValidationError` | M2 | R2 |
-| F05 | Uniform Error Serialization | FastAPI exception handlers returning `{code, message, request_id, details}` echoing `X-Request-ID` | M2 | R2 |
-| F06 | Structured Logging Pipeline | JSON/text logging with contextvars propagating `request_id` | M2 | R2 |
-| F07 | Security & Crypto Primitives | SHA-256 `hash_token`, `verify_token` and AES-256-GCM `encrypt_secret`, `decrypt_secret` | M2 | R2 |
-| F08 | Request ID Middleware | ASGI middleware extracting or generating UUID `X-Request-ID` header and contextvar | M2 | R2 |
-| F09 | Timing Middleware | ASGI middleware measuring request processing latency in `X-Process-Time` | M2 | R2 |
-| F10 | Idempotency Middleware | ASGI middleware enforcing `Idempotency-Key` validation on mutating requests | M2 | R2 |
-| F11 | Root API Router Factory | `create_api_router(settings)` dynamically aggregating module routers under `/api/v1` | M2 | R2 |
-| F12 | 14 Domain Module Skeletons | Scaffold modules (`health`, `auth`, `cards`, `triage`, `runs`, `approvals`, `chat`, `artifacts`, `memory`, `compaction`, `skills`, `connectors`, `settings`, `jobs`) | M3 | R3 |
-| F13 | Pure Repository Protocols | Strict `@runtime_checkable typing.Protocol` abstractions in `repository.py` with 0 SQL/ORM | M3 | R3 |
-| F14 | Module Services & DTOs | `service.py` constructor DI and `data.py` Pydantic DTOs for all 14 modules | M3 | R3 |
-| F15 | Module Router Factories | `build_<module>_router(settings)` factory across all 14 modules | M3 | R3 |
-| F16 | Central Dependencies Hub | `backend/src/dependencies.py` centrally re-exporting all providers | M3 | R3 |
-| F17 | External Integration Protocols | `backend/src/integrations/repositories.py` abstracting Jev, LLM, Sandbox, MCP, Notifications | M3 | R3 |
-| F18 | Working Health Module | `GET /api/v1/health` returning liveness and DB readiness probe | M4 | R4 |
-| F19 | Device Pairing Flow | `POST /api/v1/auth/pair` validating pairing code and issuing long-lived bearer token | M4 | R4 |
-| F20 | Startup ASCII QR Code | Generator printing terminal ASCII QR code and temporary pairing code on boot | M4 | R4 |
-| F21 | Authenticated Device Identity | `GET /api/v1/auth/me` authenticating bearer token against SHA-256 hash | M4 | R4 |
-| F22 | Docker Compose Harness | `deploy/docker-compose.yml` defining `postgres` (pgvector:pg16), `api`, `worker` | M5 | R5 |
-| F23 | Environment Configuration Doc | Exhaustive `.env.example` documenting all configuration keys and defaults | M5 | R5 |
-| F24 | E2E & Architectural Tests | Unit, contract, AST architectural validation, and integration tests passing via `uv run pytest` | M6 | Acceptance |
-| F25 | Docker Compose Validation | Verification that `docker compose -f deploy/docker-compose.yml config` passes cleanly | M6 | Acceptance |
+| 1 | Hark Pro Dual Theme | Obsidian Horizon (`[data-theme='dark']`) & Tactile Alabaster (`[data-theme='light']`) in `tokens.css` | M1 | R1 |
+| 2 | 17-Point Linear Spring | `--ease-spring: linear(...)` spring curve replacing monotonic cubic-bezier | M1 | R1 |
+| 3 | Visual Tokens & Radii | Specular rim catchlights, typography scale, squircle radii (`24px`, `20px`, `18px`, `26px`, `rounded-full`) | M1 | R1 |
+| 4 | Mascot Decommissioning | Full removal of `<EyeTracker />` and `.eyt*` CSS rules; replaced by `Vigil ✦` vector spark | M2 | R2 |
+| 5 | Card Schemas & Triage | Backend `proactivity_tag` and active `verb` fields in `cards/data.py`, `schemas/triage.py`, `triage/service.py` | M2 | R2 |
+| 6 | Action Card Urgency Rails | 3px urgency rails, proactivity badges, and active verb action buttons in `NotificationCard` & `TaskCard` | M2 | R2 |
+| 7 | Inline Chat Approvals | `InlineApprovalCard.tsx` integrated in `ThinkingCapsule` & `ChatRoute` without navigation redirect | M2 | R2 |
+| 8 | Micro-App Previews & Pinning | Sandboxed iframe preview, code/preview toggle, viewport switcher (`375px`, `768px`, `100%`) in `ArtifactCard`, pinned rail in `WidgetsRail` | M2 | R2 |
+| 9 | Pluggable MCP Transport Factory | `MCPTransportProtocol`, `StdioTransport` (vault env injection), `SSETransport` (vault header injection), presets for firecrawl, github, filesystem, postgres, linear in `backend/src/integrations/mcp/factory.py` | M3 | R3 |
+| 10 | Dynamic MCP Tool Bridge | `MCPToolAdapterFactory` in `backend/src/modules/runs/tools/mcp_bridge.py` adapting MCP tools to Vigil `Tool` registry and `RunLoop` with approval partitioning | M3 | R3 |
+| 11 | Cloud Browser Tools | `browser_navigate` and `browser_extract` powered by Firecrawl API with screenshot artifacts and mock fallbacks in `backend/src/modules/runs/tools/browser.py` | M4 | R4 |
+| 12 | Voice Transcription STT | `POST /api/v1/voice/transcribe` with Groq Whisper & fallback mocks in `backend/src/modules/voice/router.py`, connected to `MediaRecorder` in `InputPill.tsx` | M4 | R4 |
+| 13 | Key Vault & MCP Studio | AES-256-GCM Key Vault management, 1-click preset gallery, and custom server registration in `web/src/components/settings/sections.tsx` and settings backend | M4 | R4 |
+| 14 | E2E Regression & Quality | Complete frontend build/typecheck/lint and backend pytest test suite passing cleanly with fallback mock coverage | M5 | Verification |
 
 ## Milestones
 | # | Name | Scope | Dependencies | Status |
 |---|------|-------|-------------|--------|
-| M1 | Monorepo & Python Environment | F01, F02: `pyproject.toml`, `uv sync`, directory scaffolding | none | DONE |
-| M2 | Core Config, Middlewares & Exceptions | F03, F04, F05, F06, F07, F08, F09, F10, F11: `src/config/`, `src/middlewares/` | M1 | DONE |
-| M3 | Domain Module Protocols & Skeletons | F12, F13, F14, F15, F16, F17: 14 domain modules, protocols, router factories, central deps | M2 | IN_PROGRESS |
-| M4 | Working Health & Device Auth Modules | F18, F19, F20, F21: operational health & auth endpoints, ASCII QR, token hashing | M3 | PLANNED |
-| M5 | Deployment & Database Harness | F22, F23: `deploy/docker-compose.yml`, `.env.example`, docker config verification | M1 | PLANNED |
-| M6 | Testing, Verification & Hardening | F24, F25: complete unit/contract/AST test suites, E2E test verification, audit | M4, M5 | PLANNED |
+| M1 | Hark Pro Design System & Tokens | `web/src/styles/tokens.css` (Obsidian Horizon, Tactile Alabaster, squircle geometry, rim catchlights, 17-point linear spring, mascot style removal) | none | DONE |
+| M2 | UI Component Architecture & Mascot Decommissioning | Mascot decommissioning (`HeaderBrand.tsx`, `LandingRoute.tsx`), backend schemas & triage (`cards/data.py`, `schemas/triage.py`, `triage/service.py`), `NotificationCard.tsx`, `TaskCard.tsx`, `InlineApprovalCard.tsx`, `ThinkingCapsule.tsx`, `ChatRoute.tsx`, `ArtifactCard.tsx`, `WidgetsRail.tsx` | M1 | DONE |
+| M3 | Pluggable MCP Factory Pattern & Tool Registry | `backend/src/integrations/mcp/factory.py`, presets (firecrawl, github, filesystem, postgres, linear), `backend/src/modules/runs/tools/mcp_bridge.py`, approval partitioning in `runs/service.py` | none | DONE |
+| M4 | Cloud Browser, Groq Whisper STT, and Key Vault | `backend/src/modules/runs/tools/browser.py` (Firecrawl), `backend/src/modules/voice/router.py` (Groq Whisper), `InputPill.tsx` (MediaRecorder), `settings/sections.tsx` (Key Vault & MCP Studio) | M3 | DONE |
+| M5 | E2E Regression & Quality Verification | Full verification: `pnpm --prefix web typecheck`, `pnpm --prefix web build`, `uv run pytest tests/unit/`, integration tests, fallback mocks | M1, M2, M3, M4 | IN_PROGRESS |
 
 ## Interface Contracts
 
-### Error Response Contract
-All error responses from FastAPI endpoints must conform to:
-```json
-{
-  "code": "ERROR_CODE_STRING",
-  "message": "Human-readable explanation",
-  "request_id": "uuid-string",
-  "details": null | {}
-}
-```
-Headers:
-- `X-Request-ID`: echoed from request or newly generated UUID.
-- `X-Process-Time`: execution latency formatted e.g. `0.001234s`.
+### 1. Visual Tokens Contract (`tokens.css`)
+- Light theme: `[data-theme='light']`
+  - `--bg-from`: `#f8f7f5` (warm alabaster)
+  - `--bg-to`: `#f0eee9`
+  - `--card`: `rgba(255, 255, 255, 0.85)`
+  - `--border`: `rgba(0, 0, 0, 0.08)`
+  - `--shadow-rim`: `inset 0 1px 0 0 rgba(255, 255, 255, 0.9)`
+- Dark theme: `[data-theme='dark']`
+  - `--bg-from`: `#0a0a0c` (obsidian)
+  - `--bg-to`: `#121216`
+  - `--card`: `rgba(22, 22, 26, 0.7)`
+  - `--border`: `rgba(255, 255, 255, 0.08)`
+  - `--shadow-rim`: `inset 0 1px 0 0 rgba(255, 255, 255, 0.08)`
+- Spring easing:
+  `--ease-spring: linear(0, 0.006, 0.025 2.8%, 0.101 6.1%, 0.539 18.9%, 0.721 23.4%, 0.849 28%, 0.937 32.6%, 0.995 37.6%, 1.019 42.2%, 1.026 47.1%, 1.021 54%, 1.001 68.8%, 0.996 82.5%, 1);`
+- Squircles: `--r-squircle-sm: 18px; --r-squircle-md: 20px; --r-squircle-lg: 24px; --r-squircle-xl: 26px;`
 
-### Router Factory Contract
-Every module router must be defined as:
-```python
-def build_<module>_router(settings: Settings) -> APIRouter:
-    router = APIRouter(prefix="/<module>", tags=["<module>"])
-    ...
-    return router
-```
-No module may define a bare global `router = APIRouter()`.
+### 2. Card & Action Schemas Contract
+- `CardResponse`:
+  - `proactivity_tag: str | None = None`
+  - `verb: str | None = None`
+  - `actions: list[CardActionSchema]`
+- `CardActionSchema`:
+  - `verb: str | None = None`
 
-### Repository Protocol Contract
-Every `src/modules/<module>/repository.py` must contain:
-```python
-from typing import Protocol, runtime_checkable
+### 3. Voice Transcription Contract
+- `POST /api/v1/voice/transcribe`
+- Request: `multipart/form-data` with `file: UploadFile`
+- Response: `{"text": str, "language": str | None, "duration_seconds": float | None}`
+- Fallback: deterministic mock transcription when `GROQ_API_KEY` is unset.
 
-@runtime_checkable
-class <Module>Repository(Protocol):
-    ...
-```
-Zero imports of `sqlalchemy`, `sqlmodel`, `tortoise`, or raw SQL.
+### 4. MCP Factory & Preset Contract
+- Protocol: `MCPTransportProtocol` with `connect()`, `list_tools()`, `call_tool()`, `close()`
+- Presets: `firecrawl`, `github`, `filesystem`, `postgres`, `linear`
+- Vault injection: Injects environment variables (stdio) or request headers (sse) from encrypted key vault.
 
-### Security Contract
-- `hash_token(token: str) -> str`: Returns SHA-256 hex digest.
-- `verify_token(token: str, token_hash: str) -> bool`: Constant-time comparison.
-- `encrypt_secret(plaintext: str, secret_key: str) -> str`: AES-256-GCM base64 encoded.
-- `decrypt_secret(ciphertext: str, secret_key: str) -> str`: AES-256-GCM decrypt.
-
-### Auth & Health Wire Contracts
-- `GET /api/v1/health` -> `200 OK` `{"status": "ok", "version": "0.1.0", "database": "connected" | "disabled"}`
-- `POST /api/v1/auth/pair` with `{"pairing_code": "VIG-...", "device_name": "My Device"}` -> `200 OK` `{"device_token": "vgt_...", "device_id": "uuid", "device_name": "My Device"}`
-- `GET /api/v1/auth/me` with `Authorization: Bearer vgt_...` -> `200 OK` `{"device_id": "uuid", "device_name": "My Device", "created_at": "...", "last_seen_at": "..."}`
+### 5. Browser Tool Contract
+- `browser_navigate(url: str, wait_until: str = "networkidle") -> ToolResult`
+- `browser_extract(url: str, prompt: str = "") -> ToolResult`
+- Artifacts: Writes screenshot PNG to `context.delivery_dir` with `artifact_ref`.
 
 ## Code Layout
-```
-/home/nasbombz/Documents/Projects/vigil-agent/
-├── backend/
-│   ├── pyproject.toml
-│   ├── uv.lock
-│   ├── src/
-│   │   ├── main.py
-│   │   ├── dependencies.py
-│   │   ├── config/
-│   │   │   ├── settings.py
-│   │   │   ├── exceptions.py
-│   │   │   ├── logging.py
-│   │   │   ├── security.py
-│   │   │   └── router.py
-│   │   ├── middlewares/
-│   │   │   ├── request_id.py
-│   │   │   ├── timing.py
-│   │   │   └── idempotency.py
-│   │   ├── integrations/
-│   │   │   └── repositories.py
-│   │   ├── schemas/
-│   │   └── modules/
-│   │       ├── health/
-│   │       ├── auth/
-│   │       ├── cards/
-│   │       ├── triage/
-│   │       ├── runs/
-│   │       ├── approvals/
-│   │       ├── chat/
-│   │       ├── artifacts/
-│   │       ├── memory/
-│   │       ├── compaction/
-│   │       ├── skills/
-│   │       ├── connectors/
-│   │       ├── settings/
-│   │       └── jobs/
-│   └── tests/
-│       ├── conftest.py
-│       ├── unit/
-│       └── integration/
-├── connectors/gmail/
-├── mobile/
-├── web/
-├── skills/
-├── deploy/
-│   ├── docker-compose.yml
-│   └── Dockerfile.api
-├── docs/
-├── .env.example
-├── README.md
-└── PROJECT.md
-```
+- Frontend: `web/src/`
+  - Tokens: `styles/tokens.css`
+  - Components: `components/layout/HeaderBrand.tsx`, `components/ui/NotificationCard.tsx`, `components/home/TaskCard.tsx`, `components/chat/InlineApprovalCard.tsx`, `components/chat/ThinkingCapsule.tsx`, `components/chat/ArtifactCard.tsx`, `components/chat/InputPill.tsx`, `components/settings/sections.tsx`, `components/home/WidgetsRail.tsx`
+  - Routes: `routes/LandingRoute.tsx`, `routes/ChatRoute.tsx`
+- Backend: `backend/src/`
+  - Cards & Triage: `modules/cards/data.py`, `schemas/triage.py`, `modules/triage/service.py`
+  - MCP Integrations: `integrations/mcp/factory.py`, `integrations/mcp/mcp.py`
+  - Tool Bridge & Browser: `modules/runs/tools/mcp_bridge.py`, `modules/runs/tools/browser.py`, `modules/runs/tools/__init__.py`
+  - Voice: `modules/voice/router.py`, `config/router.py`
+  - Settings & Vault: `modules/settings/vault.py`, `modules/settings/router.py`

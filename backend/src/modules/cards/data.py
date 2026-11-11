@@ -12,6 +12,7 @@ class CardActionSchema(BaseModel):
     id: str = Field(..., description="Unique action key (e.g. 'quick_reply').")
     label: str = Field(..., description="Display text for the action button.")
     action_type: str = Field(..., description="Action trigger category ('run', 'dismiss', 'reply').")
+    verb: str | None = Field(default=None, description="Active verb for action pill (e.g. 'Review', 'Reply', 'Approve').")
     payload: dict[str, Any] = Field(default_factory=dict, description="Payload dispatched upon trigger.")
 
 
@@ -25,6 +26,8 @@ class CardResponse(BaseModel):
     thread_id: str | None = Field(default=None, description="Connector thread identifier for grouping.")
     type: str = Field(..., description="Card classification ('email', 'calendar', 'alert').")
     urgency: Literal["critical", "high", "medium", "low"] = Field(..., description="Card urgency level.")
+    proactivity_tag: str | None = Field(default=None, description="Proactivity categorization tag.")
+    verb: str | None = Field(default=None, description="Primary active verb for the card.")
     title: str = Field(..., description="Card headline summary.")
     summary: str | None = Field(default=None, description="Detailed executive briefing text.")
     due_at: datetime | None = Field(default=None, description="Deadline timestamp if applicable.")
@@ -49,6 +52,8 @@ class CardCreateRequest(BaseModel):
     """Inbound request for creating or injecting a card."""
     type: str = Field(..., description="Card category.")
     urgency: Literal["critical", "high", "medium", "low"] = Field(default="medium")
+    proactivity_tag: str | None = Field(default=None, description="Proactivity categorization tag.")
+    verb: str | None = Field(default=None, description="Primary active verb for the card.")
     title: str = Field(..., min_length=1, max_length=250)
     summary: str | None = None
     thread_id: str | None = None

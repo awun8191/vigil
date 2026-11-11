@@ -357,7 +357,7 @@ class RunLoop:
         tool_schemas: Sequence[Mapping[str, Any]] | None = None,
         cost: Any | None = None,
         max_iterations: int = 40,
-        context_token_limit: int = 100_000,
+        context_token_limit: int = 8_000,
         compact_ratio: float = 0.7,
     ) -> None:
         self.journal = journal
@@ -516,6 +516,7 @@ class RunLoop:
                 {
                     "tool_call_id": call.id,
                     "tool_name": call.name,
+                    "arguments": call.arguments,
                     "partition": partitions[call.id],
                 },
             )
@@ -593,7 +594,7 @@ class RunLoop:
     ) -> list[MessageDTO]:
         """Stage two: record a compaction request when the context is too large."""
         limit = int(self.context_token_limit * self.compact_ratio)
-        if assembled.tokens <= limit:
+        if assembled.tokens <= limit and len(messages) <= 10:
             return list(messages)
         if self.compactor is not None:
             class _HybridMessage(dict[str, Any]):
@@ -801,10 +802,27 @@ class RunLoop:
                 tool_arguments=call.arguments,
             )
         )
+        result_payload: dict[str, Any] = {
+            "tool_call_id": call.id,
+            "tool_name": call.name,
+        }
+        if isinstance(result, Mapping):
+            res_dict = dict(result)
+            clean_res: dict[str, Any] = {}
+            for k, v in res_dict.items():
+                if isinstance(v, str) and len(v) > 2000:
+                    clean_res[k] = v[:2000] + "... [truncated]"
+                else:
+                    clean_res[k] = v
+            result_payload["result"] = clean_res
+        else:
+            res_str = str(result)
+            result_payload["result"] = res_str[:2000] + "... [truncated]" if len(res_str) > 2000 else res_str
+
         await self._record_step(
             run.id,
             "tool_result",
-            {"tool_call_id": call.id, "tool_name": call.name},
+            result_payload,
         )
         return row
 

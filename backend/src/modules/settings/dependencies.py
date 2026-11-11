@@ -14,3 +14,10 @@ def get_settings_service(
 ) -> SettingsService:
     """Dependency provider for SettingsService."""
     return SettingsService(session=session, settings=settings)
+
+
+from src.dependencies import get_key_vault_service  # noqa: E402
+from src.modules.settings.vault import KeyVaultService  # noqa: E402
+
+__all__ = ["get_settings_service", "get_key_vault_service", "KeyVaultService"]
+

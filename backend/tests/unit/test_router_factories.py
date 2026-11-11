@@ -32,7 +32,9 @@ EXPECTED_MODULES = [
     "connectors",
     "settings",
     "jobs",
+    "voice",
 ]
+
 
 
 def get_domain_router_files() -> list[tuple[str, Path]]:

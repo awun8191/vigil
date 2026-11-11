@@ -114,6 +114,16 @@ export const useSession = create<SessionState>((set) => ({
 
     const stored = await readStoredSession();
     if (!stored) {
+      if (import.meta.env.DEV) {
+        setBearerToken('vgt_testtoken');
+        try {
+          const device = await me();
+          set({ status: 'authed', device });
+          return;
+        } catch {
+          // Fallback if dev token fails
+        }
+      }
       setBearerToken(null);
       set({ status: 'unauthed', device: null });
       return;

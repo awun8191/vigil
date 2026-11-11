@@ -96,6 +96,15 @@ class Settings(BaseSettings):
     REASONING_LLM_BASE_URL: str = "https://api.openai.com/v1"
     REASONING_LLM_API_KEY: str = ""
     REASONING_LLM_MODEL: str = "muse-spark-1.3-contributor"
+    CONTEXT_TOKEN_LIMIT: int = 8_000
+
+    # --- Vision Model (view_image) ---
+    # The image understanding tier. Every value falls back to the fast tier
+    # when it is empty, so a deployment that sets FAST_LLM_API_KEY can view
+    # images with no extra configuration.
+    VISION_LLM_BASE_URL: str = ""
+    VISION_LLM_API_KEY: str = ""
+    VISION_LLM_MODEL: str = ""
 
     # --- Local Embedding Model (bge-small-en-v1.5, int8 ONNX) ---
     # The embedding path is local and offline. No embedding API is called.
@@ -191,6 +200,14 @@ class Settings(BaseSettings):
     # --- Exa Web Search MCP ---
     EXA_MCP_URL: str = "https://mcp.exa.ai/mcp"
     EXA_API_KEY: str = ""
+
+    # --- Firecrawl Web Scraper ---
+    FIRECRAWL_API_KEY: str | None = None
+    FIRECRAWL_BASE_URL: str = "https://api.firecrawl.dev"
+
+    # --- Groq Whisper STT ---
+    GROQ_API_KEY: str | None = None
+    GROQ_BASE_URL: str = "https://api.groq.com/openai/v1"
 
 
 @lru_cache

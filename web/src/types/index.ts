@@ -21,6 +21,7 @@ export interface CardAction {
   label: string;
   action_type: string;
   payload: Record<string, unknown>;
+  verb?: string | null;
 }
 
 export interface Card {
@@ -38,6 +39,8 @@ export interface Card {
   feedback: string | null;
   created_at: string;
   updated_at: string;
+  proactivity_tag?: string | null;
+  verb?: string | null;
 }
 
 export interface CardListResponse {
@@ -94,6 +97,7 @@ export interface ChatMessage {
   role: 'user' | 'assistant' | 'system' | string;
   content: string;
   created_at: string;
+  run_id?: string | null;
 }
 
 /** A message rendered in the stream, including optimistic and streaming-local entries.
@@ -174,7 +178,8 @@ export type RunStepType =
   | 'message_delta'
   | 'approval_required'
   | 'run_completed'
-  | 'run_failed';
+  | 'run_failed'
+  | 'compaction';
 
 export interface RunStep {
   id: string;
@@ -182,6 +187,17 @@ export interface RunStep {
   step_number: number;
   event_type: RunStepType;
   payload: Record<string, unknown>;
+  created_at: string;
+}
+
+/** Response shape of GET /artifacts/run/{run_id} and GET /artifacts/{id}. */
+export interface Artifact {
+  id: string;
+  run_id: string;
+  kind: string;
+  path: string;
+  size_bytes: number;
+  preview: string | null;
   created_at: string;
 }
 
@@ -314,6 +330,28 @@ export interface AuditLogEntry {
   details: Record<string, unknown>;
   created_at: string;
 }
+
+export interface VaultSecretDTO {
+  key_name: string;
+  masked_value: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface SetVaultSecretRequest {
+  key: string;
+  value: string;
+}
+
+/** Result of a provider check. A rejected key is a 200 report, not an error response. */
+export interface VaultValidationResult {
+  key_name: string;
+  provider: string;
+  valid: boolean;
+  status_code: number | null;
+  message: string;
+}
+
 
 /* -------------------------------------------------------------------------------------------
    Server-sent events. The transport is fetch plus a body reader, never EventSource, because

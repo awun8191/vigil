@@ -123,6 +123,7 @@ export function TaskCard({ card, index, onError }: Props) {
 
   const statusLabel = isBlocking ? 'Waiting on you' : card.due_at ? 'Gentle reminder' : 'For the record';
   const finished = subscription.run ? ['completed', 'failed'].includes(subscription.run.status) : false;
+  const activeVerb = card.verb || primary?.verb || (primary ? (primary.action_type === 'reply' ? 'Reply' : primary.action_type === 'dismiss' ? 'Dismiss' : 'Review') : null);
 
   return (
     <motion.div
@@ -136,6 +137,20 @@ export function TaskCard({ card, index, onError }: Props) {
       <NotificationCard
         bodyId={`card-body-${card.id}`}
         avatar={<SourceAvatar size={36} source={source} />}
+        urgency={card.urgency}
+        proactivityTag={card.proactivity_tag}
+        verb={activeVerb}
+        pillText={card.summary || card.title}
+        onVerbClick={() => {
+          if (primary && isKnown(primary)) {
+            dispatch(primary);
+          }
+        }}
+        onNotchClick={() => {
+          navigate('/agent/chat', {
+            state: { seed: `Tell me about: ${card.title}`, cardId: card.id },
+          });
+        }}
         meta={
           <>
             <span>{source.name}</span>
@@ -156,7 +171,7 @@ export function TaskCard({ card, index, onError }: Props) {
         ) : null}
 
         {runId && !finished ? (
-          <div className="mt-4 rounded-[8px] border border-[var(--border)] px-3 py-2.5">
+          <div className="mt-4 rounded-[var(--r-inner)] border border-[var(--border)] px-3 py-2.5">
             <div className="flex items-center gap-2 text-[13px] font-medium">
               <Loader2 size={14} className="animate-spin text-[var(--text-muted)]" strokeWidth={1.75} />
               <span className="text-[var(--text-muted)]">
@@ -205,7 +220,14 @@ export function TaskCard({ card, index, onError }: Props) {
               ) : (
                 <ArrowUpRight size={16} strokeWidth={1.5} />
               )}
-              {primary.label}
+              {primary.verb && primary.verb !== primary.label ? (
+                <span>
+                  <span className="font-semibold">{primary.verb}</span>
+                  <span className="opacity-75 font-normal"> · {primary.label}</span>
+                </span>
+              ) : (
+                primary.label
+              )}
             </button>
           ) : null}
 
@@ -217,7 +239,14 @@ export function TaskCard({ card, index, onError }: Props) {
               disabled={busy || !isKnown(action)}
               className="btn btn-ghost"
             >
-              {action.label}
+              {action.verb && action.verb !== action.label ? (
+                <span>
+                  <span className="font-semibold">{action.verb}</span>
+                  <span className="opacity-75 font-normal"> · {action.label}</span>
+                </span>
+              ) : (
+                action.label
+              )}
             </button>
           ))}
 

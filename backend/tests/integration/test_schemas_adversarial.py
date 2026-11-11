@@ -1202,7 +1202,7 @@ class TestSchemaStressHarness:
             await session.execute(
                 sa.text(
                     "INSERT INTO jobs (id, type, run_at) "
-                    "VALUES (:id, 'test_job', now());"
+                    "VALUES (:id, 'test_job', now() + interval '1 day');"
                 ),
                 {"id": jid},
             )

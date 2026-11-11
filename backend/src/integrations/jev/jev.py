@@ -106,13 +106,25 @@ class JevClient:
         probabilities: dict[str, float] = {}
 
         for q_key in questions:
-            if "bulk" in q_key.lower():
-                answers[q_key] = "yes" if is_bulk else "no"
-                probabilities[q_key] = 0.95 if is_bulk else 0.05
-            elif any(k in q_key.lower() for k in ["urgent", "urgency"]):
+            q_lower = q_key.lower()
+            if "bulk" in q_lower:
+                content_bulk = len(str(state.get("content", ""))) > 250 or state.get("kind") in ("tool_result", "tool")
+                is_b = is_bulk or content_bulk
+                answers[q_key] = "yes" if is_b else "no"
+                probabilities[q_key] = 0.88 if is_b else 0.10
+            elif "needed" in q_lower:
+                # In compaction, unlocked intermediate outputs and old chatter can be summarized/dropped
+                is_n = state.get("kind") in ("approval", "decision") or state.get("role") == "user"
+                answers[q_key] = "yes" if is_n else "no"
+                probabilities[q_key] = 0.85 if is_n else 0.15
+            elif "user_fact" in q_lower:
+                is_u = state.get("role") == "user" or "user" in str(state.get("kind", ""))
+                answers[q_key] = "yes" if is_u else "no"
+                probabilities[q_key] = 0.90 if is_u else 0.05
+            elif any(k in q_lower for k in ["urgent", "urgency"]):
                 answers[q_key] = "yes" if is_urgent else "no"
                 probabilities[q_key] = 0.92 if is_urgent else 0.15
-            elif "action" in q_key.lower():
+            elif "action" in q_lower:
                 answers[q_key] = "yes" if is_actionable else "no"
                 probabilities[q_key] = 0.88 if is_actionable else 0.12
             else:

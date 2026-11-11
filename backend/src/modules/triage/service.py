@@ -124,9 +124,28 @@ class TriageService:
                 summary = str(state.get("snippet", state.get("body", "")))[:200]
                 thread_id = str(state.get("thread_id", str(item_id)))
 
+                proactivity_tag = (
+                    "Urgent Action" if p_urgent > 0.8 else (
+                        "Decision Needed" if p_action > 0.8 else "Autonomous Observation"
+                    )
+                )
+                primary_verb = "Review" if state.get("type") != "calendar" else "Prepare"
+
                 actions = [
-                    CardActionDTO(id="quick_reply", label="Quick Reply", action_type="reply", payload={"thread_id": thread_id}),
-                    CardActionDTO(id="mark_done", label="Mark Done", action_type="dismiss", payload={}),
+                    CardActionDTO(
+                        id="quick_reply",
+                        label="Quick Reply",
+                        action_type="reply",
+                        verb="Reply",
+                        payload={"thread_id": thread_id},
+                    ),
+                    CardActionDTO(
+                        id="mark_done",
+                        label="Mark Done",
+                        action_type="dismiss",
+                        verb="Dismiss",
+                        payload={},
+                    ),
                 ]
                 await self.cards_service.upsert_card_for_thread(
                     CardCreateDTO(
@@ -135,6 +154,8 @@ class TriageService:
                         thread_id=thread_id,
                         type="email",
                         urgency=urgency,
+                        proactivity_tag=proactivity_tag,
+                        verb=primary_verb,
                         title=title,
                         summary=summary,
                         due_at=None,

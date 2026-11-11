@@ -20,7 +20,7 @@ import {
 } from 'lucide-react';
 import type { ComponentType, ReactNode } from 'react';
 import { HeroMockup } from '@/components/landing/HeroMockup';
-import EyeTracker from '@/components/landing/EyeTracker';
+import { VigilSpark } from '@/components/chat/MessageItem';
 
 const bounce = { type: 'spring' as const, stiffness: 260, damping: 17 };
 const rise = { type: 'spring' as const, stiffness: 140, damping: 20 };
@@ -96,18 +96,10 @@ function LandingNav() {
       className="fixed inset-x-0 top-0 z-40 border-b border-[var(--border)] bg-[color-mix(in_srgb,var(--bg-from)_85%,transparent)] backdrop-blur-xl"
     >
       <div className="mx-auto flex h-14 w-full max-w-5xl items-center px-6">
-        <span className="flex items-center gap-2.5">
+        <span className="flex items-center gap-2">
           <span className="text-[15px] font-semibold tracking-heading">Vigil</span>
-          <span className="eyt-inline flex items-center">
-            <EyeTracker
-              size={38}
-              shape="Cube"
-              eyes="Slant"
-              eyeScale={1.15}
-              follow={20}
-              bounce={40}
-              within="body"
-            />
+          <span className="flex items-center text-[var(--accent)]" aria-hidden="true">
+            <VigilSpark className="h-4 w-4" />
           </span>
         </span>
         <nav aria-label="Site" className="ml-6 hidden items-center gap-5 md:flex">

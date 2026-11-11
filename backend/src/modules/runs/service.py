@@ -8,7 +8,8 @@ state machine and the journal in :mod:`state`, and the barrier invariant in
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Any, AsyncIterator, Sequence
+from pathlib import Path
+from typing import Any, AsyncIterator, Mapping, Sequence
 from uuid import UUID, uuid4
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -23,7 +24,7 @@ from src.modules.runs.core_context import (
     DEFAULT_BUNDLED_SKILLS,
     build_core_system_prompt,
 )
-from src.modules.runs.tools import TOOLS, openai_tool_declarations
+from src.modules.runs.tools import TOOLS, Tool, ToolContext, openai_tool_declarations
 from src.modules.runs.loop import (
     CompactionProvider,
     LoopDependencyMissing,
@@ -51,6 +52,51 @@ from src.modules.runs.state import (
 )
 
 
+class MCPToolRegistryExecutor:
+    """Wraps a ToolExecutor to dispatch registered adapted MCP tools."""
+
+    def __init__(self, inner: ToolExecutor, mcp_tools: Mapping[str, Tool]) -> None:
+        self.inner = inner
+        self.mcp_tools = mcp_tools
+
+    async def execute(self, name: str, arguments: Mapping[str, Any]) -> Mapping[str, Any]:
+        if name in self.mcp_tools:
+            tool = self.mcp_tools[name]
+            runner = getattr(self.inner, "sandbox", None)
+            container_id = getattr(self.inner, "container_id", "mcp") or "mcp"
+            delivery_dir = getattr(self.inner, "delivery_dir", Path("/tmp"))
+            llm = getattr(self.inner, "llm", None)
+            ctx = ToolContext(
+                runner=runner,
+                container_id=container_id,
+                delivery_dir=Path(delivery_dir),
+                llm=llm,
+            )
+            res = await tool.invoke(arguments, ctx)
+            return res.model_dump()
+        return await self.inner.execute(name, arguments)
+
+    async def execute_external(self, name: str, arguments: Mapping[str, Any]) -> Mapping[str, Any]:
+        if name in self.mcp_tools:
+            tool = self.mcp_tools[name]
+            runner = getattr(self.inner, "sandbox", None)
+            container_id = getattr(self.inner, "container_id", "mcp") or "mcp"
+            delivery_dir = getattr(self.inner, "delivery_dir", Path("/tmp"))
+            llm = getattr(self.inner, "llm", None)
+            ctx = ToolContext(
+                runner=runner,
+                container_id=container_id,
+                delivery_dir=Path(delivery_dir),
+                llm=llm,
+            )
+            res = await tool.invoke(arguments, ctx)
+            return res.model_dump()
+        return await self.inner.execute_external(name, arguments)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self.inner, name)
+
+
 class RunsService:
     """Agent execution harness that satisfies RunsRepository through duck typing.
 
@@ -63,6 +109,10 @@ class RunsService:
             session is present, and to the in-memory journal otherwise.
         tools: Optional tool executor. The loop needs it to run a tool call.
         policy: Optional partition policy. It defaults to the agent config.
+        jobs: Optional jobs repository.
+        pricing: Optional pricing service.
+        compactor: Optional compaction provider.
+        mcp_tools: Optional collection of adapted MCP tools.
     """
 
     def __init__(
@@ -77,6 +127,7 @@ class RunsService:
         jobs: JobsRepository | None = None,
         pricing: Any | None = None,
         compactor: CompactionProvider | None = None,
+        mcp_tools: Sequence[Tool] | Mapping[str, Tool] | None = None,
     ) -> None:
         self.session = session
         self.settings = settings
@@ -88,6 +139,83 @@ class RunsService:
         self.journal: RunJournal = journal or self._default_journal(session)
         self.jobs = jobs
         self.compactor = compactor
+        self._mcp_tools: dict[str, Tool] = {}
+        if mcp_tools is not None:
+            self.register_mcp_tools(mcp_tools)
+
+    def register_mcp_tool(self, tool: Tool) -> None:
+        """Register an adapted MCP tool into the runs service registry."""
+        self._mcp_tools[tool.name] = tool
+
+    def register_mcp_tools(self, tools: Sequence[Tool] | Mapping[str, Tool]) -> None:
+        """Register multiple adapted MCP tools into the runs service registry."""
+        if isinstance(tools, Mapping):
+            self._mcp_tools.update(tools)
+        else:
+            for t in tools:
+                self._mcp_tools[t.name] = t
+
+    def get_registered_mcp_tools(self) -> dict[str, Tool]:
+        """Return a copy of all registered MCP tools."""
+        return dict(self._mcp_tools)
+
+    def resolve_tool_schemas(
+        self, declared: Sequence[str] | None = None
+    ) -> list[dict[str, Any]]:
+        """Return tool declarations in OpenAI format including adapted MCP tools."""
+        selected = list(declared) if declared is not None else list(TOOLS.keys())
+        schemas: list[dict[str, Any]] = []
+        for name in selected:
+            if name in TOOLS:
+                tool = TOOLS[name]
+                schemas.append(
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": tool.name,
+                            "description": tool.description,
+                            "parameters": dict(tool.input_schema),
+                        },
+                    }
+                )
+            elif name in self._mcp_tools:
+                mcp_tool = self._mcp_tools[name]
+                schemas.append(
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": mcp_tool.name,
+                            "description": mcp_tool.description,
+                            "parameters": dict(mcp_tool.input_schema),
+                        },
+                    }
+                )
+        return schemas
+
+    def resolve_partition_policy(
+        self, config: AgentConfigDTO | None
+    ) -> PartitionPolicy:
+        """Build a partition policy that defaults MCP tools to external.
+
+        Explicit entries in config.approval_policy always take precedence.
+        Harness tools in config.tools default to local, while adapted MCP tools
+        default to external.
+        """
+        if self.policy is not None:
+            return self.policy
+        if config is None:
+            return PartitionPolicy()
+        declared = frozenset(config.tools or ())
+        levels: dict[str, str] = {}
+        for name, level in (config.approval_policy or {}).items():
+            levels[str(name)] = str(level)
+        local_tools = frozenset(
+            t
+            for t in declared
+            if t not in self._mcp_tools
+            and (TOOLS.get(t) is None or getattr(TOOLS.get(t), "level", "local") != "external")
+        )
+        return PartitionPolicy(levels=levels, local_tools=local_tools)
 
     @staticmethod
     def _default_journal(session: AsyncSession | None) -> RunJournal:
@@ -102,27 +230,35 @@ class RunsService:
         observer: StageObserver | None = None,
         max_iterations: int = 40,
         tool_schemas: Sequence[dict[str, Any]] | None = None,
+        policy: PartitionPolicy | None = None,
     ) -> RunLoop:
-        """
-        Build a loop over the current dependencies.
+        """Build a loop over the current dependencies.
 
         Args:
             observer: Optional stage observer.
             max_iterations: Iteration cap.
+            tool_schemas: Optional tool declarations payload.
+            policy: Optional partition policy override.
 
         Returns:
             The loop.
         """
+        resolved_policy = policy if policy is not None else self.policy
+        tools = self.tools
+        if tools is not None and self._mcp_tools:
+            tools = MCPToolRegistryExecutor(tools, self._mcp_tools)
+        token_limit = getattr(self.settings, "CONTEXT_TOKEN_LIMIT", 8_000)
         return RunLoop(
             journal=self.journal,
             model=self.llm,
-            tools=self.tools,
-            policy=self.policy,
+            tools=tools,
+            policy=resolved_policy,
             compactor=self.compactor,
             observer=observer,
             tool_schemas=tool_schemas,
             cost=self,
             max_iterations=max_iterations,
+            context_token_limit=token_limit,
         )
 
     # -- RunsRepository surface -------------------------------------------
@@ -411,8 +547,8 @@ class RunsService:
         ``vigil-default`` keeps its edit, and a GET has no write side effect.
         Only an absent row is inserted, with the Karpathy engineering
         guidelines, the Brainstorming discipline and the ASD-STE100 writing
-        rules in its ``system_prompt``, all 11 harness tools, and the 5 bundled
-        skills.
+        rules in its ``system_prompt``, all 11 harness tools, and the 9 bundled
+        skills, with the proactivity skill body loaded into context.
         """
         existing = await self.journal.get_config_by_name(name)
         if existing is not None:
@@ -520,10 +656,13 @@ class RunsService:
         # Declare the tools this run may use. Without this the provider sees an
         # empty tool list and the model refuses work it could do.
         config = await self.journal.get_config(run.config_id)
-        declared = list(config.tools) if config is not None else []
+        declared = list(config.tools) if config is not None and config.tools is not None else []
+        policy = self.resolve_partition_policy(config)
+        schemas = self.resolve_tool_schemas(declared)
         loop = self.build_loop(
             observer=observer,
-            tool_schemas=openai_tool_declarations(declared),
+            tool_schemas=schemas,
+            policy=policy,
         )
         try:
             result = await loop.run(run_id)
@@ -607,10 +746,18 @@ class RunsService:
         """Fail one run and record its cancellation step."""
         try:
             updated = await self.update_run_status(run_id, status="failed")
-        except (NotFoundError, InvalidRunTransition):
+        except NotFoundError:
             if strict:
                 raise
             current = await self.journal.get_run(run_id)
+            assert current is not None
+            return current
+        except InvalidRunTransition:
+            current = await self.journal.get_run(run_id)
+            if current is not None and RunStateMachine.is_terminal(current.status):
+                return current
+            if strict:
+                raise
             assert current is not None
             return current
         await self.journal.append_step(

@@ -262,6 +262,9 @@ def downgrade() -> None:
     op.drop_column("memory_chunks", "embedding_dim")
     op.drop_index("ix_memory_chunks_embedding_hnsw", table_name="memory_chunks")
     op.execute(
+        f"DELETE FROM memory_chunks WHERE vector_dims(embedding) != {PREVIOUS_EMBEDDING_DIM}"
+    )
+    op.execute(
         "ALTER TABLE memory_chunks ALTER COLUMN embedding "
         f"TYPE vector({PREVIOUS_EMBEDDING_DIM})"
     )

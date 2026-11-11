@@ -1,8 +1,9 @@
-import { ArrowUpRight, CalendarDays, Eye, Gauge, Hash, Mail, Plus } from 'lucide-react';
+import { AppWindow, ArrowUpRight, CalendarDays, Eye, Gauge, Hash, Mail, PinOff, Plus } from 'lucide-react';
 import { motion, useReducedMotion } from 'framer-motion';
 import type { ComponentType } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useConnectors, useLimits } from '@/queries/settings';
+import { usePinnedWidgets } from '@/components/chat/ArtifactCard';
 
 type IconType = ComponentType<{ size?: number; strokeWidth?: number; className?: string }>;
 
@@ -49,13 +50,63 @@ export function WidgetsRail() {
   const navigate = useNavigate();
   const connectors = useConnectors();
   const limits = useLimits();
+  const { widgets, unpinWidget } = usePinnedWidgets();
   const reduced = useReducedMotion() ?? false;
 
   const accounts = connectors.data ?? [];
 
   return (
     <aside aria-label="Widgets" className="flex flex-col gap-4">
-      <motion.section {...slideIn(reduced, 0.12)} className="card rounded-[14px] p-5">
+      {widgets.length > 0 ? (
+        <motion.section {...slideIn(reduced, 0.08)} className="card rounded-squircle-card p-5">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2 text-sm font-medium">
+              <AppWindow size={16} strokeWidth={1.5} className="text-[var(--accent)]" />
+              Pinned Micro-Apps
+            </div>
+            <span className="rounded-full bg-[var(--accent-soft)] px-2 py-0.5 font-mono text-[11px] font-semibold text-[var(--accent)]">
+              {widgets.length}
+            </span>
+          </div>
+
+          <div className="mt-3 space-y-3">
+            {widgets.map((widget) => (
+              <div
+                key={widget.id}
+                className="overflow-hidden rounded-[var(--r-inner)] border border-[var(--border)] bg-[color-mix(in_srgb,var(--surface-solid)_94%,transparent)] p-3"
+              >
+                <div className="flex items-center justify-between gap-2 pb-2">
+                  <span className="truncate font-mono text-[12px] font-semibold text-[var(--text)]">
+                    {widget.name}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => unpinWidget(widget.id)}
+                    aria-label={`Unpin ${widget.name}`}
+                    title="Unpin widget"
+                    className="cursor-pointer text-[var(--text-muted)] transition-colors hover:text-rose-400"
+                  >
+                    <PinOff size={13} strokeWidth={1.75} />
+                  </button>
+                </div>
+                {widget.format === 'html' ? (
+                  <iframe
+                    sandbox="allow-scripts"
+                    srcDoc={widget.content}
+                    title={widget.name}
+                    className="h-44 w-full rounded-[var(--r-inner)] border border-[var(--border)] bg-white"
+                  />
+                ) : (
+                  <pre className="max-h-36 overflow-auto rounded-[var(--r-inner)] bg-[color-mix(in_srgb,var(--surface-solid)_80%,transparent)] p-2 font-mono text-[11px] text-[var(--text-muted)]">
+                    {widget.content || '// Content ready'}
+                  </pre>
+                )}
+              </div>
+            ))}
+          </div>
+        </motion.section>
+      ) : null}
+      <motion.section {...slideIn(reduced, 0.12)} className="card rounded-squircle-card p-5">
         <div className="flex items-center gap-2 text-sm font-medium">
           <Gauge size={16} strokeWidth={1.5} className="text-[var(--text-muted)]" />
           Limits
@@ -76,7 +127,7 @@ export function WidgetsRail() {
         </div>
       </motion.section>
 
-      <motion.section {...slideIn(reduced, 0.2)} className="card rounded-[14px] p-5">
+      <motion.section {...slideIn(reduced, 0.2)} className="card rounded-squircle-card p-5">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2 text-sm font-medium">
             <Eye size={16} strokeWidth={1.5} className="text-[var(--text-muted)]" />

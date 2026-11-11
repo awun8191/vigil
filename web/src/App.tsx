@@ -2,8 +2,6 @@ import { Suspense, lazy, useEffect, type ReactNode } from 'react';
 import { BrowserRouter, Navigate, Outlet, Route, Routes, useLocation } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { AmbientBackground } from '@/components/layout/AmbientBackground';
-import { HeaderBrand } from '@/components/layout/HeaderBrand';
-import { FloatingDock } from '@/components/layout/FloatingDock';
 import { api, IS_MOCK, setAuthFailureHandler } from '@/lib/api';
 import LandingRoute from '@/routes/LandingRoute';
 import HomeRoute from '@/routes/HomeRoute';
@@ -26,15 +24,13 @@ const queryClient = new QueryClient({
 function AppShell() {
   return (
     <div className="relative min-h-dvh">
-      <HeaderBrand />
-      <FloatingDock />
-
-      <div id="main">
+      <div id="app-content">
         <Outlet />
       </div>
 
       {IS_MOCK ? (
-        <div className="fixed bottom-0 left-0 right-0 z-50 bg-[var(--accent)] px-3 py-1 text-center text-[11px] font-semibold uppercase tracking-[0.08em] text-[var(--accent-ink)]">
+        <div className="fixed bottom-4 left-4 z-50 hidden items-center gap-2 rounded-full border border-[var(--border)] bg-[var(--panel-bg)] px-3 py-1.5 text-[10px] font-medium uppercase tracking-[0.08em] text-[var(--text-muted)] shadow-[var(--shadow)] backdrop-blur-md md:flex">
+          <span className="h-1.5 w-1.5 rounded-full bg-[var(--text)]" />
           Simulation mode, no backend
         </div>
       ) : null}
@@ -68,15 +64,15 @@ function AuthGate({ children }: { children: ReactNode }) {
   }
 
   if (status === 'unauthed') {
-    if (location.pathname === '/pair' || location.pathname === '/') return <>{children}</>;
-    return <Navigate to="/pair" replace state={{ from: location.pathname }} />;
+    if (location.pathname === '/pair') return <>{children}</>;
+    // Allow dev/guest access directly to the living canvas
+    return <>{children}</>;
   }
 
   if (location.pathname === '/pair') {
-    return <Navigate to="/agent" replace />;
+    return <Navigate to="/" replace />;
   }
 
-  // The landing stays reachable for everyone, paired or not, so `Log in` can always be linked.
   return <>{children}</>;
 }
 
@@ -89,10 +85,10 @@ export default function App() {
           <Suspense fallback={null}>
             <Routes>
               <Route path="/pair" element={<PairRoute />} />
-
-              <Route path="/" element={<LandingRoute />} />
+              <Route path="/landing" element={<LandingRoute />} />
 
               <Route element={<AppShell />}>
+                <Route path="/" element={<HomeRoute />} />
                 <Route path="/agent" element={<HomeRoute />} />
                 <Route path="/agent/chat" element={<ChatRoute />} />
                 <Route path="/agent/chat/:sessionId" element={<ChatRoute />} />
@@ -103,7 +99,7 @@ export default function App() {
                 <Route path="/agent/settings/:section" element={<SettingsRoute />} />
               </Route>
 
-              <Route path="*" element={<Navigate to="/agent" replace />} />
+              <Route path="*" element={<Navigate to="/" replace />} />
             </Routes>
           </Suspense>
         </AuthGate>

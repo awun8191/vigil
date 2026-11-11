@@ -54,7 +54,16 @@ class RunStepResponse(BaseModel):
     id: UUID = Field(..., description="Step UUID.")
     run_id: UUID = Field(..., description="Parent run UUID.")
     step_number: int = Field(..., description="Monotonically increasing step counter.")
-    event_type: Literal["thought", "tool_call", "tool_result", "approval_required", "run_completed", "run_failed"] = Field(
+    event_type: Literal[
+        "thought",
+        "tool_call",
+        "tool_result",
+        "message_delta",
+        "approval_required",
+        "run_completed",
+        "run_failed",
+        "compaction",
+    ] = Field(
         ..., description="Step event category."
     )
     payload: dict[str, Any] = Field(..., description="Event specific payload.")

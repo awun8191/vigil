@@ -14,6 +14,7 @@ class CardActionDTO:
     label: str
     action_type: str
     payload: dict[str, Any] = field(default_factory=dict)
+    verb: str | None = None
 
 
 @dataclass(frozen=True)
@@ -33,6 +34,8 @@ class CardDTO:
     feedback: str | None  # useful, not_useful, dismissed
     created_at: datetime
     updated_at: datetime
+    proactivity_tag: str | None = None
+    verb: str | None = None
 
 
 @dataclass(frozen=True)
@@ -48,6 +51,8 @@ class CardCreateDTO:
     due_at: datetime | None = None
     status: str = "new"
     actions: list[CardActionDTO] = field(default_factory=list)
+    proactivity_tag: str | None = None
+    verb: str | None = None
 
 
 @dataclass(frozen=True)
@@ -59,6 +64,8 @@ class CardUpdateDTO:
     due_at: datetime | None = None
     urgency: str | None = None
     title: str | None = None
+    proactivity_tag: str | None = None
+    verb: str | None = None
 
 
 @runtime_checkable

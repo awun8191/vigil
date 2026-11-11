@@ -51,11 +51,12 @@ EXPECTED_TABLES = [
     "mcp_servers",
     "run_steps",
     "model_prices",
+    "vault_secrets",
 ]
 
 
 def test_alembic_offline_sql_generation(alembic_config: Config, capsys: pytest.CaptureFixture[str]) -> None:
-    """Validate that offline SQL DDL generation produces all 24 tables, pgvector extension, and HNSW index."""
+    """Validate that offline SQL DDL generation produces all 25 tables, pgvector extension, and HNSW index."""
     output_buffer = io.StringIO()
     alembic_config.stdout = output_buffer
 
@@ -96,12 +97,11 @@ async def test_alembic_live_upgrade_downgrade_lifecycle(alembic_config: Config) 
     """
     Test live database migration lifecycle against PostgreSQL container:
     1. Upgrade to head
-    2. Verify 24 tables, vector extension, HNSW index, and the corrected columns
+    2. Verify 25 tables, vector extension, HNSW index, and the corrected columns
     3. Downgrade to base
-    4. Verify all 24 tables are cleanly dropped
-    2. Verify 24 tables, vector extension, HNSW index, and the corrected columns
-    3. Downgrade to base
-    4. Verify all 24 tables are cleanly dropped    5. Upgrade to head again (verifying idempotency)    """
+    4. Verify all 25 tables are cleanly dropped
+    5. Upgrade to head again (verifying idempotency)
+    """
     settings = get_settings()
     engine = create_async_engine(settings.DATABASE_URL)
 
@@ -206,7 +206,7 @@ async def test_alembic_live_upgrade_downgrade_lifecycle(alembic_config: Config) 
         # 3. Downgrade to base
         command.downgrade(alembic_config, "base")
 
-        # 4. Verify all 24 domain tables were dropped
+        # 4. Verify all 25 domain tables were dropped
         async with engine.connect() as conn:
             res_after = await conn.execute(
                 sa.text(
@@ -227,7 +227,7 @@ async def test_alembic_live_upgrade_downgrade_lifecycle(alembic_config: Config) 
                 )
             )
             count = res_reapply.scalar()
-            assert count == 24, f"Expected 24 tables on re-upgrade, found {count}"
+            assert count == 25, f"Expected 25 tables on re-upgrade, found {count}"
     finally:
         await engine.dispose()
 

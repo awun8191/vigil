@@ -83,6 +83,8 @@ async def test_triage_actionable_item_creates_action_card() -> None:
     assert card.urgency in ("critical", "high")
     assert "Certificate Expiring" in card.title
     assert card.thread_id == "thread-infra-cert-99"
+    assert card.proactivity_tag == "Urgent Action"
+    assert card.verb == "Review"
     assert len(card.actions) == 2
     action_types = [a.action_type for a in card.actions]
     assert "reply" in action_types
@@ -91,36 +93,53 @@ async def test_triage_actionable_item_creates_action_card() -> None:
 
 @pytest.mark.asyncio
 async def test_cards_feed_http_endpoint_lifecycle() -> None:
-    """Verify Action Cards feed HTTP endpoints (list, update, dismiss)."""
+    """Verify Action Cards feed HTTP endpoints (list, update, dismiss) persist proactivity fields."""
     settings = Settings(APP_ENV="test")
     app = create_app(settings)
     auth_headers = {"Authorization": "Bearer vgt_testtoken"}
 
     transport = ASGITransport(app=app, raise_app_exceptions=False)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-        # 1. Create a card via API
+        # 1. Create a card via API with proactivity_tag and verb
         create_payload = {
             "type": "email",
             "urgency": "high",
             "title": "Review Vendor Contract",
             "summary": "Vendor agreement requires signature before end of month.",
+            "proactivity_tag": "Urgent Action",
+            "verb": "Review",
             "actions": [
-                {"id": "act_sign", "label": "Review & Sign", "action_type": "run", "payload": {}},
+                {"id": "act_sign", "label": "Review & Sign", "action_type": "run", "verb": "Review", "payload": {}},
             ],
         }
         res_post = await client.post("/api/v1/cards", json=create_payload, headers=auth_headers)
         assert res_post.status_code == 201
-        card_id = res_post.json()["id"]
+        post_data = res_post.json()
+        card_id = post_data["id"]
+        assert post_data["proactivity_tag"] == "Urgent Action"
+        assert post_data["verb"] == "Review"
 
-        # 2. List cards in feed
+        # 2. Get card details directly from database/service
+        res_get = await client.get(f"/api/v1/cards/{card_id}", headers=auth_headers)
+        assert res_get.status_code == 200
+        get_data = res_get.json()
+        assert get_data["proactivity_tag"] == "Urgent Action"
+        assert get_data["verb"] == "Review"
+
+        # 3. List cards in feed and verify genuine retrieval
         res_list = await client.get("/api/v1/cards", headers=auth_headers)
         assert res_list.status_code == 200
         data = res_list.json()
         assert data["total"] >= 1
-        found = any(c["id"] == card_id for c in data["items"])
-        assert found is True
+        found_card = next((c for c in data["items"] if c["id"] == card_id), None)
+        assert found_card is not None
+        assert found_card["proactivity_tag"] == "Urgent Action"
+        assert found_card["verb"] == "Review"
 
-        # 3. Dismiss card
+        # 4. Dismiss card and verify proactivity fields survive mutation
         res_dismiss = await client.post(f"/api/v1/cards/{card_id}/dismiss", headers=auth_headers)
         assert res_dismiss.status_code == 200
-        assert res_dismiss.json()["status"] == "dismissed"
+        dismiss_data = res_dismiss.json()
+        assert dismiss_data["status"] == "dismissed"
+        assert dismiss_data["proactivity_tag"] == "Urgent Action"
+        assert dismiss_data["verb"] == "Review"

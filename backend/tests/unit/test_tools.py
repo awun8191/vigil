@@ -29,6 +29,8 @@ from src.modules.runs.tools.shell import DEFAULT_TIMEOUT_SECONDS
 
 EXPECTED_TOOL_NAMES = {
     "read",
+    "read_document",
+    "view_image",
     "write",
     "edit",
     "bash",
@@ -39,7 +41,10 @@ EXPECTED_TOOL_NAMES = {
     "skill_load",
     "web_search",
     "web_fetch",
+    "browser_navigate",
+    "browser_extract",
 }
+
 
 
 class FakeRunner:
@@ -47,7 +52,7 @@ class FakeRunner:
 
     def __init__(
         self,
-        files: dict[str, str] | None = None,
+        files: dict[str, str | bytes] | None = None,
         *,
         exec_result: Any = None,
         read_error: Exception | None = None,
@@ -65,11 +70,17 @@ class FakeRunner:
             raise self.read_error
         if path not in self.files:
             raise FileNotFoundError(f"No such file: {path}")
-        return self.files[path].encode("utf-8")
+        value = self.files[path]
+        if isinstance(value, bytes):
+            return value
+        return value.encode("utf-8")
 
     async def write_file(self, container_id: str, path: str, content: bytes) -> None:
         self.calls.append(("write_file", container_id, path, content))
-        self.files[path] = content.decode("utf-8")
+        try:
+            self.files[path] = content.decode("utf-8")
+        except UnicodeDecodeError:
+            self.files[path] = content
 
     async def execute_command(
         self, container_id: str, command: str, timeout_seconds: int = 60
@@ -99,9 +110,15 @@ class FakeRunner:
         return True
 
 
-def make_context(runner: FakeRunner, delivery_dir: Path) -> ToolContext:
+def make_context(
+    runner: FakeRunner,
+    delivery_dir: Path,
+    llm: Any | None = None,
+) -> ToolContext:
     """Build a tool context for one test call."""
-    return ToolContext(runner=runner, container_id="run-1", delivery_dir=delivery_dir)
+    return ToolContext(
+        runner=runner, container_id="run-1", delivery_dir=delivery_dir, llm=llm
+    )
 
 
 async def call(name: str, arguments: dict[str, Any], context: ToolContext) -> ToolResult:
@@ -112,11 +129,12 @@ async def call(name: str, arguments: dict[str, Any], context: ToolContext) -> To
 # --- registry ------------------------------------------------------------------
 
 
-def test_registry_has_nine_tools() -> None:
+def test_registry_has_the_declared_tools() -> None:
     """The registry holds exactly the declared tools."""
-    assert TOOL_COUNT == 11
-    assert len(TOOLS) == 11
+    assert TOOL_COUNT == 15
+    assert len(TOOLS) == 15
     assert set(TOOLS) == EXPECTED_TOOL_NAMES
+
 
 
 def test_registry_entries_are_complete() -> None:
@@ -143,7 +161,8 @@ def test_registry_levels() -> None:
 def test_tool_definitions_match_registry() -> None:
     """The model facing declarations hold a schema and a level for each tool."""
     definitions = tool_definitions()
-    assert len(definitions) == 11
+    assert len(definitions) == 15
+
     for definition in definitions:
         assert definition["name"] in EXPECTED_TOOL_NAMES
         assert definition["parameters"]["type"] == "object"
@@ -454,6 +473,289 @@ async def test_generate_document_escapes_the_html_title(tmp_path: Path) -> None:
     text = (delivery / "page.html").read_text(encoding="utf-8")
     assert "&lt;script&gt;" in text
     assert "<script>" not in text
+
+
+async def test_generate_document_keeps_a_complete_html_document(tmp_path: Path) -> None:
+    """A complete html document is delivered as-is instead of being wrapped again."""
+    runner = FakeRunner()
+    delivery = tmp_path / "deliveries"
+    context = make_context(runner, delivery)
+
+    document = "<!doctype html>\n<html lang=\"en\">\n<head><title>Poem</title></head>\n<body><p>hi</p></body>\n</html>"
+    result = await call(
+        "generate_document",
+        {"filename": "poem.html", "content": document, "format": "html"},
+        context,
+    )
+
+    assert result.ok is True
+    text = (delivery / "poem.html").read_text(encoding="utf-8")
+    assert text == f"{document}\n"
+    assert text.count("<html") == 1
+    assert text.count("<body>") == 1
+
+
+async def test_generate_document_docx_and_read_document_roundtrip(tmp_path: Path) -> None:
+    """generate_document writes a styled .docx that read_document extracts."""
+    runner = FakeRunner()
+    delivery = tmp_path / "deliveries"
+    context = make_context(runner, delivery)
+
+    gen = await call(
+        "generate_document",
+        {
+            "filename": "report",
+            "title": "Q4 Review",
+            "format": "docx",
+            "content": "## Highlights\n- Shipped v2\n- Zero downtime\n\n| Metric | Value |\n| --- | --- |\n| Uptime | 99.99% |\n",
+        },
+        context,
+    )
+
+    assert gen.ok is True
+    target = delivery / "report.docx"
+    assert gen.artifact_ref == str(target)
+    assert target.exists()
+    assert gen.content["format"] == "docx"
+
+    runner.files["report.docx"] = target.read_bytes()
+    read_res = await call("read_document", {"path": "report.docx"}, context)
+    assert read_res.ok is True
+    assert "Q4 Review" in str(read_res.content)
+    assert "Shipped v2" in str(read_res.content)
+    assert "Uptime" in str(read_res.content)
+    assert "99.99%" in str(read_res.content)
+
+
+async def test_generate_document_xlsx_and_read_document_roundtrip(tmp_path: Path) -> None:
+    """generate_document writes an .xlsx workbook that read_document extracts with sheet markers."""
+    runner = FakeRunner()
+    delivery = tmp_path / "deliveries"
+    context = make_context(runner, delivery)
+
+    gen = await call(
+        "generate_document",
+        {
+            "filename": "metrics",
+            "title": "Latency",
+            "format": "xlsx",
+            "content": "service,p50_ms,p99_ms\napi,12,48\nworker,35,110\n",
+        },
+        context,
+    )
+
+    assert gen.ok is True
+    target = delivery / "metrics.xlsx"
+    assert gen.artifact_ref == str(target)
+    assert target.exists()
+    assert gen.content["format"] == "xlsx"
+
+    runner.files["metrics.xlsx"] = target.read_bytes()
+    read_res = await call("read_document", {"path": "metrics.xlsx"}, context)
+    assert read_res.ok is True
+    assert "[sheet: Latency]" in str(read_res.content)
+    assert "service\tp50_ms\tp99_ms" in str(read_res.content)
+    assert "api\t12\t48" in str(read_res.content)
+
+
+async def test_read_document_extracts_pdf_pages(tmp_path: Path) -> None:
+    """read_document extracts PDF text with [pN] page markers."""
+    import io
+    from pypdf import PdfWriter
+
+    writer = PdfWriter()
+    writer.add_blank_page(width=200, height=200)
+    buf = io.BytesIO()
+    writer.write(buf)
+
+    runner = FakeRunner({"blank.pdf": buf.getvalue()})
+    context = make_context(runner, tmp_path / "deliveries")
+
+    res = await call("read_document", {"path": "blank.pdf"}, context)
+    assert res.ok is True
+    assert "[PDF document" in str(res.content) or "[p1]" in str(res.content)
+
+
+async def test_read_document_extracts_image_metadata(tmp_path: Path) -> None:
+    """read_document inspects PNG headers and returns image dimensions and size."""
+    import struct
+
+    png_bytes = (
+        b"\x89PNG\r\n\x1a\n"
+        + struct.pack(">I", 13)
+        + b"IHDR"
+        + struct.pack(">II", 640, 480)
+        + b"\x08\x06\x00\x00\x00"
+    )
+    runner = FakeRunner({"chart.png": png_bytes})
+    context = make_context(runner, tmp_path / "deliveries")
+
+    res = await call("read_document", {"path": "chart.png"}, context)
+    assert res.ok is True
+    assert "[image: chart.png]" in str(res.content)
+    assert "format: PNG" in str(res.content)
+    assert "dimensions: 640x480px" in str(res.content)
+
+
+async def test_read_document_truncates_and_writes_overflow_artifact(tmp_path: Path) -> None:
+    """read_document caps returned text at max_chars and saves full text to delivery_dir."""
+    long_text = "alpha beta gamma delta\n" * 100
+    runner = FakeRunner({"notes.md": long_text})
+    delivery = tmp_path / "deliveries"
+    context = make_context(runner, delivery)
+
+    res = await call("read_document", {"path": "notes.md", "max_chars": 200}, context)
+    assert res.ok is True
+    assert res.artifact_ref is not None
+    overflow_path = Path(res.artifact_ref)
+    assert overflow_path.exists()
+    assert overflow_path.read_text(encoding="utf-8") == long_text
+    assert "truncated at 200 of" in str(res.content)
+
+
+async def test_read_document_rejects_path_escape(tmp_path: Path) -> None:
+    """read_document refuses paths escaping /workspace."""
+    runner = FakeRunner()
+    context = make_context(runner, tmp_path / "deliveries")
+
+    res = await call("read_document", {"path": "../../etc/passwd"}, context)
+    assert res.ok is False
+    assert "path escape refused" in (res.error or "")
+    assert "/workspace" in (res.error or "")
+    assert runner.calls == []
+
+
+# --- vision --------------------------------------------------------------------
+
+
+PNG_BYTES = (
+    b"\x89PNG\r\n\x1a\n"
+    b"\x00\x00\x00\rIHDR"
+    b"\x00\x00\x02\x80\x00\x00\x01\xe0"
+    b"\x08\x06\x00\x00\x00"
+)
+
+
+class FakeVision:
+    """A model client stub that records the image it is asked about."""
+
+    def __init__(self, answer: str = "A bar chart of quarterly revenue.", error: Exception | None = None) -> None:
+        self.answer = answer
+        self.error = error
+        self.calls: list[tuple[bytes, str, str | None]] = []
+
+    async def describe_image(
+        self,
+        image_bytes: bytes,
+        media_type: str,
+        question: str | None = None,
+        max_tokens: int = 1024,
+    ) -> str:
+        self.calls.append((image_bytes, media_type, question))
+        if self.error is not None:
+            raise self.error
+        return self.answer
+
+
+async def test_view_image_answers_from_the_vision_model(tmp_path: Path) -> None:
+    """view_image sends the image bytes and the question, then returns the answer."""
+    runner = FakeRunner({"chart.png": PNG_BYTES})
+    vision = FakeVision()
+    context = make_context(runner, tmp_path / "deliveries", llm=vision)
+
+    res = await call(
+        "view_image",
+        {"path": "chart.png", "question": "What is the trend?"},
+        context,
+    )
+
+    assert res.ok is True
+    assert res.content["description"] == "A bar chart of quarterly revenue."
+    assert res.content["media_type"] == "image/png"
+    assert res.content["question"] == "What is the trend?"
+    assert vision.calls == [(PNG_BYTES, "image/png", "What is the trend?")]
+
+
+async def test_view_image_uses_a_full_description_by_default(tmp_path: Path) -> None:
+    """view_image passes no question when the caller omits one."""
+    runner = FakeRunner({"photo.jpg": b"\xff\xd8\xff\xe0" + b"0" * 32})
+    vision = FakeVision()
+    context = make_context(runner, tmp_path / "deliveries", llm=vision)
+
+    res = await call("view_image", {"path": "photo.jpg"}, context)
+
+    assert res.ok is True
+    assert res.content["media_type"] == "image/jpeg"
+    assert vision.calls == [(b"\xff\xd8\xff\xe0" + b"0" * 32, "image/jpeg", None)]
+
+
+async def test_view_image_rejects_a_non_image(tmp_path: Path) -> None:
+    """view_image refuses a document and points at read_document."""
+    runner = FakeRunner({"notes.txt": "plain text"})
+    vision = FakeVision()
+    context = make_context(runner, tmp_path / "deliveries", llm=vision)
+
+    res = await call("view_image", {"path": "notes.txt"}, context)
+
+    assert res.ok is False
+    assert "not a supported image" in (res.error or "")
+    assert "read_document" in (res.error or "")
+    assert vision.calls == []
+
+
+async def test_view_image_requires_a_vision_model(tmp_path: Path) -> None:
+    """view_image fails clearly when the run has no model client."""
+    runner = FakeRunner({"chart.png": PNG_BYTES})
+    context = make_context(runner, tmp_path / "deliveries")
+
+    res = await call("view_image", {"path": "chart.png"}, context)
+
+    assert res.ok is False
+    assert "no vision model" in (res.error or "")
+
+
+async def test_view_image_reports_a_model_failure(tmp_path: Path) -> None:
+    """A provider failure becomes a failed result, not an exception."""
+    runner = FakeRunner({"chart.png": PNG_BYTES})
+    vision = FakeVision(error=RuntimeError("vision is not configured"))
+    context = make_context(runner, tmp_path / "deliveries", llm=vision)
+
+    res = await call("view_image", {"path": "chart.png"}, context)
+
+    assert res.ok is False
+    assert "vision is not configured" in (res.error or "")
+
+
+async def test_view_image_rejects_a_file_above_the_limit(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    """view_image refuses an image larger than the vision limit."""
+    from src.modules.runs.tools import files as files_module
+
+    monkeypatch.setattr(files_module, "MAX_VISION_IMAGE_BYTES", 16)
+    runner = FakeRunner({"chart.png": PNG_BYTES})
+    vision = FakeVision()
+    context = make_context(runner, tmp_path / "deliveries", llm=vision)
+
+    res = await call("view_image", {"path": "chart.png"}, context)
+
+    assert res.ok is False
+    assert "vision limit" in (res.error or "")
+    assert vision.calls == []
+
+
+async def test_view_image_rejects_path_escape(tmp_path: Path) -> None:
+    """view_image refuses paths escaping /workspace."""
+    runner = FakeRunner()
+    vision = FakeVision()
+    context = make_context(runner, tmp_path / "deliveries", llm=vision)
+
+    res = await call("view_image", {"path": "../../etc/passwd"}, context)
+
+    assert res.ok is False
+    assert "path escape refused" in (res.error or "")
+    assert runner.calls == []
+    assert vision.calls == []
 
 
 # --- human ---------------------------------------------------------------------

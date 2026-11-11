@@ -181,6 +181,27 @@ class LLMClientProtocol(Protocol):
         """
         ...
 
+    async def describe_image(
+        self,
+        image_bytes: bytes,
+        media_type: str,
+        question: str | None = None,
+        max_tokens: int = 1024,
+    ) -> str:
+        """
+        Answer a question about one image through a vision capable model.
+
+        Args:
+            image_bytes: Raw image bytes.
+            media_type: The image MIME type, such as ``image/png``.
+            question: What to extract or answer. Defaults to a full description.
+            max_tokens: Generation cap for the answer.
+
+        Returns:
+            The assistant text.
+        """
+        ...
+
     async def embed_texts(
         self,
         texts: list[str],

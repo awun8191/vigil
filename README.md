@@ -117,6 +117,20 @@ curl -fsS http://localhost:8000/api/v1/health/ready
 On boot the API prints a pairing QR code and a short code such as `VIG-7K2M4Q`.
 Open the web client and pair the device with that code.
 
+### Run everything together (Startup Script)
+
+To start the Website (`http://localhost:5173`), Agents API (`http://localhost:8000`), and background Job Worker together with pre-flight checks, automatic schema migrations, and clean `Ctrl+C` shutdown:
+
+```bash
+./start.sh
+```
+
+Useful options:
+- `./start.sh --no-worker` — start only Website and Agents API
+- `./start.sh --api-port 8080` — start API on a custom port
+- `./start.sh --mock` — run frontend in mock simulation mode
+- `./start.sh --help` — list all configuration flags
+
 ### Run the backend from source
 
 ```bash
@@ -145,8 +159,8 @@ then the API process must own the Docker socket. Keep it false whenever
 ```bash
 cd web
 npm install
-npm run dev          # fixture data, no backend
-npm run dev:live     # talks to the API on port 8000
+npm run dev          # talks to the API on port 8000 (proxies /api)
+npm run dev:mock     # simulation mode with fixture data, no backend
 ```
 
 ### Run the tests
