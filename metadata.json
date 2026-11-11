@@ -3,13 +3,14 @@
   "checkpoint_id": "01M75FAR8DHSKK06TEY2P3774P",
   "strategy": "manual-commit",
   "branch": "main",
-  "checkpoints_count": 58,
+  "checkpoints_count": 59,
   "files_touched": [
     "CONTRIBUTING.md",
     "PROJECT.md",
     "README.md",
     "backend/README.md",
     "backend/alembic/versions/0002_schema_corrections.py",
+    "backend/alembic/versions/0010_vault_secrets.py",
     "backend/pyproject.toml",
     "backend/src/config/router.py",
     "backend/src/config/settings.py",
@@ -44,6 +45,7 @@
     "backend/src/schemas/__init__.py",
     "backend/src/schemas/identity.py",
     "backend/src/schemas/triage.py",
+    "backend/src/schemas/vault.py",
     "backend/tests/integration/test_adversarial_m4.py",
     "backend/tests/integration/test_schemas_adversarial.py",
     "backend/tests/integration/test_triage_pipeline.py",
@@ -429,17 +431,23 @@
       "transcript": "/52/full.jsonl",
       "content_hash": "/52/content_hash.txt",
       "prompt": ""
+    },
+    {
+      "metadata": "/53/metadata.json",
+      "transcript": "/53/full.jsonl",
+      "content_hash": "/53/content_hash.txt",
+      "prompt": ""
     }
   ],
   "redaction": {
-    "replacements": 466,
+    "replacements": 473,
     "layers": {
-      "betterleaks": 50,
+      "betterleaks": 51,
       "connection_string": 0,
       "credential_key": 0,
-      "credential_value": 125,
+      "credential_value": 126,
       "credentialed_uri": 7,
-      "entropy": 304,
+      "entropy": 309,
       "key_context": 0,
       "provider_token": 1,
       "shell_stdin": 0
