@@ -3,7 +3,7 @@
   "checkpoint_id": "01M75FAR8DHSKK06TEY2P3774P",
   "strategy": "manual-commit",
   "branch": "main",
-  "checkpoints_count": 34,
+  "checkpoints_count": 35,
   "files_touched": [
     "CONTRIBUTING.md",
     "PROJECT.md",
@@ -36,6 +36,7 @@
     "backend/src/modules/runs/tools/files.py",
     "backend/src/modules/settings/dependencies.py",
     "backend/src/modules/settings/router.py",
+    "backend/src/modules/settings/validators.py",
     "backend/src/modules/settings/vault.py",
     "backend/src/modules/triage/service.py",
     "backend/src/modules/voice/__init__.py",
@@ -70,6 +71,7 @@
     "web/src/components/chat/ArtifactCard.tsx",
     "web/src/components/chat/InlineApprovalCard.tsx",
     "web/src/components/chat/InputPill.tsx",
+    "web/src/components/chat/MarkdownContent.tsx",
     "web/src/components/chat/MessageItem.tsx",
     "web/src/components/chat/MessageStream.tsx",
     "web/src/components/chat/ThinkingCapsule.tsx",
@@ -280,17 +282,23 @@
       "transcript": "/29/full.jsonl",
       "content_hash": "/29/content_hash.txt",
       "prompt": ""
+    },
+    {
+      "metadata": "/30/metadata.json",
+      "transcript": "/30/full.jsonl",
+      "content_hash": "/30/content_hash.txt",
+      "prompt": ""
     }
   ],
   "redaction": {
-    "replacements": 344,
+    "replacements": 353,
     "layers": {
-      "betterleaks": 33,
+      "betterleaks": 35,
       "connection_string": 0,
       "credential_key": 0,
-      "credential_value": 102,
+      "credential_value": 104,
       "credentialed_uri": 6,
-      "entropy": 220,
+      "entropy": 227,
       "key_context": 0,
       "provider_token": 0,
       "shell_stdin": 0
