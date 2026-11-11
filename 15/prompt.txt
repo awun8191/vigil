@@ -1,0 +1,49 @@
+/boost Invetigate the HARK pro platform from a UI UX persepective and compare it to vigil. The way it responds to tasks, its proactivity, the way it showcases information, the way it communicate, the interactivity of the cat and so on. Please be exhasutive in your research
+
+---
+
+/boost The issue now is that this project is designed to be an open-source HARK Pro, and that is just it. The nature of it is that potentially we could try to modify our architecture to meet theirs, so we can just try to adapt it. So the good on our end, we can try to keep. The bad, we can try to adjust, but I think I like their design philosophy a lot, so I want it to mirror that design philosophy. So for now, we'll just try to let it run in a sandbox, but the primary features that their AI model has includes things like the ability to actually build small websites and showcase it to the users, which our sandbox does not have. So our sandbox should actually mirror their VM farm, if you get where I'm coming from. So it should be able to mirror the core functionalities, including the browser. So for the browser, we'll make use of a third-party online browser, something like the Firecrawl browser or something like that, so we'll have proper support for the API keys as opposed to running a dedicated virtual machine. Voice, we will make use of an STT model, probably something using the GROQ API for the voice, that being the speech-to-text. The companion mascot can be removed for now. It isn't something that is very required, this is the core necessity, but their general design language and aesthetic is something that should be mirrored, as it is one of the core functionalities of their platform, something that people genuinely like. So the way they go about approvals, the way they go about even the widgets, the way they go about things like the proactivity tags. For example, you can see a tag like Michael wants to book an email, then you see a button there that says Draft, indicating that it's going to draft the email. So the buttons there are actually verbs, if you get where I'm coming from. So the whole design, I need you to conduct deeper research and update your findings in order to suit the new requirements of the project. Also consider things like the account support, the MCP connections, and so on.
+
+---
+
+TURN THIS TO A STRONG IMPLEMENTATION PLAN. BRING SPECIFICS LIKE COLOR COMPOSITION, SIZING, COLOR AND SO ON FOR THE USE. ALSO THE BEST WAY TO GO ABOUT REGISTERING mcPS EASILY POTENTIALLY USING A FACTORY PATTERN AND SO ON. (THE UI IS EXTREMLY IMPORTANT)
+
+---
+
+/teamwork use subagents to write the code. They should use the 3.8 flash high model. Your usage limits (ARGON) is low so weaker models need to write the code
+
+---
+
+i approve
+
+---
+
+Please turn all the hark pro findingd, design guidlines and so on into a fie in the repo
+
+---
+
+As far as the UI goes, you didn't get the UI, so I'm giving you these screenshots to try to explain how the UI is supposed to look like as far as the HARK Pro platform is to go. That is just one thing that I want to shed light on. The general structure is a bit off as far as the UI design is to go. I gave you samples of the dark theme and light theme. The dark theme samples are not that many that I provided you, but that is how the background is meant to look like. Potentially, you need to separately examine the background for the light theme and the dark theme to properly just get a feel of it. The nature of the platform is such that as of right now, you can completely discard the way the navbar is being designed, the home page, and everything, keeping everything in one unified page with toggles to move between them relatively quickly. There is a centralized view of the platform where you do not show the widgets. The widgets view has been provided as well, where you see the time in place of the widget section. I think that is useful for the design as well. In conjecture, there are sample pictures provided for the other pages, the general look and feel. I feel like this should be a guide that you should use. Maybe you can use this to dispatch another designer to modify the generalized design, or you can use it to steer the current UI components implementation.
+
+---
+
+continue
+
+---
+
+It seems like the chnage cant reflect in the UI
+
+---
+
+Also the agent is obliviou to all the changes and what it can do. Lastly the cotext issue is insane. The compaction doent dork so the token input token bill is rediculous
+
+---
+
+There was no input field?
+
+---
+
+You are creating an iverlay as oposed to creating and utilizing the components properly
+
+---
+
+The chat mesage i seent to the ui didnt reach the backend
