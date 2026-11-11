@@ -1,0 +1,50 @@
+{
+  "cli_version": "0.12.2",
+  "checkpoint_id": "01M75W9QS4EJ0RX0CM2ECR0DQ7",
+  "strategy": "manual-commit",
+  "branch": "main",
+  "checkpoints_count": 5,
+  "files_touched": [
+    ".commandcode/taste/taste.md",
+    ".commandcode/taste/taste/taste.md",
+    "PROJECT.md",
+    "backend/src/dependencies.py",
+    "backend/src/modules/runs/tools/__init__.py",
+    "backend/src/modules/runs/tools/browser.py",
+    "backend/tests/integration/test_adversarial_m4.py",
+    "backend/tests/unit/test_browser_tools.py",
+    "backend/tests/unit/test_challenger_m5_adversarial.py",
+    "backend/tests/unit/test_dependencies.py",
+    "backend/tests/unit/test_m4_adversarial.py",
+    "backend/tests/unit/test_voice.py",
+    "web/src/components/chat/ArtifactCard.tsx",
+    "web/src/components/chat/LiveBrowserCard.tsx",
+    "web/src/components/chat/MarkdownContent.tsx",
+    "web/src/components/chat/MessageItem.tsx",
+    "web/src/components/hark/HarkSearchModal.tsx",
+    "web/src/components/hark/HarkUnifiedApp.tsx",
+    "web/src/styles/tokens.css"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "redaction": {
+    "replacements": 50,
+    "layers": {
+      "betterleaks": 12,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 27,
+      "credentialed_uri": 2,
+      "entropy": 16,
+      "key_context": 0,
+      "provider_token": 0,
+      "shell_stdin": 0
+    }
+  }
+}
