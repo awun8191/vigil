@@ -3,13 +3,14 @@
   "checkpoint_id": "01M75FAR8DHSKK06TEY2P3774P",
   "strategy": "manual-commit",
   "branch": "main",
-  "checkpoints_count": 69,
+  "checkpoints_count": 70,
   "files_touched": [
     "CONTRIBUTING.md",
     "PROJECT.md",
     "README.md",
     "backend/README.md",
     "backend/alembic/versions/0002_schema_corrections.py",
+    "backend/alembic/versions/0009_card_proactivity_and_verbs.py",
     "backend/alembic/versions/0010_vault_secrets.py",
     "backend/pyproject.toml",
     "backend/src/config/router.py",
@@ -500,17 +501,23 @@
       "transcript": "/63/full.jsonl",
       "content_hash": "/63/content_hash.txt",
       "prompt": ""
+    },
+    {
+      "metadata": "/64/metadata.json",
+      "transcript": "/64/full.jsonl",
+      "content_hash": "/64/content_hash.txt",
+      "prompt": ""
     }
   ],
   "redaction": {
-    "replacements": 526,
+    "replacements": 532,
     "layers": {
-      "betterleaks": 59,
+      "betterleaks": 60,
       "connection_string": 0,
       "credential_key": 0,
-      "credential_value": 154,
+      "credential_value": 155,
       "credentialed_uri": 7,
-      "entropy": 329,
+      "entropy": 333,
       "key_context": 0,
       "provider_token": 1,
       "shell_stdin": 0
