@@ -3,7 +3,7 @@
   "checkpoint_id": "01M75FAR8DHSKK06TEY2P3774P",
   "strategy": "manual-commit",
   "branch": "main",
-  "checkpoints_count": 1,
+  "checkpoints_count": 2,
   "files_touched": [
     "CONTRIBUTING.md",
     "PROJECT.md",
@@ -11,8 +11,11 @@
     "backend/README.md",
     "backend/pyproject.toml",
     "backend/src/dependencies.py",
+    "backend/src/modules/artifacts/data.py",
     "backend/src/modules/artifacts/router.py",
     "backend/src/modules/artifacts/service.py",
+    "backend/src/modules/cards/data.py",
+    "backend/src/modules/cards/repository.py",
     "backend/src/modules/chat/data.py",
     "backend/src/modules/chat/state.py",
     "backend/src/modules/runs/core_context.py",
@@ -22,6 +25,8 @@
     "backend/src/modules/runs/tools/__init__.py",
     "backend/src/modules/runs/tools/delivery.py",
     "backend/src/modules/runs/tools/files.py",
+    "backend/src/modules/triage/service.py",
+    "backend/src/schemas/triage.py",
     "backend/tests/unit/test_artifacts_service.py",
     "backend/tests/unit/test_chat_sql_paging.py",
     "backend/tests/unit/test_domain_modules.py",
@@ -33,6 +38,10 @@
     "web/src/components/chat/MessageItem.tsx",
     "web/src/components/chat/MessageStream.tsx",
     "web/src/components/chat/ThinkingCapsule.tsx",
+    "web/src/components/home/TaskCard.tsx",
+    "web/src/components/home/WidgetsRail.tsx",
+    "web/src/components/layout/HeaderBrand.tsx",
+    "web/src/components/ui/NotificationCard.tsx",
     "web/src/components/ui/c-message-3-utils/bubble.tsx",
     "web/src/lib/api.ts",
     "web/src/lib/contract.ts",
@@ -40,6 +49,7 @@
     "web/src/queries/chat.ts",
     "web/src/queries/runs.ts",
     "web/src/routes/ChatRoute.tsx",
+    "web/src/routes/LandingRoute.tsx",
     "web/src/styles/tokens.css",
     "web/src/types/index.ts",
     "web/vite.config.ts"
@@ -50,17 +60,23 @@
       "transcript": "/0/full.jsonl",
       "content_hash": "/0/content_hash.txt",
       "prompt": ""
+    },
+    {
+      "metadata": "/1/metadata.json",
+      "transcript": "/1/full.jsonl",
+      "content_hash": "/1/content_hash.txt",
+      "prompt": "/1/prompt.txt"
     }
   ],
   "redaction": {
-    "replacements": 2,
+    "replacements": 5,
     "layers": {
       "betterleaks": 0,
       "connection_string": 0,
       "credential_key": 0,
       "credential_value": 0,
       "credentialed_uri": 0,
-      "entropy": 2,
+      "entropy": 5,
       "key_context": 0,
       "provider_token": 0,
       "shell_stdin": 0
