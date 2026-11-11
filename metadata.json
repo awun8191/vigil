@@ -3,7 +3,7 @@
   "checkpoint_id": "01M75FAR8DHSKK06TEY2P3774P",
   "strategy": "manual-commit",
   "branch": "main",
-  "checkpoints_count": 22,
+  "checkpoints_count": 23,
   "files_touched": [
     "CONTRIBUTING.md",
     "PROJECT.md",
@@ -49,6 +49,8 @@
     "backend/tests/unit/test_cards_service.py",
     "backend/tests/unit/test_chat_sql_paging.py",
     "backend/tests/unit/test_domain_modules.py",
+    "backend/tests/unit/test_mcp_factory_adversarial.py",
+    "backend/tests/unit/test_mcp_stress.py",
     "backend/tests/unit/test_router_factories.py",
     "backend/tests/unit/test_router_factory.py",
     "backend/tests/unit/test_security_adversarial.py",
@@ -199,12 +201,18 @@
       "transcript": "/17/full.jsonl",
       "content_hash": "/17/content_hash.txt",
       "prompt": ""
+    },
+    {
+      "metadata": "/18/metadata.json",
+      "transcript": "/18/full.jsonl",
+      "content_hash": "/18/content_hash.txt",
+      "prompt": ""
     }
   ],
   "redaction": {
-    "replacements": 254,
+    "replacements": 257,
     "layers": {
-      "betterleaks": 21,
+      "betterleaks": 24,
       "connection_string": 0,
       "credential_key": 0,
       "credential_value": 72,
