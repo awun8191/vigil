@@ -3,7 +3,7 @@
   "checkpoint_id": "01M75FAR8DHSKK06TEY2P3774P",
   "strategy": "manual-commit",
   "branch": "main",
-  "checkpoints_count": 3,
+  "checkpoints_count": 4,
   "files_touched": [
     "CONTRIBUTING.md",
     "PROJECT.md",
@@ -34,6 +34,7 @@
     "backend/src/modules/settings/router.py",
     "backend/src/modules/triage/service.py",
     "backend/src/schemas/triage.py",
+    "backend/tests/integration/test_adversarial_m4.py",
     "backend/tests/integration/test_schemas_adversarial.py",
     "backend/tests/integration/test_triage_pipeline.py",
     "backend/tests/unit/test_artifacts_service.py",
@@ -87,17 +88,23 @@
       "transcript": "/2/full.jsonl",
       "content_hash": "/2/content_hash.txt",
       "prompt": ""
+    },
+    {
+      "metadata": "/3/metadata.json",
+      "transcript": "/3/full.jsonl",
+      "content_hash": "/3/content_hash.txt",
+      "prompt": ""
     }
   ],
   "redaction": {
-    "replacements": 17,
+    "replacements": 22,
     "layers": {
       "betterleaks": 1,
       "connection_string": 0,
       "credential_key": 0,
-      "credential_value": 10,
+      "credential_value": 12,
       "credentialed_uri": 0,
-      "entropy": 7,
+      "entropy": 10,
       "key_context": 0,
       "provider_token": 0,
       "shell_stdin": 0
