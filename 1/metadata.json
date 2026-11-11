@@ -1,0 +1,49 @@
+{
+  "cli_version": "0.12.2",
+  "checkpoint_id": "01M75W9QS4EJ0RX0CM2ECR0DQ7",
+  "session_id": "d81458ed-c8da-40ed-9b79-863873368538",
+  "strategy": "manual-commit",
+  "created_at": "2026-11-11T18:00:39.714404334Z",
+  "branch": "main",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".commandcode/taste/taste.md",
+    ".commandcode/taste/taste/taste.md",
+    "PROJECT.md",
+    "backend/src/dependencies.py",
+    "backend/src/modules/runs/tools/__init__.py",
+    "backend/src/modules/runs/tools/browser.py",
+    "backend/tests/integration/test_adversarial_m4.py",
+    "backend/tests/unit/test_browser_tools.py",
+    "backend/tests/unit/test_challenger_m5_adversarial.py",
+    "backend/tests/unit/test_dependencies.py",
+    "backend/tests/unit/test_m4_adversarial.py",
+    "backend/tests/unit/test_voice.py",
+    "web/src/components/chat/ArtifactCard.tsx",
+    "web/src/components/chat/LiveBrowserCard.tsx",
+    "web/src/components/chat/MarkdownContent.tsx",
+    "web/src/components/chat/MessageItem.tsx",
+    "web/src/components/hark/HarkSearchModal.tsx",
+    "web/src/components/hark/HarkUnifiedApp.tsx",
+    "web/src/styles/tokens.css"
+  ],
+  "agent": "Antigravity",
+  "model": "gemini-3.8-flash-tiered",
+  "turn_id": "6c8e05df3551",
+  "checkpoint_transcript_start": 1298,
+  "transcript_lines_at_start": 1298,
+  "redaction": {
+    "replacements": 7,
+    "layers": {
+      "betterleaks": 1,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 6,
+      "credentialed_uri": 0,
+      "entropy": 1,
+      "key_context": 0,
+      "provider_token": 0,
+      "shell_stdin": 0
+    }
+  }
+}
