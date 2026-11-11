@@ -3,7 +3,7 @@
   "checkpoint_id": "01M75FAR8DHSKK06TEY2P3774P",
   "strategy": "manual-commit",
   "branch": "main",
-  "checkpoints_count": 13,
+  "checkpoints_count": 14,
   "files_touched": [
     "CONTRIBUTING.md",
     "PROJECT.md",
@@ -88,6 +88,7 @@
     "web/src/routes/PairRoute.tsx",
     "web/src/styles/tokens.css",
     "web/src/types/index.ts",
+    "web/tests/m4_frontend_stress.mjs",
     "web/vite.config.ts"
   ],
   "sessions": [
@@ -168,17 +169,23 @@
       "transcript": "/12/full.jsonl",
       "content_hash": "/12/content_hash.txt",
       "prompt": ""
+    },
+    {
+      "metadata": "/13/metadata.json",
+      "transcript": "/13/full.jsonl",
+      "content_hash": "/13/content_hash.txt",
+      "prompt": ""
     }
   ],
   "redaction": {
-    "replacements": 181,
+    "replacements": 190,
     "layers": {
-      "betterleaks": 7,
+      "betterleaks": 8,
       "connection_string": 0,
       "credential_key": 0,
-      "credential_value": 35,
+      "credential_value": 42,
       "credentialed_uri": 1,
-      "entropy": 144,
+      "entropy": 146,
       "key_context": 0,
       "provider_token": 0,
       "shell_stdin": 0
