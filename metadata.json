@@ -3,7 +3,7 @@
   "checkpoint_id": "01M75FAR8DHSKK06TEY2P3774P",
   "strategy": "manual-commit",
   "branch": "main",
-  "checkpoints_count": 9,
+  "checkpoints_count": 10,
   "files_touched": [
     "CONTRIBUTING.md",
     "PROJECT.md",
@@ -41,6 +41,7 @@
     "backend/tests/integration/test_schemas_adversarial.py",
     "backend/tests/integration/test_triage_pipeline.py",
     "backend/tests/unit/test_artifacts_service.py",
+    "backend/tests/unit/test_cards_service.py",
     "backend/tests/unit/test_chat_sql_paging.py",
     "backend/tests/unit/test_domain_modules.py",
     "backend/tests/unit/test_router_factories.py",
@@ -48,10 +49,13 @@
     "backend/tests/unit/test_security_adversarial.py",
     "backend/tests/unit/test_tools.py",
     "backend/uv.lock",
+    "docs/HARK_PRO_SPECIFICATION.md",
     "web/README.md",
     "web/package-lock.json",
     "web/package.json",
     "web/src/App.tsx",
+    "web/src/components/chat/ArtifactCard.tsx",
+    "web/src/components/chat/InlineApprovalCard.tsx",
     "web/src/components/chat/InputPill.tsx",
     "web/src/components/chat/MessageItem.tsx",
     "web/src/components/chat/MessageStream.tsx",
@@ -133,17 +137,23 @@
       "transcript": "/8/full.jsonl",
       "content_hash": "/8/content_hash.txt",
       "prompt": ""
+    },
+    {
+      "metadata": "/9/metadata.json",
+      "transcript": "/9/full.jsonl",
+      "content_hash": "/9/content_hash.txt",
+      "prompt": ""
     }
   ],
   "redaction": {
-    "replacements": 97,
+    "replacements": 100,
     "layers": {
       "betterleaks": 1,
       "connection_string": 0,
       "credential_key": 0,
-      "credential_value": 13,
+      "credential_value": 14,
       "credentialed_uri": 0,
-      "entropy": 84,
+      "entropy": 86,
       "key_context": 0,
       "provider_token": 0,
       "shell_stdin": 0
