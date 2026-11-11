@@ -3,7 +3,7 @@
   "checkpoint_id": "01M75FAR8DHSKK06TEY2P3774P",
   "strategy": "manual-commit",
   "branch": "main",
-  "checkpoints_count": 66,
+  "checkpoints_count": 67,
   "files_touched": [
     "CONTRIBUTING.md",
     "PROJECT.md",
@@ -16,6 +16,7 @@
     "backend/src/config/settings.py",
     "backend/src/dependencies.py",
     "backend/src/integrations/jev/jev.py",
+    "backend/src/integrations/mcp/factory.py",
     "backend/src/modules/artifacts/data.py",
     "backend/src/modules/artifacts/router.py",
     "backend/src/modules/artifacts/service.py",
@@ -35,6 +36,7 @@
     "backend/src/modules/runs/tools/browser.py",
     "backend/src/modules/runs/tools/delivery.py",
     "backend/src/modules/runs/tools/files.py",
+    "backend/src/modules/runs/tools/mcp_bridge.py",
     "backend/src/modules/settings/dependencies.py",
     "backend/src/modules/settings/router.py",
     "backend/src/modules/settings/validators.py",
@@ -57,6 +59,7 @@
     "backend/tests/unit/test_compaction_effectiveness.py",
     "backend/tests/unit/test_domain_modules.py",
     "backend/tests/unit/test_m4_adversarial.py",
+    "backend/tests/unit/test_mcp_factory.py",
     "backend/tests/unit/test_mcp_factory_adversarial.py",
     "backend/tests/unit/test_mcp_stress.py",
     "backend/tests/unit/test_router_factories.py",
@@ -479,12 +482,18 @@
       "transcript": "/60/full.jsonl",
       "content_hash": "/60/content_hash.txt",
       "prompt": ""
+    },
+    {
+      "metadata": "/61/metadata.json",
+      "transcript": "/61/full.jsonl",
+      "content_hash": "/61/content_hash.txt",
+      "prompt": ""
     }
   ],
   "redaction": {
-    "replacements": 521,
+    "replacements": 525,
     "layers": {
-      "betterleaks": 54,
+      "betterleaks": 58,
       "connection_string": 0,
       "credential_key": 0,
       "credential_value": 154,
