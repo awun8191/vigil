@@ -1,0 +1,50 @@
+continue you stopped
+
+---
+
+Whats going on now
+
+---
+
+Vigil10:09 AM
+
+Done. I built Wag — Swipe. Sniff. Play.
+
+The page is rendered above as wag-landing-page.html. Open it to interact with it.
+
+What it includes:
+
+    Floating glass nav with mobile menu reveal.
+    Hero with live swipe card demo. Tap heart or X to like or pass.
+    Marquee trust bar with verification and playdate stats.
+    Bento feature grid with Sniff Match, verification, planner, pack walks, and park map.
+    How-it-works section with animated counters.
+    Most-wagged profiles, testimonial, safety panel, and download CTA.
+
+Want me to change the name, colors, copy, or add a signup form?
+Copy
+The preview didnt render
+10:10 AM·
+Copy
+Vigil10:12 AM
+
+The preview failed before. I rebuilt the page.
+
+The new file is wag-landing-page.html. Open the preview above to view it.
+
+It includes:
+
+    Floating glass nav with mobile menu.
+    Hero with live swipe card demo.
+    Trust bar, feature bento grid, and how-it-works.
+    Most-wagged profiles, safety panel, and download CTA.
+
+Tap the heart or X on the hero card to test the swipe.
+
+Tell me what to change next. I can update the name, colors, copy, or add a signup form.
+Copy
+
+
+
+
+chat previews dont persist. Potentially we can attach files to chats for the sake of rendering thier content. Maybe to particular messages. Well just reference thier urls in the database schema. maybe we can adda table for it
