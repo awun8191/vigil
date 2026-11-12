@@ -1,0 +1,31 @@
+{
+  "cli_version": "0.12.2",
+  "checkpoint_id": "01M77E67JY7GPKFS4G47NTHCKK",
+  "session_id": "ec4f45b7-5545-4fbf-a939-79433ba90a6c",
+  "strategy": "manual-commit",
+  "created_at": "2026-11-12T08:32:33.741741568Z",
+  "branch": "main",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "backend/src/dependencies.py"
+  ],
+  "agent": "Antigravity",
+  "model": "gemini-3.8-flash-tiered",
+  "turn_id": "5887912790a9",
+  "checkpoint_transcript_start": 85,
+  "transcript_lines_at_start": 85,
+  "redaction": {
+    "replacements": 2,
+    "layers": {
+      "betterleaks": 0,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 0,
+      "credentialed_uri": 0,
+      "entropy": 2,
+      "key_context": 0,
+      "provider_token": 0,
+      "shell_stdin": 0
+    }
+  }
+}
