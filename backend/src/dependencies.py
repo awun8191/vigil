@@ -775,9 +775,16 @@ class RunToolExecutor:
             secrets=await self._load_tool_secrets(),
         )
         result = await invoke_tool(name, dict(arguments), context)
+        artifact_id: UUID | None = None
         if result.ok and result.artifact_ref:
-            await self._register_artifact(name, result)
-        return result.model_dump()
+            artifact_id = await self._register_artifact(name, result)
+        dumped = result.model_dump()
+        if artifact_id is not None:
+            dumped["artifact_id"] = str(artifact_id)
+            content = dumped.get("content")
+            if isinstance(content, dict):
+                content.setdefault("artifact_id", str(artifact_id))
+        return dumped
 
     async def execute_external(
         self, name: str, arguments: Mapping[str, Any]
@@ -805,14 +812,18 @@ class RunToolExecutor:
             "error": result.output if result.is_error else None,
         }
 
-    async def _register_artifact(self, tool_name: str, result: Any) -> None:
+    async def _register_artifact(self, tool_name: str, result: Any) -> UUID | None:
         """Write one artifact row for a file that a tool delivered.
 
         Uses ArtifactsService so both database-backed and sessionless runs
         register the artifact with a preview snippet for rich UI rendering.
+        Returns the saved artifact id so the caller can link the step payload
+        to the row without path matching. The id is also stamped into
+        ``result.content`` when it is a dict, so journaled tool results carry
+        the link after a refresh.
         """
         if not result.artifact_ref:
-            return
+            return None
         from src.modules.artifacts.repository import ArtifactCreateDTO
         from src.modules.artifacts.service import ArtifactsService
 
@@ -824,7 +835,7 @@ class RunToolExecutor:
             preview = _build_artifact_preview(path)
 
         service = ArtifactsService(session=self.session, settings=self.settings)
-        await service.save_artifact(
+        saved = await service.save_artifact(
             ArtifactCreateDTO(
                 run_id=self.run_id,
                 kind=DELIVERY_ARTIFACT_KINDS.get(tool_name, "document"),
@@ -835,6 +846,8 @@ class RunToolExecutor:
         )
         if isinstance(result.content, dict):
             result.content.setdefault("preview", preview)
+            result.content.setdefault("artifact_id", str(saved.id))
+        return saved.id
 
     async def _close_browser_session(self) -> None:
         """Close the live Firecrawl session of this run, best effort."""
