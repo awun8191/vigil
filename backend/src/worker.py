@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 import os
 import signal
 import sys
@@ -41,6 +42,9 @@ JOB_RETRY_DELAY_SECONDS = 30
 IDLE_SWEEP_INTERVAL_SECONDS = 300
 """The worker runs the idle session index sweep on this fixed interval."""
 
+WIDGET_SWEEP_INTERVAL_SECONDS = 60
+"""The worker sweeps due widget refreshes on this fixed interval."""
+
 
 class UnknownJobTypeError(RuntimeError):
     """Raised when the queue holds a job type with no registered handler."""
@@ -56,6 +60,15 @@ class JobHandlerUnavailableError(RuntimeError):
     def __init__(self, job_type: str, reason: str) -> None:
         self.job_type = job_type
         super().__init__(f"Handler for job type {job_type!r} cannot run: {reason}")
+
+
+class PermanentJobError(RuntimeError):
+    """Raised when a job must fail at once instead of retrying.
+
+    A handler raises this for a poison payload: a missing row, a validation
+    error, or an unknown refresh kind. The worker records the job as failed
+    without another attempt.
+    """
 
 
 @dataclass(frozen=True)
@@ -241,6 +254,190 @@ async def handle_discover_mcp_tools(job: JobDTO, context: JobContext) -> None:
         )
 
 
+#: Cap of table rows kept from one connector refresh.
+WIDGET_TABLE_MAX_ROWS = 50
+
+#: Cap of feed entries kept from one connector refresh.
+WIDGET_FEED_MAX_ENTRIES = 30
+
+#: Cap of task items kept from one connector refresh.
+WIDGET_TASK_MAX_ITEMS = 50
+
+#: Connector query executor for widget refreshes, or None in this build.
+#:
+#: The signature is ``(connector_id, query, user_id) -> raw payload dict``.
+#: A test installs a fake here. Production has no connector query executor
+#: yet, so a connector_query refresh fails permanently with that message
+#: instead of retrying a call that cannot succeed.
+WIDGET_CONNECTOR_QUERY: (
+    Callable[[str, str, UUID], Awaitable[dict[str, Any]]] | None
+) = None
+
+
+def _widget_next_refresh_at(interval_minutes: int | None) -> datetime | None:
+    """Compute the next refresh time of one widget row."""
+    if interval_minutes is None:
+        return None
+    return datetime.now(timezone.utc) + timedelta(minutes=interval_minutes)
+
+
+def _truncate_refresh_payload(
+    widget_type: str, payload: dict[str, Any]
+) -> dict[str, Any]:
+    """Cap one refreshed payload at the schema limits."""
+    trimmed = dict(payload)
+    if widget_type == "data_table" and isinstance(trimmed.get("rows"), list):
+        trimmed["rows"] = trimmed["rows"][:WIDGET_TABLE_MAX_ROWS]
+    elif widget_type == "status_feed" and isinstance(trimmed.get("entries"), list):
+        trimmed["entries"] = trimmed["entries"][:WIDGET_FEED_MAX_ENTRIES]
+    elif widget_type == "task_list" and isinstance(trimmed.get("items"), list):
+        trimmed["items"] = trimmed["items"][:WIDGET_TASK_MAX_ITEMS]
+    return trimmed
+
+
+async def handle_refresh_widget(job: JobDTO, context: JobContext) -> None:
+    """Refresh one dashboard widget row and reschedule its next run.
+
+    The handler only commits the row plus the version bump. There is no event
+    bus to publish on: the dashboard sees the change on the next cursor poll
+    of ``GET /api/v1/widgets/stream``.
+    """
+    from pydantic import ValidationError as PydanticValidationError
+
+    from src.modules.widgets.data import validate_widget_payload
+    from src.modules.widgets.service import WidgetsService
+
+    payload = _payload(job)
+    raw_widget_id = payload.get("widget_id")
+    raw_user_id = payload.get("user_id")
+    if not raw_widget_id or not raw_user_id:
+        raise JobHandlerUnavailableError(
+            job.type, "the refresh_widget payload has no widget_id or user_id"
+        )
+    try:
+        widget_id = UUID(str(raw_widget_id))
+        user_id = UUID(str(raw_user_id))
+    except ValueError as exc:
+        raise JobHandlerUnavailableError(
+            job.type, f"the refresh_widget payload ids are not UUIDs: {exc}"
+        ) from exc
+
+    service = WidgetsService(session=context.session, settings=context.settings)
+    row = await service.get_widget(widget_id, user_id)
+    if row is None:
+        raise PermanentJobError(f"widget {widget_id} not found")
+    config = row.refresh_config or {}
+    kind = config.get("kind", "static")
+    next_at = _widget_next_refresh_at(row.refresh_interval_minutes)
+
+    if kind == "static" or row.refresh_config is None:
+        await service.touch_refresh(widget_id, user_id, next_at)
+        return
+    if kind != "connector_query":
+        await service.touch_refresh(widget_id, user_id, next_at)
+        raise PermanentJobError(f"unknown widget refresh kind: {kind!r}")
+    if WIDGET_CONNECTOR_QUERY is None:
+        await service.touch_refresh(widget_id, user_id, next_at)
+        raise PermanentJobError("no connector query executor in this build")
+    connector_id = str(config.get("connector_id") or "")
+    query = str(config.get("query") or "")
+    try:
+        raw_payload = await WIDGET_CONNECTOR_QUERY(connector_id, query, user_id)
+    except PermanentJobError:
+        raise
+    except Exception as exc:  # noqa: BLE001 - a connector failure retries
+        raise RuntimeError(f"connector query failed: {exc}") from exc
+    try:
+        parsed = validate_widget_payload(
+            row.widget_type, _truncate_refresh_payload(row.widget_type, raw_payload)
+        )
+    except (ValueError, PydanticValidationError) as exc:
+        await service.touch_refresh(widget_id, user_id, next_at)
+        raise PermanentJobError(f"refreshed payload is invalid: {exc}") from exc
+    await service.apply_refresh(
+        widget_id, user_id, parsed.model_dump(), _widget_next_refresh_at(
+            row.refresh_interval_minutes
+        ),
+    )
+
+
+async def _has_pending_widget_refresh(
+    jobs_service: Any, widget_id: UUID
+) -> bool:
+    """Return True when a pending refresh_widget job already covers this row."""
+    seen: list[Any] = []
+    is_db_active = False
+    is_active = getattr(jobs_service, "_is_db_session_active", None)
+    if callable(is_active):
+        try:
+            is_db_active = bool(is_active())
+        except Exception:  # noqa: BLE001 - a failed probe means memory store
+            is_db_active = False
+    if not is_db_active:
+        store = getattr(jobs_service, "_jobs", None)
+        if isinstance(store, dict):
+            seen = list(store.values())
+    else:
+        session = getattr(jobs_service, "session", None)
+        if session is None:
+            return False
+        try:
+            from sqlalchemy import select
+
+            from src.schemas.system import JobModel
+
+            rows = (
+                await session.execute(
+                    select(JobModel).where(
+                        JobModel.type == "refresh_widget",
+                        JobModel.status == "pending",
+                    )
+                )
+            ).scalars().all()
+            seen = list(rows)
+        except Exception:  # noqa: BLE001 - a failed probe must not stop the sweep
+            return False
+    for job in seen:
+        payload = job.payload if isinstance(job.payload, dict) else {}
+        if job.type == "refresh_widget" and payload.get("widget_id") == str(widget_id):
+            status = getattr(job, "status", None)
+            if status == "pending":
+                return True
+    return False
+
+
+async def sweep_due_widget_refreshes(
+    session: Any,
+    settings: Any,
+    limit: int = 50,
+) -> int:
+    """Enqueue one refresh_widget job per due widget row.
+
+    Rows that already have a pending refresh job are skipped. Returns the
+    number of jobs enqueued.
+    """
+    from src.modules.jobs.repository import JobCreateDTO
+    from src.modules.jobs.service import JobsService
+    from src.modules.widgets.service import WidgetsService
+
+    jobs_service = JobsService(session=session, settings=settings)
+    widgets_service = WidgetsService(session=session, settings=settings)
+    due = await widgets_service.claim_due_refresh(limit=limit)
+    enqueued = 0
+    for row in due:
+        if await _has_pending_widget_refresh(jobs_service, row.id):
+            continue
+        await jobs_service.enqueue(
+            JobCreateDTO(
+                type="refresh_widget",
+                payload={"widget_id": str(row.id), "user_id": str(row.user_id)},
+                run_at=row.next_refresh_at,
+            )
+        )
+        enqueued += 1
+    return enqueued
+
+
 JOB_HANDLERS: dict[str, JobHandler] = {
     "resume_run": handle_resume_run,
     "execute_run": handle_execute_run,
@@ -249,6 +446,7 @@ JOB_HANDLERS: dict[str, JobHandler] = {
     "poll_connector": handle_poll_connector,
     "cleanup_sandbox": handle_cleanup_sandbox,
     "reindex_memory": handle_reindex_memory,
+    "refresh_widget": handle_refresh_widget,
 }
 """The dispatch table. It holds one handler for every type in JOB_TYPE_PRIORITIES."""
 
@@ -445,6 +643,13 @@ async def process_job(
         await jobs_service.mark_failed(job.id, error=str(err), permanent=True)
         await commit_job_outcome(context.session, log)
         return
+    except PermanentJobError as err:
+        log.error("Job failed permanently", job_id=str(job.id), job_type=job.type)
+        # No rollback: writes before a PermanentJobError are deliberate,
+        # such as rescheduling the next widget refresh after a poison payload.
+        await jobs_service.mark_failed(job.id, error=str(err), permanent=True)
+        await commit_job_outcome(context.session, log)
+        return
     except Exception as err:
         log.error(
             "Job execution failed",
@@ -497,6 +702,7 @@ async def run_worker(
 
     last_reap = 0.0
     last_idle_sweep = 0.0
+    last_widget_sweep = 0.0
 
     # Main worker poll loop
     while not stop_event.is_set():
@@ -509,6 +715,11 @@ async def run_worker(
         )
         if should_sweep_idle:
             last_idle_sweep = now_monotonic
+        should_sweep_widgets = reap_is_due(
+            now_monotonic, last_widget_sweep, WIDGET_SWEEP_INTERVAL_SECONDS
+        )
+        if should_sweep_widgets:
+            last_widget_sweep = now_monotonic
 
         try:
             async for session in get_db_session(settings):
@@ -538,6 +749,16 @@ async def run_worker(
                     if idle_jobs:
                         logger.info(
                             "Enqueued idle session index jobs", count=len(idle_jobs)
+                        )
+
+                # 2b. Enqueue one refresh job per due widget row.
+                if should_sweep_widgets:
+                    widget_jobs = await sweep_due_widget_refreshes(
+                        session=session, settings=settings
+                    )
+                    if widget_jobs:
+                        logger.info(
+                            "Enqueued widget refresh jobs", count=widget_jobs
                         )
 
                 # 3. Claim the next job.

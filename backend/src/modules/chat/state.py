@@ -133,6 +133,7 @@ class SqlChatRepository:
             role=model.role,
             content=model.content or "",
             created_at=model.created_at,
+            run_id=model.run_id,
         )
 
     async def get_session(self, session_id: UUID) -> ChatSessionDTO | None:

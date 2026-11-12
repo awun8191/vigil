@@ -27,6 +27,7 @@ JOB_TYPE_PRIORITIES: dict[str, int] = {
     "execute_run": 90,
     "triage_item": 60,
     "index_memory": 50,
+    "refresh_widget": 40,
     "poll_connector": 20,
     "cleanup_sandbox": 10,
     "reindex_memory": 5,
@@ -95,9 +96,7 @@ class JobsService:
 
     def _is_db_session_active(self) -> bool:
         """Check if self.session is a real AsyncSession capable of running database queries."""
-        if self.session is None:
-            return False
-        return not type(self.session).__name__.startswith("_Fallback")
+        return isinstance(self.session, AsyncSession)
 
     def _to_dto(self, model: JobModel) -> JobDTO:
         return JobDTO(

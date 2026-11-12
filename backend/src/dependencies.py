@@ -3,7 +3,7 @@ Central dependency hub for Vigil FastAPI backend.
 
 Centrally re-exports:
 - Core application dependencies (get_settings, get_db_session, get_current_device, get_current_user)
-- All 15 domain module service providers (get_<module>_service)
+- All 17 domain module service providers (get_<module>_service)
 - External infrastructure integration clients (get_jev_client, get_llm_client, etc.)
 
 Routers and tasks must import dependencies strictly from this module.
@@ -253,7 +253,7 @@ def get_compaction_service(
 
 
 # =============================================================================
-# 15 Domain Module Service Providers
+# Domain Module Service Providers
 # =============================================================================
 
 get_health_service = _resolve_service_dependency("health", "get_health_service")
@@ -268,7 +268,7 @@ get_connectors_service = _resolve_service_dependency("connectors", "get_connecto
 get_settings_service = _resolve_service_dependency("settings", "get_settings_service")
 get_audit_service = _resolve_service_dependency("audit", "get_audit_service")
 get_jobs_service = _resolve_service_dependency("jobs", "get_jobs_service")
-
+get_widgets_service = _resolve_service_dependency("widgets", "get_widgets_service")
 
 def get_key_vault_service(
     session: AsyncSession = Depends(get_db_session),
@@ -757,6 +757,19 @@ class RunToolExecutor:
             )
         ).scalar_one_or_none()
 
+    async def _owner_id_or_none(self) -> UUID | None:
+        """Return the run owner, or None when the session cannot say.
+
+        Widget tools reject a None identity with a failed result, so a missing
+        session never silently writes as another user.
+        """
+        if self.session is None:
+            return None
+        try:
+            return await self._run_owner_id()
+        except Exception:  # noqa: BLE001 - a failed lookup means no identity
+            return None
+
     async def execute(
         self, name: str, arguments: Mapping[str, Any]
     ) -> Mapping[str, Any]:
@@ -773,11 +786,21 @@ class RunToolExecutor:
             delivery_dir=Path(self.delivery_dir),
             llm=self.llm,
             secrets=await self._load_tool_secrets(),
+            run_id=self.run_id,
+            user_id=await self._owner_id_or_none(),
+            session=self.session,
         )
         result = await invoke_tool(name, dict(arguments), context)
+        artifact_id: UUID | None = None
         if result.ok and result.artifact_ref:
-            await self._register_artifact(name, result)
-        return result.model_dump()
+            artifact_id = await self._register_artifact(name, result)
+        dumped = result.model_dump()
+        if artifact_id is not None:
+            dumped["artifact_id"] = str(artifact_id)
+            content = dumped.get("content")
+            if isinstance(content, dict):
+                content.setdefault("artifact_id", str(artifact_id))
+        return dumped
 
     async def execute_external(
         self, name: str, arguments: Mapping[str, Any]
@@ -805,14 +828,18 @@ class RunToolExecutor:
             "error": result.output if result.is_error else None,
         }
 
-    async def _register_artifact(self, tool_name: str, result: Any) -> None:
+    async def _register_artifact(self, tool_name: str, result: Any) -> UUID | None:
         """Write one artifact row for a file that a tool delivered.
 
         Uses ArtifactsService so both database-backed and sessionless runs
         register the artifact with a preview snippet for rich UI rendering.
+        Returns the saved artifact id so the caller can link the step payload
+        to the row without path matching. The id is also stamped into
+        ``result.content`` when it is a dict, so journaled tool results carry
+        the link after a refresh.
         """
         if not result.artifact_ref:
-            return
+            return None
         from src.modules.artifacts.repository import ArtifactCreateDTO
         from src.modules.artifacts.service import ArtifactsService
 
@@ -824,7 +851,7 @@ class RunToolExecutor:
             preview = _build_artifact_preview(path)
 
         service = ArtifactsService(session=self.session, settings=self.settings)
-        await service.save_artifact(
+        saved = await service.save_artifact(
             ArtifactCreateDTO(
                 run_id=self.run_id,
                 kind=DELIVERY_ARTIFACT_KINDS.get(tool_name, "document"),
@@ -835,6 +862,8 @@ class RunToolExecutor:
         )
         if isinstance(result.content, dict):
             result.content.setdefault("preview", preview)
+            result.content.setdefault("artifact_id", str(saved.id))
+        return saved.id
 
     async def _close_browser_session(self) -> None:
         """Close the live Firecrawl session of this run, best effort."""
@@ -1023,7 +1052,7 @@ __all__ = [
     "get_db_session",
     "get_current_device",
     "get_current_user",
-    # Domain Module Service Providers (15)
+    # Domain Module Service Providers
     "get_health_service",
     "get_auth_service",
     "get_cards_service",
@@ -1040,6 +1069,7 @@ __all__ = [
     "get_settings_service",
     "get_audit_service",
     "get_jobs_service",
+    "get_widgets_service",
     "get_key_vault_service",
 
 

@@ -18,6 +18,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Literal
+from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
@@ -29,7 +30,7 @@ ApprovalLevel = Literal["read", "local", "external"]
 APPROVAL_LEVELS: tuple[ApprovalLevel, ...] = ("read", "local", "external")
 
 #: The harness exposes built-in tools.
-TOOL_COUNT = 15
+TOOL_COUNT = 18
 
 
 class ToolResult(BaseModel):
@@ -81,6 +82,12 @@ class ToolContext:
     """Model client for tools that need inference, such as ``view_image``."""
     secrets: Mapping[str, str] = field(default_factory=dict)
     """Vault secrets resolved for the run owner, keyed by environment name."""
+    run_id: UUID | None = None
+    """Run that owns this call. Never set from tool args, only by the executor."""
+    user_id: UUID | None = None
+    """User that owns the run. Never set from tool args, only by the executor."""
+    session: Any | None = None
+    """Database session for tools that persist rows. Set by the executor."""
 
 
 Handler = Callable[[Any, ToolContext], Awaitable[ToolResult]]
@@ -163,6 +170,7 @@ from src.modules.runs.tools.search import EXA_TOOLS  # noqa: E402
 from src.modules.runs.tools.shell import SHELL_TOOLS  # noqa: E402
 from src.modules.runs.tools.skills import SKILL_TOOLS  # noqa: E402
 from src.modules.runs.tools.tasks import TASK_TOOLS  # noqa: E402
+from src.modules.runs.tools.widgets import WIDGET_TOOLS  # noqa: E402
 
 
 def build_registry(tools: Sequence[Tool]) -> Mapping[str, Tool]:
@@ -186,6 +194,7 @@ TOOLS: Mapping[str, Tool] = build_registry(
         *SKILL_TOOLS,
         *EXA_TOOLS,
         *BROWSER_TOOLS,
+        *WIDGET_TOOLS,
     )
 )
 

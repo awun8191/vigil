@@ -30,6 +30,7 @@ import type {
   VaultSecretDTO,
   SetVaultSecretRequest,
   VaultValidationResult,
+  Widget,
 } from '@/types';
 
 import type { VigilApi } from './contract';
@@ -207,6 +208,27 @@ const liveApi: VigilApi = {
 
   cardFeedback(cardId, body: CardFeedbackRequest, scope) {
     return request<Card>(`/cards/${cardId}/feedback`, { method: 'POST', body, scope });
+  },
+
+  listWidgets() {
+    return request<Widget[]>('/widgets');
+  },
+
+  deleteWidget(widgetId: string, scope: string) {
+    return request<void>(`/widgets/${widgetId}`, { method: 'DELETE', scope });
+  },
+
+  openWidgetsStream({ handlers }) {
+    if (!bearerToken) {
+      handlers.onStateChange?.('closed');
+      return () => undefined;
+    }
+    return createEventStream({
+      url: buildUrl('/widgets/stream'),
+      token: bearerToken,
+      onEvent: handlers.onEvent,
+      ...(handlers.onStateChange ? { onStateChange: handlers.onStateChange } : {}),
+    });
   },
 
   createRun(body: RunCreateRequest, scope: string) {

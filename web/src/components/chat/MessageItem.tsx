@@ -1,4 +1,5 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { motion, useReducedMotion } from 'framer-motion';
 import { AlertCircle, Check, Clock, Copy } from 'lucide-react';
 import type { StreamMessage } from '@/types';
@@ -7,7 +8,7 @@ import { MarkdownContent } from './MarkdownContent';
 import { ThinkingCapsule } from './ThinkingCapsule';
 import { ArtifactCard, buildDeliverables } from './ArtifactCard';
 import { LiveBrowserCard, buildBrowserPreviews } from './LiveBrowserCard';
-import { useRunArtifacts, useRunSteps } from '@/queries/runs';
+import { runArtifactsKey, useRunArtifacts, useRunSteps } from '@/queries/runs';
 
 interface Props {
   message: StreamMessage;
@@ -57,6 +58,47 @@ export function MessageItem({ message, divider, staggerIndex = 0 }: Props) {
 
   const runStepsQuery = useRunSteps(message.run_id ? message.run_id : null);
   const runArtifactsQuery = useRunArtifacts(message.run_id ? message.run_id : null);
+  const queryClient = useQueryClient();
+
+  // While a run streams, new deliver_file/generate_document results land in
+  // steps before the artifacts row is queryable. Refetch once per new step so
+  // the step-only fallback (artifactId null) upgrades to the saved row without
+  // a manual refresh. Old runs hit this at most once: their step count is stable.
+  const stepCount = runStepsQuery.data?.length ?? 0;
+  useEffect(() => {
+    if (!message.run_id || stepCount === 0) return;
+    if (runArtifactsQuery.isFetching) return;
+    const hasUnlinkedDeliverable = (runStepsQuery.data ?? []).some((step) => {
+      if (step.event_type !== 'tool_result') return false;
+      const toolName = String(step.payload?.tool_name ?? '');
+      if (toolName !== 'deliver_file' && toolName !== 'generate_document') return false;
+      const result = step.payload?.result;
+      if (typeof result !== 'object' || result === null) return false;
+      const res = result as Record<string, unknown>;
+      if (res.ok !== true) return false;
+      const linkedId =
+        typeof res.artifact_id === 'string'
+          ? res.artifact_id
+          : typeof res.content === 'object' && res.content !== null
+            ? (res.content as Record<string, unknown>).artifact_id
+            : undefined;
+      if (typeof linkedId === 'string' && linkedId.length > 0) {
+        return !(runArtifactsQuery.data ?? []).some((a) => a.id === linkedId);
+      }
+      const path =
+        typeof res.artifact_ref === 'string'
+          ? res.artifact_ref
+          : typeof res.content === 'object' && res.content !== null &&
+              typeof (res.content as Record<string, unknown>).path === 'string'
+            ? String((res.content as Record<string, unknown>).path)
+            : '';
+      if (!path) return false;
+      return !(runArtifactsQuery.data ?? []).some((a) => a.path === path);
+    });
+    if (hasUnlinkedDeliverable) {
+      void queryClient.invalidateQueries({ queryKey: runArtifactsKey(message.run_id) });
+    }
+  }, [message.run_id, stepCount, runArtifactsQuery.data, runArtifactsQuery.isFetching, queryClient]);
   const mappedSteps = (runStepsQuery.data ?? [])
     .filter((step) => step.event_type !== 'message_delta')
     .map((step) => ({

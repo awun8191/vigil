@@ -418,6 +418,23 @@ export function HarkLeftRail({ mode }: Props) {
             aria-label="Choose side panels"
             className="chrome-pill absolute bottom-full left-0 right-0 z-40 mb-2 overflow-hidden rounded-[18px] p-1.5"
           >
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => {
+                setMenuOpen(false);
+                navigate('/agent/chat', {
+                  state: { seed: 'I want to add a new panel to my dashboard. Ask me what I want to track.' },
+                });
+              }}
+              className="flex w-full items-center gap-2.5 rounded-[13px] px-3 py-2 text-left text-[12.5px] text-[var(--text-secondary)] transition-colors hover:bg-[var(--panel-inset)] hover:text-[var(--text)]"
+            >
+              <span className="flex items-center gap-2.5">
+                <Sparkles size={14} strokeWidth={1.6} className="text-[var(--text-muted)]" />
+                Track something new
+              </span>
+            </button>
+            <div aria-hidden="true" className="mx-2 my-1 border-t border-[var(--border)]" />
             {ALL_PANELS.map((panel) => {
               const meta = PANEL_META[panel];
               const Icon = meta.icon;

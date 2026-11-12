@@ -1,9 +1,11 @@
-import { AppWindow, ArrowUpRight, CalendarDays, Eye, Gauge, Hash, Mail, PinOff, Plus } from 'lucide-react';
+import { AppWindow, ArrowUpRight, CalendarDays, Eye, Gauge, Hash, LayoutDashboard, Mail, PinOff, Plus, X } from 'lucide-react';
 import { motion, useReducedMotion } from 'framer-motion';
 import type { ComponentType } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useConnectors, useLimits } from '@/queries/settings';
 import { usePinnedWidgets } from '@/components/chat/ArtifactCard';
+import { useDeleteWidget, useWidgets, useWidgetsStream } from '@/queries/widgets';
+import { WidgetView } from '@/components/widgets/registry';
 
 type IconType = ComponentType<{ size?: number; strokeWidth?: number; className?: string }>;
 
@@ -54,9 +56,72 @@ export function WidgetsRail() {
   const reduced = useReducedMotion() ?? false;
 
   const accounts = connectors.data ?? [];
+  const panelsQuery = useWidgets();
+  useWidgetsStream();
+  const panels = panelsQuery.data ?? [];
+  const deleteWidget = useDeleteWidget();
 
   return (
     <aside aria-label="Widgets" className="flex flex-col gap-4">
+      <motion.section {...slideIn(reduced, 0.04)} className="card rounded-squircle-card p-5">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2 text-sm font-medium">
+            <LayoutDashboard size={16} strokeWidth={1.5} className="text-[var(--accent)]" />
+            Your panels
+          </div>
+          {panelsQuery.isSuccess && panels.length > 0 ? (
+            <span className="rounded-full bg-[var(--accent-soft)] px-2 py-0.5 font-mono text-[11px] font-semibold text-[var(--accent)]">
+              {panels.length}
+            </span>
+          ) : null}
+        </div>
+
+        <div className="scroll-soft mt-3 max-h-[420px] space-y-3 overflow-y-auto pr-0.5">
+          {panelsQuery.isPending ? (
+            <p className="rounded-lg bg-[color-mix(in_srgb,var(--text)_5%,transparent)] px-3.5 py-3 text-[13px] leading-relaxed text-[var(--text-muted)]">
+              Loading panels...
+            </p>
+          ) : panelsQuery.isError ? (
+            <div className="rounded-lg bg-[color-mix(in_srgb,var(--text)_5%,transparent)] px-3.5 py-3">
+              <p className="text-[13px] leading-relaxed text-[var(--text-muted)]">
+                Panels are unavailable right now.
+              </p>
+              <button
+                type="button"
+                onClick={() => void panelsQuery.refetch()}
+                className="mt-1.5 cursor-pointer text-[13px] font-medium text-[var(--accent)] hover:underline"
+              >
+                Retry
+              </button>
+            </div>
+          ) : panels.length === 0 ? (
+            <p className="rounded-lg bg-[color-mix(in_srgb,var(--text)_5%,transparent)] px-3.5 py-3 text-[13px] leading-relaxed text-[var(--text-muted)]">
+              No panels yet. Ask the model to create one from chat.
+            </p>
+          ) : (
+            panels.map((panel) => (
+              <div
+                key={panel.id}
+                className="relative overflow-hidden rounded-[var(--r-inner)] border border-[var(--border)] bg-[color-mix(in_srgb,var(--surface-solid)_94%,transparent)] p-3"
+              >
+                <button
+                  type="button"
+                  onClick={() =>
+                    deleteWidget.mutate({ widgetId: panel.id, scope: `widget-delete:${panel.id}` })
+                  }
+                  disabled={deleteWidget.isPending}
+                  aria-label={`Remove ${panel.title}`}
+                  title="Remove panel"
+                  className="absolute right-2 top-2 cursor-pointer rounded-full p-1 text-[var(--text-muted)] transition-colors hover:bg-[color-mix(in_srgb,var(--text)_8%,transparent)] hover:text-[var(--text)] disabled:cursor-default disabled:opacity-50"
+                >
+                  <X size={13} strokeWidth={1.75} />
+                </button>
+                <WidgetView widget={panel} />
+              </div>
+            ))
+          )}
+        </div>
+      </motion.section>
       {widgets.length > 0 ? (
         <motion.section {...slideIn(reduced, 0.08)} className="card rounded-squircle-card p-5">
           <div className="flex items-center justify-between">

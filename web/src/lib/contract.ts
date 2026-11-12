@@ -32,6 +32,7 @@ import type {
   VaultSecretDTO,
   SetVaultSecretRequest,
   VaultValidationResult,
+  Widget,
 } from '@/types';
 
 
@@ -55,6 +56,16 @@ export interface VigilApi {
   listCards(params?: { limit?: number; offset?: number }): Promise<CardListResponse>;
   dismissCard(cardId: string, scope: string): Promise<Card>;
   cardFeedback(cardId: string, body: CardFeedbackRequest, scope: string): Promise<Card>;
+
+  listWidgets(): Promise<Widget[]>;
+  /** Delete one dashboard panel. The backend scopes the delete to the caller. */
+  deleteWidget(widgetId: string, scope: string): Promise<void>;
+  /**
+   * Subscribe to `GET /widgets/stream`. Frames carry `event: widget_updated` with a
+   * `WidgetUpdatedEvent` data payload and `id: <updated_at>` for `Last-Event-ID`
+   * replay. One stream per dashboard, not one per widget. Returns an unsubscribe function.
+   */
+  openWidgetsStream(options: { handlers: StreamHandlers }): () => void;
 
   /**
    * Card actions with `action_type: 'run'` post here. The body is a full `RunCreateRequest`:

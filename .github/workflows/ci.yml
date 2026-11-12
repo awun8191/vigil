@@ -18,6 +18,20 @@ jobs:
     name: Backend unit tests
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: vigil
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     steps:
       - uses: actions/checkout@v7
 
@@ -33,6 +47,10 @@ jobs:
         run: |
           uv python install 3.12
           uv sync --locked --python 3.12
+
+      - name: Migrate test database
+        working-directory: backend
+        run: uv run alembic upgrade head
 
       - name: Run unit tests
         working-directory: backend

@@ -42,6 +42,7 @@ def test_module_factories_list_covers_all_modules() -> None:
         "jobs",
         "pricing",
         "voice",
+        "widgets",
     }
     registered_modules = {mod for mod, _ in MODULE_FACTORIES}
     assert registered_modules == expected_modules

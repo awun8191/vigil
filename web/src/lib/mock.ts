@@ -23,6 +23,7 @@ import type {
   UserSettingsUpdateRequest,
   VaultSecretDTO,
   VaultValidationResult,
+  Widget,
 } from '@/types';
 
 import type { VigilApi } from './contract';
@@ -539,6 +540,19 @@ export const mockApi: VigilApi = {
     const updated: Card = { ...target, feedback: body.feedback };
     cards = cards.map((card) => (card.id === cardId ? updated : card));
     return later(updated);
+  },
+
+  listWidgets(): Promise<Widget[]> {
+    return later([]);
+  },
+
+  deleteWidget(): Promise<void> {
+    return later(undefined);
+  },
+
+  openWidgetsStream({ handlers }) {
+    handlers.onStateChange?.('closed');
+    return () => undefined;
   },
 
   createRun(body: RunCreateRequest) {
