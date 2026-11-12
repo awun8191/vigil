@@ -10,7 +10,7 @@ Vigil watches your inbox, tasks, and deadlines. It triages each event with a che
 sends you an action card, and runs the long jobs inside a Docker sandbox.
 Every action that leaves your machine waits for your approval.
 
-[Quickstart](#quickstart) · [Architecture](#architecture) · [API](#api-surface) · [Documentation](#documentation) · [Contributing](#contributing)
+[Quickstart](#quickstart) · [Documentation](#documentation) · [Configuration](#configuration) · [Development](#development)
 
 [![CI](https://github.com/awun8191/vigil/actions/workflows/ci.yml/badge.svg)](https://github.com/awun8191/vigil/actions/workflows/ci.yml)
 ![License](https://img.shields.io/badge/license-Apache--2.0-blue)
@@ -24,80 +24,15 @@ Every action that leaves your machine waits for your approval.
 
 ---
 
-## What Vigil is
-
-Vigil is an autonomous personal assistant that you run on your own server.
-It polls your connected accounts, decides which events need attention, and turns them into cards.
-A card carries a summary, a priority, and a set of actions.
-You approve or reject each action on the web client.
-
-Approved work runs in a sandbox container. The sandbox has a fixed tool schema, a memory cap, a CPU cap, and a workspace quota.
-Vigil never holds a shell open on the host.
-
-The runtime keeps no state in memory between turns.
-A run that waits for you is a set of database rows, not a sleeping process.
-An approval that arrives three days later resumes the run in a new container.
-
-Batteries included: one PostgreSQL instance runs the relational state, the job queue, and the vector memory.
-You do not need Redis, Celery, or a separate vector database.
-
-## Why Vigil exists
-
-| Problem in a typical agent framework | What Vigil does instead |
-| --- | --- |
-| Execution state lives in a Python thread or generator | Run state is a database row. A paused run frees its process. |
-| Parallel tool calls break the provider protocol | A barrier synchronizer satisfies every tool call ID before the next model turn. |
-| Redis, Celery, and a vector database for one assistant | One PostgreSQL 16 instance runs the queue, the state, and the memory. |
-| Integrations hard-coded into the agent loop | MCP connectors with an approval policy for each tool. |
-| The agent runs shell commands on your host | A fixed-schema runner executes inside a capped container. |
-| A restart loses every queued run | The queue uses `FOR UPDATE SKIP LOCKED` and a heartbeat reaper. |
-
-## Architecture
-
-```mermaid
-flowchart LR
-  G[Gmail connector] --> T[Triage<br/>Jev classifier]
-  M[Other MCP connectors] --> T
-  T --> Q[(PostgreSQL 16<br/>jobs, runs, cards, memory)]
-  Q --> C[Action cards<br/>web client]
-  C -->|approval| W[Worker<br/>6-stage loop]
-  W --> B[Barrier<br/>synchronizer]
-  B --> S[Sandbox<br/>Docker runner]
-  B -->|external side effect| H[Human<br/>approval]
-  H -->|decision| B
-  S --> Q
-  W --> Q
-```
-
-The loop has six stages: load context, compact context, call the model, partition the tool calls, execute, and persist.
-The partition step splits parallel tool calls into immediate work, background jobs, and gated approvals.
-The barrier holds the turn open until every tool call ID has a result row.
-
-## Features
-
-| Subsystem | What it does |
-| --- | --- |
-| **Stateless runtime** | Runs move through `QUEUED`, `RUNNING`, `AWAITING_APPROVAL`, `AWAITING_BACKGROUND_JOB`, `COMPLETED`, and `FAILED`. The process exits at each pause. |
-| **Barrier synchronizer** | Groups parallel tool calls and persists partial results, so a resume keeps the provider protocol valid. |
-| **Postgres job queue** | Claims work with `SKIP LOCKED` and ages the priority. A reaper recovers a job when the heartbeat stops for 90 seconds. |
-| **Long-term memory** | `pgvector` with 384 dimension vectors, a time decay with a 30 day half-life, a 0.35 floor, and a 0.65 override threshold. |
-| **Context compaction** | Counts tokens with the model tokenizer, then applies a two-tier summary. An artifact becomes a stub, not a truncation. |
-| **Proactive triage** | Batches connector items into one cheap classifier call, then converts the result into cards with an action set. |
-| **Sandbox runner** | Fixed tool schema, CPU and memory caps, a workspace quota, and a snapshot on every pause. |
-| **MCP connectors** | Gmail ships in the box. Calendar, Slack, and GitHub follow the same connector protocol. |
-| **Skills** | Install, list, toggle, and remove a skill pack from the API. |
-| **Device pairing** | A QR code on boot, a short-lived pairing code, SHA-256 token hashes, and AES-256-GCM secret storage. |
-| **Web client** | React 19 and Vite. Home briefing, streaming chat, and settings pages. A monochrome design system. |
-
 ## Quickstart
 
 ### Requirements
 
 - Docker with the Compose plugin
-- Python 3.12 or newer and [uv](https://docs.astral.sh/uv/) for local development
-- PostgreSQL 16 with the `pgvector` extension, only when you do not use Compose
+- Python 3.12 or newer and [uv](https://docs.astral.sh/uv/)
+- PostgreSQL 16 with the `pgvector` extension (Compose provides this)
 
-### Run the stack
+### Run with Docker Compose (easiest)
 
 ```bash
 git clone https://github.com/awun8191/vigil.git
@@ -108,28 +43,42 @@ docker compose -f deploy/docker-compose.yml up --build
 ```
 
 The API listens on `http://localhost:8000`.
-Check readiness:
 
-```bash
-curl -fsS http://localhost:8000/api/v1/health/ready
-```
+### Run with the startup script
 
-On boot the API prints a pairing QR code and a short code such as `VIG-7K2M4Q`.
-Open the web client and pair the device with that code.
-
-### Run everything together (Startup Script)
-
-To start the Website (`http://localhost:5173`), Agents API (`http://localhost:8000`), and background Job Worker together with pre-flight checks, automatic schema migrations, and clean `Ctrl+C` shutdown:
+The startup script starts the Web UI, the API, and the background worker together.
 
 ```bash
 ./start.sh
 ```
 
-Useful options:
-- `./start.sh --no-worker` — start only Website and Agents API
-- `./start.sh --api-port 8080` — start API on a custom port
-- `./start.sh --mock` — run frontend in mock simulation mode
-- `./start.sh --help` — list all configuration flags
+The script:
+- Checks that uv, Node.js, and npm are installed
+- Creates `backend/.env` from `backend/.env.example` if it does not exist
+- Installs Python and npm dependencies
+- Tests the PostgreSQL connection and runs schema migrations
+- Starts the API, the web client, and the worker
+
+Options:
+- `./start.sh --no-worker` — Start only the Web UI and API
+- `./start.sh --api-port 8080` — Change the API port
+- `./start.sh --mock` — Run the frontend with fixture data (no backend required)
+- `./start.sh --help` — List all options
+
+### Pairing your device
+
+1. Open the web UI at `http://localhost:5173`
+2. Navigate to `http://localhost:5173/pair`
+3. Look at the terminal where Vigil is running. The API prints a pairing code on startup:
+
+   ```
+   Temporary Pairing Code: VIG-7K2M4Q
+   ```
+
+4. Enter that code in the web UI to pair your device
+
+The pairing code is one-time and expires after 5 minutes.
+After pairing, your device gets a permanent bearer token.
 
 ### Run the backend from source
 
@@ -148,11 +97,12 @@ cd backend
 env -u PYTHONPATH uv run python -m src.worker
 ```
 
-The API does not poll the job queue. It has no Docker socket, so a job it
-claimed would fail at its first sandbox tool call. For single-process local
-development you can set `EMBED_WORKER=true` and skip the second terminal, but
-then the API process must own the Docker socket. Keep it false whenever
-`python -m src.worker` runs.
+To run everything in one process (local development only):
+
+```bash
+export EMBED_WORKER=true
+uv run uvicorn src.main:app --reload --port 8000
+```
 
 ### Run the web client
 
@@ -171,8 +121,10 @@ env -u PYTHONPATH uv sync --quiet
 env -u PYTHONPATH uv run pytest -q
 ```
 
-The suite has 612 tests. Tests that need PostgreSQL or Docker skip when the service is absent.
-Read the skip count before you read the pass count.
+The suite has 612 tests. Tests that need PostgreSQL or Docker skip when the
+service is absent. Read the skip count before you read the pass count.
+
+---
 
 ## Configuration
 
@@ -196,83 +148,7 @@ These keys matter most:
 
 Money is stored as `cost_micros`, an integer count of micro-USD. No column holds a float.
 
-## API surface
-
-The service exposes 46 paths under `/api/v1`. Every module follows the same contract: a `repository.py` of Protocols, a `service.py` with the mechanism, and a `build_<resource>_router(settings)` factory.
-
-| Module | Example paths |
-| --- | --- |
-| `health` | `GET /health`, `GET /health/live`, `GET /health/ready` |
-| `auth` | `POST /auth/pair`, `GET /auth/me`, `POST /auth/revoke` |
-| `cards` | `GET /cards`, `POST /cards`, `PATCH /cards/{id}`, `POST /cards/{id}/feedback` |
-| `triage` | `GET /triage/recent`, `POST /triage/items/{id}` |
-| `runs` | `POST /runs`, `GET /runs/{id}/steps`, `GET /runs/{id}/events`, `POST /runs/{id}/cancel` |
-| `approvals` | `GET /approvals`, `POST /approvals/{id}/decision` |
-| `chat` | `GET /chat/sessions`, `GET /chat/sessions/{id}/stream` (SSE) |
-| `artifacts` | `POST /artifacts`, `GET /artifacts/{id}/download` |
-| `memory` | `POST /memory/search`, `DELETE /memory/chunks/{id}`, `PATCH /memory/chunks/{id}/exclude` |
-| `compaction` | `POST /compaction/dry-run`, `POST /compaction/run/{id}` |
-| `skills` | `GET /skills`, `POST /skills/install`, `PATCH /skills/{id}/toggle` |
-| `connectors` | `GET /connectors/accounts`, `POST /connectors/accounts/{id}/sync` |
-| `jobs` | `GET /jobs`, `POST /jobs/enqueue` |
-| `settings` | `GET /settings`, `GET /settings/limits`, `GET /settings/audit-logs` |
-
-Every error uses one envelope:
-
-```json
-{
-  "code": "RESOURCE_NOT_FOUND",
-  "message": "The requested card was not found",
-  "request_id": "c678d3cc-6998-4027-8b57-7540a1659011",
-  "details": null
-}
-```
-
-The response also echoes `X-Request-ID` and `X-Process-Time`.
-
-## Project layout
-
-```text
-vigil/
-├── backend/          FastAPI service, worker, migrations, tests
-├── web/              React 19 + Vite client
-├── connectors/       MCP connector servers (Gmail today)
-├── deploy/           Docker Compose stack
-├── docs/             Architecture, reviews, benchmarks
-├── mobile/           Flutter client, planned
-└── scripts/          Benchmark harness
-```
-
-## Measured limits
-
-The project records measurements, not estimates.
-These numbers come from `docs/BENCHMARKS.md` on a 2 vCPU host with real PostgreSQL and a real Docker daemon.
-
-| Measurement | Measured | Target | State |
-| --- | --- | --- | --- |
-| Recall@50 at 100k rows | 0.561 (`ef_search` 200), 0.585 at 1000 | 0.95 | Open |
-| Indexer throughput | 4.08 chunks/s | n/a | Encoder fix merged, re-measure pending |
-| Peak indexer memory | 395 MB | 350 MB | Encoder fix merged, re-measure pending |
-| Sandbox escape surface | fixed schema, no host socket | no shell on host | Passing |
-
-Read [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md) before you quote a number.
-The pre-fix figures are the baseline, not a current verdict.
-
-## Status
-
-Vigil is alpha software. The backend and the web client run end to end on `main`.
-
-- [x] Module scaffold, 14 domain modules, uniform error contract
-- [x] PostgreSQL schema, migrations `0001` to `0003`, job queue with heartbeats
-- [x] Stateless run loop and multi-tool barrier
-- [x] Docker sandbox runner with snapshot and resume
-- [x] `pgvector` memory, time decay, and two-tier compaction
-- [x] Gmail MCP connector
-- [x] Device pairing with hashed tokens
-- [x] Web client: briefing, chat, settings
-- [ ] Recall tuning for the HNSW index
-- [ ] Flutter mobile client
-- [ ] Calendar, Slack, and GitHub connectors
+---
 
 ## Documentation
 
@@ -281,13 +157,29 @@ Vigil is alpha software. The backend and the web client run end to end on `main`
 | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | Full technical specification: schema, subsystems, roadmap |
 | [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md) | Recall, throughput, memory, and sandbox measurements with commands |
 | [`docs/SPEC-REVIEW.md`](docs/SPEC-REVIEW.md) | Architecture defects with an acceptance test for each fix |
-| [`docs/PHASE1-REVIEW.md`](docs/PHASE1-REVIEW.md) | Scaffold review and the authentication bypass it found |
-| [`design.md`](design.md) | Web client design system |
-| [`TEST_INFRA.md`](TEST_INFRA.md) | Test layers, fixtures, and services |
+| [`docs/design.md`](docs/design.md) | Web client design system |
+| [`docs/TEST_INFRA.md`](docs/TEST_INFRA.md) | Test layers, fixtures, and services |
+
+---
+
+## Project layout
+
+```text
+vigil/
+├── assets/           Social preview images
+├── backend/          FastAPI service, worker, migrations, tests
+│   └── connectors/   MCP connector servers (Gmail)
+├── deploy/           Docker Compose stack
+├── docs/             Architecture, reviews, benchmarks, guides
+├── scripts/          Benchmark harness, helper scripts
+└── web/              React 19 + Vite client
+```
+
+---
 
 ## Contributing
 
-Read [`CONTRIBUTING.md`](CONTRIBUTING.md) before you open a pull request.
+Read [`CONTRIBUTING.md`](docs/CONTRIBUTING.md) before you open a pull request.
 Short version:
 
 1. Open an issue that describes the defect or the feature.
@@ -296,7 +188,9 @@ Short version:
 4. Run `env -u PYTHONPATH uv run pytest -q` in `backend/`.
 5. Use Conventional Commits and one atomic change per commit.
 
-Report a vulnerability through [`SECURITY.md`](SECURITY.md). Do not open a public issue for a security defect.
+Report a vulnerability through [`SECURITY.md`](docs/SECURITY.md).
+
+---
 
 ## License
 

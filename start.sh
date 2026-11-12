@@ -534,8 +534,9 @@ echo -e "  ${C_DIM}📚 API Documentation:${C_RESET}    http://${CHECK_HOST}:${A
 fi
 echo -e "  ${C_MAGENTA}⚙️  Worker Status:${C_RESET}        ${worker_status}"
 echo -e "${C_BOLD}--------------------------------------------------------------------------------${C_RESET}"
-echo -e "  ${C_YELLOW}ℹ️  Pairing Note:${C_RESET} Enter the temporary pairing code printed above at"
-echo -e "                 ${C_BOLD}http://localhost:${WEB_PORT}/pair${C_RESET} to connect your device."
+echo -e "  ${C_YELLOW}ℹ️  Pairing Note:${C_RESET} The API printed a pairing code (VIG-XXXXXX) during startup."
+echo -e "                 Open ${C_BOLD}http://localhost:${WEB_PORT}/pair${C_RESET} and enter that code to"
+echo -e "                 connect your device. The code expires after 5 minutes."
 echo -e "  ${C_DIM}🛑 Press Ctrl+C at any time to gracefully shut down all services.${C_RESET}"
 echo -e "${C_BOLD}================================================================================${C_RESET}"
 echo ""
