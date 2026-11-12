@@ -1,0 +1,33 @@
+{
+  "cli_version": "0.12.2",
+  "checkpoint_id": "01M77GV7CKH59PVGM58RAY0FRV",
+  "session_id": "d81458ed-c8da-40ed-9b79-863873368538",
+  "strategy": "manual-commit",
+  "created_at": "2026-11-12T09:18:59.018529334Z",
+  "branch": "main",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "backend/src/modules/chat/repository.py",
+    "backend/src/modules/chat/state.py",
+    "web/src/components/chat/ArtifactCard.tsx"
+  ],
+  "agent": "Antigravity",
+  "model": "gemini-3.8-flash-tiered",
+  "turn_id": "6c8e05df3551",
+  "checkpoint_transcript_start": 1298,
+  "transcript_lines_at_start": 1298,
+  "redaction": {
+    "replacements": 7,
+    "layers": {
+      "betterleaks": 1,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 6,
+      "credentialed_uri": 0,
+      "entropy": 1,
+      "key_context": 0,
+      "provider_token": 0,
+      "shell_stdin": 0
+    }
+  }
+}
