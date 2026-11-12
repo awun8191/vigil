@@ -39,13 +39,14 @@ MODULE_FACTORIES: list[tuple[str, str]] = [
     ("audit", "build_audit_router"),
     ("jobs", "build_jobs_router"),
     ("voice", "build_voice_router"),
+    ("widgets", "build_widgets_router"),
 ]
 
 
 
 def create_api_router(settings: Settings) -> APIRouter:
     """
-    Root API router factory aggregating all 16 domain module router builders.
+    Root API router factory aggregating all 18 domain module router builders.
     Enforces dynamic configuration binding and prevents global router state leaks.
 
     A missing module router is a startup error. The factory never skips a
@@ -55,7 +56,7 @@ def create_api_router(settings: Settings) -> APIRouter:
         settings: Application Settings instance.
 
     Returns:
-        APIRouter with prefix set to settings.API_V1_PREFIX and all 15 sub-routers mounted.
+        APIRouter with prefix set to settings.API_V1_PREFIX and all 18 sub-routers mounted.
 
     Raises:
         RouterMountError: If a module router cannot be imported or has no factory.

@@ -64,14 +64,15 @@ EXPECTED_TABLES = {
     "audit_log",
     "mcp_servers",
     "vault_secrets",
+    "widgets",
 }
 
 
 def test_central_schema_exports_all_tables() -> None:
-    """Verify that exactly 25 tables are registered in the centralized Base metadata."""
+    """Verify that exactly 26 tables are registered in the centralized Base metadata."""
     registered_tables = set(Base.metadata.tables.keys())
     assert registered_tables == EXPECTED_TABLES
-    assert len(registered_tables) == 25
+    assert len(registered_tables) == 26
 
 
 def test_models_map_to_expected_table_names() -> None:

@@ -47,7 +47,7 @@ EXPECTED_PROVIDERS = [
     "get_db_session",
     "get_current_device",
     "get_current_user",
-    # Domain services (15)
+    # Domain services (18)
     "get_health_service",
     "get_auth_service",
     "get_cards_service",
@@ -65,6 +65,7 @@ EXPECTED_PROVIDERS = [
     "get_audit_service",
     "get_jobs_service",
     "get_key_vault_service",
+    "get_widgets_service",
     # External integrations (5)
     "get_jev_client",
     "get_llm_client",

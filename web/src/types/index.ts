@@ -378,6 +378,33 @@ export interface RunStepEvent {
 
 export type StreamState = 'idle' | 'connecting' | 'open' | 'reconnecting' | 'closed';
 
+/* -------------------------------------------------------------------------------------------
+   Dashboard widgets. Shapes mirror backend/src/modules/widgets/data.py caps.
+   ------------------------------------------------------------------------------------------- */
+
+export type WidgetType = 'metric_card' | 'data_table' | 'task_list' | 'status_feed';
+
+export interface Widget {
+  id: string;
+  user_id: string;
+  title: string;
+  widget_type: string;
+  data_payload: Record<string, unknown>;
+  refresh_config: Record<string, unknown> | null;
+  refresh_interval_minutes: number | null;
+  next_refresh_at: string | null;
+  version: number;
+  updated_at: string;
+}
+
+/** The `data` JSON payload of one widget_updated frame from widgets/stream.py. */
+export interface WidgetUpdatedEvent {
+  id: string;
+  version: number;
+  data_payload: Record<string, unknown>;
+  updated_at: string;
+}
+
 export interface ApiErrorEnvelope {
   code: string;
   message: string;

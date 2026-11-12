@@ -71,6 +71,9 @@ class MCPToolRegistryExecutor:
                 container_id=container_id,
                 delivery_dir=Path(delivery_dir),
                 llm=llm,
+                run_id=getattr(self.inner, "run_id", None),
+                user_id=getattr(self.inner, "user_id", None),
+                session=getattr(self.inner, "session", None),
             )
             res = await tool.invoke(arguments, ctx)
             return res.model_dump()
@@ -88,6 +91,9 @@ class MCPToolRegistryExecutor:
                 container_id=container_id,
                 delivery_dir=Path(delivery_dir),
                 llm=llm,
+                run_id=getattr(self.inner, "run_id", None),
+                user_id=getattr(self.inner, "user_id", None),
+                session=getattr(self.inner, "session", None),
             )
             res = await tool.invoke(arguments, ctx)
             return res.model_dump()

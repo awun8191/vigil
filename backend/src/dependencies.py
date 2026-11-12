@@ -3,7 +3,7 @@ Central dependency hub for Vigil FastAPI backend.
 
 Centrally re-exports:
 - Core application dependencies (get_settings, get_db_session, get_current_device, get_current_user)
-- All 15 domain module service providers (get_<module>_service)
+- All 17 domain module service providers (get_<module>_service)
 - External infrastructure integration clients (get_jev_client, get_llm_client, etc.)
 
 Routers and tasks must import dependencies strictly from this module.
@@ -253,7 +253,7 @@ def get_compaction_service(
 
 
 # =============================================================================
-# 15 Domain Module Service Providers
+# Domain Module Service Providers
 # =============================================================================
 
 get_health_service = _resolve_service_dependency("health", "get_health_service")
@@ -268,7 +268,7 @@ get_connectors_service = _resolve_service_dependency("connectors", "get_connecto
 get_settings_service = _resolve_service_dependency("settings", "get_settings_service")
 get_audit_service = _resolve_service_dependency("audit", "get_audit_service")
 get_jobs_service = _resolve_service_dependency("jobs", "get_jobs_service")
-
+get_widgets_service = _resolve_service_dependency("widgets", "get_widgets_service")
 
 def get_key_vault_service(
     session: AsyncSession = Depends(get_db_session),
@@ -757,6 +757,19 @@ class RunToolExecutor:
             )
         ).scalar_one_or_none()
 
+    async def _owner_id_or_none(self) -> UUID | None:
+        """Return the run owner, or None when the session cannot say.
+
+        Widget tools reject a None identity with a failed result, so a missing
+        session never silently writes as another user.
+        """
+        if self.session is None:
+            return None
+        try:
+            return await self._run_owner_id()
+        except Exception:  # noqa: BLE001 - a failed lookup means no identity
+            return None
+
     async def execute(
         self, name: str, arguments: Mapping[str, Any]
     ) -> Mapping[str, Any]:
@@ -773,6 +786,9 @@ class RunToolExecutor:
             delivery_dir=Path(self.delivery_dir),
             llm=self.llm,
             secrets=await self._load_tool_secrets(),
+            run_id=self.run_id,
+            user_id=await self._owner_id_or_none(),
+            session=self.session,
         )
         result = await invoke_tool(name, dict(arguments), context)
         artifact_id: UUID | None = None
@@ -1036,7 +1052,7 @@ __all__ = [
     "get_db_session",
     "get_current_device",
     "get_current_user",
-    # Domain Module Service Providers (15)
+    # Domain Module Service Providers
     "get_health_service",
     "get_auth_service",
     "get_cards_service",
@@ -1053,6 +1069,7 @@ __all__ = [
     "get_settings_service",
     "get_audit_service",
     "get_jobs_service",
+    "get_widgets_service",
     "get_key_vault_service",
 
 
