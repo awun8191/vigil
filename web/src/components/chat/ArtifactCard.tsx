@@ -386,9 +386,32 @@ function ViewerSegment({
 }
 
 export function ArtifactCard({ item }: { item: DeliverableItem }) {
-  const [expandedInline, setExpandedInline] = useState(false);
-  const [searchParams, setSearchParams] = useSearchParams();
   const viewerKey = item.artifactId ?? item.id;
+  const [expandedInline, setExpandedInline] = useState(() => {
+    try {
+      const raw = localStorage.getItem('vigil_expanded_artifacts');
+      return raw ? (JSON.parse(raw) as string[]).includes(viewerKey) : false;
+    } catch {
+      return false;
+    }
+  });
+  const toggleExpanded = () => {
+    setExpandedInline((v) => {
+      const next = !v;
+      try {
+        const raw = localStorage.getItem('vigil_expanded_artifacts');
+        const list = raw ? (JSON.parse(raw) as string[]) : [];
+        const updated = next
+          ? [...new Set([...list, viewerKey])].slice(-50)
+          : list.filter((k) => k !== viewerKey);
+        localStorage.setItem('vigil_expanded_artifacts', JSON.stringify(updated));
+      } catch {
+        // ignore
+      }
+      return next;
+    });
+  };
+  const [searchParams, setSearchParams] = useSearchParams();
   const rawParam = searchParams.get('artifact');
   const modalOpen =
     rawParam !== null && (rawParam === viewerKey || rawParam === item.id || rawParam === item.path);
@@ -569,7 +592,7 @@ export function ArtifactCard({ item }: { item: DeliverableItem }) {
               (fullText ?? item.preview) ? (
                 <button
                   type="button"
-                  onClick={() => setExpandedInline((v) => !v)}
+                  onClick={toggleExpanded}
                   className="inline-flex cursor-pointer items-center gap-1 rounded-[7px] border border-transparent px-2 py-1 text-[11px] font-medium text-[var(--text-muted)] transition-colors hover:border-[var(--border)] hover:bg-[color-mix(in_srgb,var(--text)_7%,transparent)] hover:text-[var(--text)]"
                 >
                   {expandedInline ? (

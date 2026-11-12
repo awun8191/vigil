@@ -26,6 +26,7 @@ class ChatMessageDTO:
     role: str  # user, assistant, system
     content: str
     created_at: datetime
+    run_id: UUID | None = None
 
 
 @dataclass(frozen=True)
