@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import {
   Download,
   Expand,
@@ -187,7 +188,14 @@ export function buildDeliverables(
 ): DeliverableItem[] {
   const stepMetaByPath = new Map<
     string,
-    { name?: string; sha256?: string; sizeBytes?: number; format?: string; preview?: string }
+    {
+      name?: string;
+      sha256?: string;
+      sizeBytes?: number;
+      format?: string;
+      preview?: string;
+      artifactId?: string;
+    }
   >();
 
   // Browser screenshots belong to the live browser panel, not the file list.
@@ -235,11 +243,18 @@ export function buildDeliverables(
             ? res.artifact_ref
             : '';
       if (!path) continue;
+      const stepArtifactId =
+        typeof res.artifact_id === 'string'
+          ? res.artifact_id
+          : typeof content.artifact_id === 'string'
+            ? content.artifact_id
+            : undefined;
       stepMetaByPath.set(path, {
         name: typeof content.name === 'string' ? content.name : undefined,
         sha256: typeof content.sha256 === 'string' ? content.sha256 : undefined,
         sizeBytes: typeof content.size_bytes === 'number' ? content.size_bytes : undefined,
         format: typeof content.format === 'string' ? content.format : undefined,
+        artifactId: stepArtifactId,
       });
     } else if (step.event_type === 'tool_call') {
       const toolName = String(step.payload.tool_name ?? '');
@@ -287,9 +302,12 @@ export function buildDeliverables(
     const baseName = meta.name ?? pathKey.split('/').pop() ?? pathKey;
     const nameMeta = stepMetaByPath.get(`name:${baseName}`);
     const format = detectDeliverableFormat(baseName, meta.format ?? nameMeta?.format);
+    // When the backend has already registered the row, the step carries its id.
+    // Use it as the stable key so the ?artifact= URL survives the live to saved transition.
+    const linkedId = meta.artifactId ?? nameMeta?.artifactId ?? null;
     items.push({
-      id: `step-${pathKey}`,
-      artifactId: null,
+      id: linkedId ?? `step-${pathKey}`,
+      artifactId: linkedId,
       name: baseName,
       path: pathKey,
       sizeBytes: meta.sizeBytes ?? 0,
@@ -369,7 +387,23 @@ function ViewerSegment({
 
 export function ArtifactCard({ item }: { item: DeliverableItem }) {
   const [expandedInline, setExpandedInline] = useState(false);
-  const [modalOpen, setModalOpen] = useState(false);
+  const [searchParams, setSearchParams] = useSearchParams();
+  const viewerKey = item.artifactId ?? item.id;
+  const rawParam = searchParams.get('artifact');
+  const modalOpen =
+    rawParam !== null && (rawParam === viewerKey || rawParam === item.id || rawParam === item.path);
+  const openViewer = () => {
+    const next = new URLSearchParams(searchParams);
+    next.set('artifact', viewerKey);
+    setSearchParams(next, { preventScrollReset: true });
+  };
+  const closeViewer = () => {
+    const next = new URLSearchParams(searchParams);
+    if (next.get('artifact') === viewerKey) {
+      next.delete('artifact');
+      setSearchParams(next, { preventScrollReset: true });
+    }
+  };
   const [blobUrl, setBlobUrl] = useState<string | null>(null);
   const [fullText, setFullText] = useState<string | null>(item.preview);
   const [loadingBlob, setLoadingBlob] = useState(false);
@@ -440,7 +474,7 @@ export function ArtifactCard({ item }: { item: DeliverableItem }) {
   useEffect(() => {
     if (!modalOpen) return;
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setModalOpen(false);
+      if (event.key === 'Escape') closeViewer();
     };
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
@@ -554,7 +588,7 @@ export function ArtifactCard({ item }: { item: DeliverableItem }) {
 
               <button
                 type="button"
-                onClick={() => setModalOpen(true)}
+                onClick={openViewer}
                 aria-label={`Open ${item.name} in full viewer`}
                 className="inline-flex cursor-pointer items-center gap-1 rounded-[7px] border border-transparent px-2 py-1 text-[11px] font-medium text-[var(--text-muted)] transition-colors hover:border-[var(--border)] hover:bg-[color-mix(in_srgb,var(--text)_7%,transparent)] hover:text-[var(--text)]"
               >
@@ -596,7 +630,7 @@ export function ArtifactCard({ item }: { item: DeliverableItem }) {
                 {blobUrl ? (
                   <button
                     type="button"
-                    onClick={() => setModalOpen(true)}
+                    onClick={openViewer}
                     className="group/img relative block max-h-[340px] cursor-zoom-in overflow-hidden rounded-[6px]"
                   >
                     <img
@@ -783,7 +817,7 @@ export function ArtifactCard({ item }: { item: DeliverableItem }) {
           aria-modal="true"
           aria-label={item.name}
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/65 p-3 backdrop-blur-sm sm:p-6"
-          onClick={() => setModalOpen(false)}
+          onClick={closeViewer}
         >
           <div
             className="hark-card flex h-[min(92dvh,940px)] w-full max-w-6xl flex-col overflow-hidden rounded-squircle-lg"
@@ -810,7 +844,7 @@ export function ArtifactCard({ item }: { item: DeliverableItem }) {
                 <ViewerIconButton label={`Download ${item.name}`} onClick={handleDownload}>
                   <Download size={15} strokeWidth={1.7} />
                 </ViewerIconButton>
-                <ViewerIconButton label="Close viewer" onClick={() => setModalOpen(false)}>
+                <ViewerIconButton label="Close viewer" onClick={closeViewer}>
                   <X size={16} strokeWidth={1.7} />
                 </ViewerIconButton>
               </div>
