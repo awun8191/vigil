@@ -128,3 +128,15 @@ Thumbs.db
 # Local Git Worktrees
 # ------------------------------------------
 .worktrees/
+
+# ------------------------------------------
+# AI Coding Agent Tool Configs
+# These are agent-specific configs that don't belong in the
+# project repository (OpenCode, Codex, Entire, CommandCode, Kiro, Pi)
+# ------------------------------------------
+.codex/
+.commandcode/
+.entire/
+.kiro/
+.opencode/
+.pi/
