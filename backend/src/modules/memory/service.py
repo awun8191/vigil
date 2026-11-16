@@ -538,6 +538,41 @@ class MemoryService:
         ).scalar_one_or_none()
         return self._to_dto(row) if row is not None else None
 
+    async def list_chunks(
+        self,
+        user_id: UUID,
+        *,
+        limit: int = 50,
+        offset: int = 0,
+        include_excluded: bool = True,
+    ) -> tuple[list[MemoryChunkDTO], int]:
+        """List stored memory chunks for a user, newest first."""
+        if not self._session_bound:
+            matching = [
+                chunk
+                for chunk in self._chunks.values()
+                if chunk.user_id == user_id and (include_excluded or not chunk.excluded)
+            ]
+            matching.sort(key=lambda c: c.created_at, reverse=True)
+            return matching[offset : offset + limit], len(matching)
+
+        filters = [MemoryChunkModel.user_id == user_id]
+        if not include_excluded:
+            filters.append(MemoryChunkModel.excluded.is_(False))
+
+        total_stmt = select(func.count()).select_from(MemoryChunkModel).where(*filters)
+        total = int((await self.session.execute(total_stmt)).scalar() or 0)
+
+        rows_stmt = (
+            select(MemoryChunkModel)
+            .where(*filters)
+            .order_by(MemoryChunkModel.created_at.desc())
+            .offset(offset)
+            .limit(limit)
+        )
+        rows = (await self.session.execute(rows_stmt)).scalars().all()
+        return [self._to_dto(row) for row in rows], total
+
     async def set_excluded(self, chunk_id: UUID, excluded: bool) -> bool:
         """Toggle the excluded flag. The row stays for inspection."""
         if not self._session_bound:

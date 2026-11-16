@@ -165,6 +165,12 @@ class Settings(BaseSettings):
     SANDBOX_IMAGE: str = "vigil-sandbox:latest"
     WORKSPACE_BASE_PATH: str = "/var/vigil/workspaces"
 
+    # --- Hermes-Style Personalization & Curated Memory Store ---
+    VIGIL_HOME: str = "~/.vigil"
+    SOUL_CHAR_LIMIT: int = 8000
+    USER_PROFILE_CHAR_LIMIT: int = 1500
+    MEMORY_NOTES_CHAR_LIMIT: int = 2200
+
     # --- Skills Registry ---
     # An install is extracted below this root. ``skill_load`` resolves a name
     # against this root and copies the directory into the sandbox workspace.
@@ -205,9 +211,23 @@ class Settings(BaseSettings):
     FIRECRAWL_API_KEY: str | None = None
     FIRECRAWL_BASE_URL: str = "https://api.firecrawl.dev"
 
+    # --- CUA Browser Driver ---
+    BROWSER_DRIVER: Literal["auto", "firecrawl", "cdp", "mcp", "mock"] = "auto"
+    BROWSER_HEADLESS: bool = True
+    BROWSER_VIEWPORT_WIDTH: int = 1280
+    BROWSER_VIEWPORT_HEIGHT: int = 800
+    BROWSER_MCP_SERVER: str = ""
+    CHROMIUM_BINARY: str = ""
+
     # --- Groq Whisper STT ---
     GROQ_API_KEY: str | None = None
     GROQ_BASE_URL: str = "https://api.groq.com/openai/v1"
+
+    # --- Google Workspace / Gmail OAuth2 ---
+    GOOGLE_CLIENT_ID: str = ""
+    GOOGLE_CLIENT_SECRET: str = ""
+    GOOGLE_REDIRECT_URI: str = "http://localhost:8000/api/v1/connectors/google/callback"
+    CONNECTOR_POLL_INTERVAL_SECONDS: int = 120
 
 
 @lru_cache

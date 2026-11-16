@@ -42,10 +42,19 @@ EXPECTED_TOOL_NAMES = {
     "web_search",
     "web_fetch",
     "browser_navigate",
+    "browser_snapshot",
+    "browser_click",
+    "browser_type",
+    "browser_scroll",
+    "browser_press_key",
     "browser_extract",
+    "browser_cua_task",
     "create_widget",
     "update_widget",
     "delete_widget",
+    "raise_card",
+    "memory",
+    "memory_search",
 }
 
 
@@ -134,8 +143,8 @@ async def call(name: str, arguments: dict[str, Any], context: ToolContext) -> To
 
 def test_registry_has_the_declared_tools() -> None:
     """The registry holds exactly the declared tools."""
-    assert TOOL_COUNT == 18
-    assert len(TOOLS) == 18
+    assert TOOL_COUNT == 27
+    assert len(TOOLS) == 27
     assert set(TOOLS) == EXPECTED_TOOL_NAMES
 
 
@@ -164,7 +173,7 @@ def test_registry_levels() -> None:
 def test_tool_definitions_match_registry() -> None:
     """The model facing declarations hold a schema and a level for each tool."""
     definitions = tool_definitions()
-    assert len(definitions) == 18
+    assert len(definitions) == 27
 
     for definition in definitions:
         assert definition["name"] in EXPECTED_TOOL_NAMES

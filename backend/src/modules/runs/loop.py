@@ -105,7 +105,7 @@ USER_REJECTED_RESULT: dict[str, str] = {
 }
 """The tool result that a rejected approval writes. The model then adapts."""
 
-STREAM_DELTA_BATCH_CHARS = 200
+STREAM_DELTA_BATCH_CHARS = 48
 """Characters of streamed text that force a ``message_delta`` step.
 
 Every step costs one journal commit and one run row lock, so a step per model
@@ -113,7 +113,7 @@ fragment makes the write path quadratic in the length of the reply. The loop
 buffers the text and writes one step per batch instead.
 """
 
-STREAM_DELTA_BATCH_SECONDS = 0.25
+STREAM_DELTA_BATCH_SECONDS = 0.08
 """Seconds a streamed batch may stay open before it is flushed.
 
 The character threshold never fires while the model thinks or answers slowly,
@@ -359,6 +359,7 @@ class RunLoop:
         max_iterations: int = 40,
         context_token_limit: int = 8_000,
         compact_ratio: float = 0.7,
+        system_prompt_override: str | None = None,
     ) -> None:
         self.journal = journal
         self.model = model
@@ -373,6 +374,7 @@ class RunLoop:
         self.max_iterations = max_iterations
         self.context_token_limit = context_token_limit
         self.compact_ratio = compact_ratio
+        self.system_prompt_override = system_prompt_override
         # The chat session of the run under work. Every row that the loop
         # writes carries it, so the memory indexer sees the whole session.
         self._session_id: UUID | None = None
@@ -576,8 +578,13 @@ class RunLoop:
                 row for row in messages if row.role == "tool" and row.tool_call_id
             ]
         combined = [*prior_history, *messages]
+        effective_prompt = (
+            self.system_prompt_override
+            if self.system_prompt_override is not None
+            else config.system_prompt
+        )
         return AssembledContext(
-            model_messages=build_model_messages(config.system_prompt, combined),
+            model_messages=build_model_messages(effective_prompt, combined),
             assistant=assistant,
             tool_rows=tool_rows,
             tokens=estimate_tokens(combined),
@@ -748,9 +755,43 @@ class RunLoop:
                 outcome.awaiting.append(call.id)
                 continue
             if approval.status == "approved":
-                await self._write_tool_row(
-                    run, call, await self._run_external(call)
-                )
+                if call.name == "ask_user":
+                    raw_note = approval.decision_note or ""
+                    parsed_answers: Any = raw_note
+                    if raw_note:
+                        try:
+                            decoded = json.loads(raw_note)
+                            if isinstance(decoded, dict) and "answers" in decoded:
+                                parsed_answers = decoded["answers"]
+                            else:
+                                parsed_answers = decoded
+                        except (ValueError, TypeError):
+                            parsed_answers = raw_note
+                    await self._write_tool_row(
+                        run,
+                        call,
+                        {
+                            "ok": True,
+                            "content": {
+                                "status": "answered",
+                                "answers": parsed_answers,
+                            },
+                            "artifact_ref": None,
+                            "error": None,
+                        },
+                    )
+                else:
+                    effective_args = (
+                        dict(approval.arguments)
+                        if isinstance(approval.arguments, Mapping) and approval.arguments
+                        else dict(call.arguments)
+                    )
+                    effective_call = ToolCall(
+                        id=call.id, name=call.name, arguments=effective_args
+                    )
+                    await self._write_tool_row(
+                        run, call, await self._run_external(effective_call)
+                    )
                 outcome.resolved.append(call.id)
                 outcome.written.append(call.id)
                 continue

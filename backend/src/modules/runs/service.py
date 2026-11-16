@@ -23,6 +23,7 @@ from src.modules.runs.barrier import InvariantViolation
 from src.modules.runs.core_context import (
     DEFAULT_BUNDLED_SKILLS,
     build_core_system_prompt,
+    compose_run_system_prompt,
 )
 from src.modules.runs.tools import TOOLS, Tool, ToolContext, openai_tool_declarations
 from src.modules.runs.loop import (
@@ -59,44 +60,59 @@ class MCPToolRegistryExecutor:
         self.inner = inner
         self.mcp_tools = mcp_tools
 
+    async def _invoke_mcp_tool(
+        self, name: str, arguments: Mapping[str, Any]
+    ) -> Mapping[str, Any]:
+        tool = self.mcp_tools[name]
+        runner = getattr(self.inner, "sandbox", None)
+        container_id = getattr(self.inner, "container_id", "mcp") or "mcp"
+        delivery_dir = Path(getattr(self.inner, "delivery_dir", Path("/tmp")))
+        llm = getattr(self.inner, "llm", None)
+        secrets: Mapping[str, str] = {}
+        load_secrets = getattr(self.inner, "_load_tool_secrets", None)
+        if callable(load_secrets):
+            try:
+                secrets = await load_secrets()
+            except Exception:  # noqa: BLE001
+                secrets = {}
+        mcp_host = getattr(self.inner, "mcp_host", None)
+        start_session = getattr(mcp_host, "start_session", None)
+        if callable(start_session):
+            start_session(str(delivery_dir), vault_secrets=dict(secrets))
+        ctx = ToolContext(
+            runner=runner,
+            container_id=container_id,
+            delivery_dir=delivery_dir,
+            llm=llm,
+            secrets=secrets,
+            run_id=getattr(self.inner, "run_id", None),
+            user_id=getattr(self.inner, "user_id", None),
+            session=getattr(self.inner, "session", None),
+        )
+        res = await tool.invoke(arguments, ctx)
+        artifact_id: UUID | None = None
+        reg_artifact = getattr(self.inner, "_register_artifact", None)
+        if res.ok and res.artifact_ref and callable(reg_artifact):
+            try:
+                artifact_id = await reg_artifact(name, res)
+            except Exception:  # noqa: BLE001
+                artifact_id = None
+        dumped = res.model_dump()
+        if artifact_id is not None:
+            dumped["artifact_id"] = str(artifact_id)
+            content = dumped.get("content")
+            if isinstance(content, dict):
+                content.setdefault("artifact_id", str(artifact_id))
+        return dumped
+
     async def execute(self, name: str, arguments: Mapping[str, Any]) -> Mapping[str, Any]:
         if name in self.mcp_tools:
-            tool = self.mcp_tools[name]
-            runner = getattr(self.inner, "sandbox", None)
-            container_id = getattr(self.inner, "container_id", "mcp") or "mcp"
-            delivery_dir = getattr(self.inner, "delivery_dir", Path("/tmp"))
-            llm = getattr(self.inner, "llm", None)
-            ctx = ToolContext(
-                runner=runner,
-                container_id=container_id,
-                delivery_dir=Path(delivery_dir),
-                llm=llm,
-                run_id=getattr(self.inner, "run_id", None),
-                user_id=getattr(self.inner, "user_id", None),
-                session=getattr(self.inner, "session", None),
-            )
-            res = await tool.invoke(arguments, ctx)
-            return res.model_dump()
+            return await self._invoke_mcp_tool(name, arguments)
         return await self.inner.execute(name, arguments)
 
     async def execute_external(self, name: str, arguments: Mapping[str, Any]) -> Mapping[str, Any]:
         if name in self.mcp_tools:
-            tool = self.mcp_tools[name]
-            runner = getattr(self.inner, "sandbox", None)
-            container_id = getattr(self.inner, "container_id", "mcp") or "mcp"
-            delivery_dir = getattr(self.inner, "delivery_dir", Path("/tmp"))
-            llm = getattr(self.inner, "llm", None)
-            ctx = ToolContext(
-                runner=runner,
-                container_id=container_id,
-                delivery_dir=Path(delivery_dir),
-                llm=llm,
-                run_id=getattr(self.inner, "run_id", None),
-                user_id=getattr(self.inner, "user_id", None),
-                session=getattr(self.inner, "session", None),
-            )
-            res = await tool.invoke(arguments, ctx)
-            return res.model_dump()
+            return await self._invoke_mcp_tool(name, arguments)
         return await self.inner.execute_external(name, arguments)
 
     def __getattr__(self, name: str) -> Any:
@@ -198,6 +214,149 @@ class RunsService:
                 )
         return schemas
 
+    def _expand_declared_tools(self, raw_declared: Sequence[str]) -> list[str]:
+        """Expand legacy default browser/memory tool lists and append registered MCP tools."""
+        declared = list(raw_declared)
+        seen = set(declared)
+        if "browser_navigate" in seen:
+            from src.modules.runs.tools.browser import BROWSER_TOOLS
+
+            for btool in BROWSER_TOOLS:
+                if btool.name not in seen:
+                    declared.append(btool.name)
+                    seen.add(btool.name)
+        if "manage_tasks" in seen or "skill_load" in seen:
+            for core_tool in ("memory", "memory_search", "raise_card"):
+                if core_tool in TOOLS and core_tool not in seen:
+                    declared.append(core_tool)
+                    seen.add(core_tool)
+        for mcp_name in self._mcp_tools:
+            if mcp_name not in seen:
+                declared.append(mcp_name)
+                seen.add(mcp_name)
+        return declared
+
+    async def _resolve_run_owner_id(self, run: RunDTO) -> UUID | None:
+        """Resolve the owning user_id of a run from its card or chat messages."""
+        if self.session is None:
+            return None
+        from sqlalchemy import select
+        from src.schemas.runtime import MessageModel, ThreadModel
+        from src.schemas.triage import CardModel
+
+        if run.card_id is not None:
+            owner = (
+                await self.session.execute(
+                    select(CardModel.user_id).where(CardModel.id == run.card_id)
+                )
+            ).scalar_one_or_none()
+            if owner is not None:
+                return owner
+        return (
+            await self.session.execute(
+                select(ThreadModel.user_id)
+                .select_from(ThreadModel)
+                .join(MessageModel, MessageModel.session_id == ThreadModel.id)
+                .where(MessageModel.run_id == run.id)
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+
+    async def _load_runtime_mcp_tools(self, run: RunDTO | None = None) -> None:
+        """Hydrate Gmail and enabled MCP server tools into the run registry."""
+        if self.session is None:
+            return
+        mcp_host = getattr(self.tools, "mcp_host", None)
+        if mcp_host is None:
+            from src.dependencies import get_mcp_host
+
+            mcp_host = get_mcp_host(self.settings)
+        try:
+            from src.integrations.mcp.mcp import MCPToolDefinition
+            from src.modules.connectors.service import ConnectorsService
+            from src.modules.runs.tools.mcp_bridge import MCPToolAdapterFactory
+
+            connectors = ConnectorsService(session=self.session, settings=self.settings)
+
+            # 1. Hydrate active Gmail account tools for the run owner
+            owner_id = await self._resolve_run_owner_id(run) if run is not None else None
+            if owner_id is not None:
+                accounts = await connectors.list_accounts(owner_id)
+                gmail_accounts = [
+                    acc for acc in accounts
+                    if acc.connector_id == "gmail" and acc.status == "active"
+                ]
+                if gmail_accounts:
+                    from connectors.gmail.auth import GmailAuthManager
+                    from connectors.gmail.server import GmailMCPServer
+
+                    acc = gmail_accounts[0]
+                    auth_mgr = GmailAuthManager(self.settings.SECRET_KEY)
+                    creds = auth_mgr.decrypt_credentials(
+                        acc.encrypted_credentials,
+                        default_client_id=self.settings.GOOGLE_CLIENT_ID,
+                        default_client_secret=self.settings.GOOGLE_CLIENT_SECRET,
+                    )
+                    gmail_server = GmailMCPServer(auth_mgr, creds)
+                    for tdef in gmail_server.list_tools():
+                        tname = str(tdef["name"])
+                        if tname in TOOLS or tname in self._mcp_tools:
+                            continue
+                        lvl = str(tdef.get("approval_level") or "external")
+                        adapted = MCPToolAdapterFactory.adapt(
+                            MCPToolDefinition(
+                                name=tname,
+                                description=str(tdef.get("description") or ""),
+                                input_schema=dict(tdef.get("input_schema") or {}),
+                                level=lvl,
+                            ),
+                            gmail_server.execute_tool,
+                            level=lvl,
+                        )
+                        self.register_mcp_tool(adapted)
+
+            # 2. Hydrate registered third-party MCP servers
+            servers = await connectors.list_mcp_servers()
+            for server in servers:
+                if not getattr(server, "enabled", True):
+                    continue
+                discovered = await connectors.list_mcp_tools(server.name)
+                if not discovered:
+                    try:
+                        discovered = await connectors.refresh_mcp_tools(server.name)
+                    except Exception:
+                        discovered = []
+                for item in discovered:
+                    if item.name in TOOLS or item.name in self._mcp_tools:
+                        continue
+                    effective_level = item.level
+                    # Allow read/search/list/draft tools on connected MCP servers to run freely
+                    lower_name = item.name.lower()
+                    if effective_level == "external" and any(
+                        tok in lower_name
+                        for tok in ("search", "read", "list", "get_", "fetch", "query", "find", "inspect", "view", "draft")
+                    ):
+                        effective_level = "local"
+                    tool_def = MCPToolDefinition(
+                        name=item.name,
+                        description=item.description,
+                        input_schema=dict(item.input_schema),
+                        level=effective_level,
+                        remote_name=getattr(item, "remote_name", None),
+                    )
+                    adapted = MCPToolAdapterFactory.adapt(
+                        tool_def,
+                        server.name,
+                        mcp_host,
+                        level=effective_level,
+                    )
+                    self.register_mcp_tool(adapted)
+        except Exception as exc:  # noqa: BLE001 - degraded DB must not break built-in tools
+            get_logger("virgil.runs.service").warning(
+                "Could not hydrate MCP tools for run",
+                error=str(exc),
+            )
+
     def resolve_partition_policy(
         self, config: AgentConfigDTO | None
     ) -> PartitionPolicy:
@@ -205,21 +364,29 @@ class RunsService:
 
         Explicit entries in config.approval_policy always take precedence.
         Harness tools in config.tools default to local, while adapted MCP tools
-        default to external.
+        default to external unless their configured level is 'read' or 'local'.
         """
         if self.policy is not None:
             return self.policy
         if config is None:
             return PartitionPolicy()
-        declared = frozenset(config.tools or ())
+        declared = frozenset(self._expand_declared_tools(config.tools or ()))
         levels: dict[str, str] = {}
         for name, level in (config.approval_policy or {}).items():
             levels[str(name)] = str(level)
+        mcp_local = frozenset(
+            name
+            for name, tool in self._mcp_tools.items()
+            if getattr(tool, "level", "external") in ("read", "local")
+        )
         local_tools = frozenset(
             t
             for t in declared
-            if t not in self._mcp_tools
-            and (TOOLS.get(t) is None or getattr(TOOLS.get(t), "level", "local") != "external")
+            if (
+                t not in self._mcp_tools
+                and (TOOLS.get(t) is None or getattr(TOOLS.get(t), "level", "local") != "external")
+            )
+            or t in mcp_local
         )
         return PartitionPolicy(levels=levels, local_tools=local_tools)
 
@@ -237,6 +404,7 @@ class RunsService:
         max_iterations: int = 40,
         tool_schemas: Sequence[dict[str, Any]] | None = None,
         policy: PartitionPolicy | None = None,
+        system_prompt_override: str | None = None,
     ) -> RunLoop:
         """Build a loop over the current dependencies.
 
@@ -245,6 +413,7 @@ class RunsService:
             max_iterations: Iteration cap.
             tool_schemas: Optional tool declarations payload.
             policy: Optional partition policy override.
+            system_prompt_override: Optional runtime system prompt with live SOUL.md and memory.
 
         Returns:
             The loop.
@@ -265,6 +434,7 @@ class RunsService:
             cost=self,
             max_iterations=max_iterations,
             context_token_limit=token_limit,
+            system_prompt_override=system_prompt_override,
         )
 
     # -- RunsRepository surface -------------------------------------------
@@ -659,25 +829,115 @@ class RunsService:
         run = await self.journal.get_run(run_id)
         if run is None:
             raise NotFoundError(f"Run {run_id} not found")
+        await self._load_runtime_mcp_tools(run)
+        await self._sync_card_status(run.card_id, "in_progress")
         # Declare the tools this run may use. Without this the provider sees an
         # empty tool list and the model refuses work it could do.
         config = await self.journal.get_config(run.config_id)
-        declared = list(config.tools) if config is not None and config.tools is not None else []
+        raw_declared = list(config.tools) if config is not None and config.tools is not None else []
+        declared = self._expand_declared_tools(raw_declared)
         policy = self.resolve_partition_policy(config)
         schemas = self.resolve_tool_schemas(declared)
+        system_prompt_override = await self._build_personalized_run_prompt(run, config)
         loop = self.build_loop(
             observer=observer,
             tool_schemas=schemas,
             policy=policy,
+            system_prompt_override=system_prompt_override,
         )
         try:
             result = await loop.run(run_id)
         except (InvariantViolation, LoopDependencyMissing) as exc:
             await self._fail_run(run_id, exc)
+            await self._sync_card_status(run.card_id, "failed")
             raise
-        if result.status == "completed":
+        if result.status == "awaiting_approval":
+            await self._sync_card_status(run.card_id, "awaiting_approval")
+        elif result.status == "completed":
+            await self._sync_card_status(run.card_id, "done")
             await self.enqueue_index_for_completed_run(result)
+        elif result.status == "failed":
+            await self._sync_card_status(run.card_id, "failed")
         return result
+
+    async def _build_personalized_run_prompt(
+        self,
+        run: RunDTO,
+        config: AgentConfigDTO | None,
+    ) -> str | None:
+        """Assemble the runtime system prompt with live SOUL.md, USER.md, MEMORY.md, and semantic auto-recall."""
+        if config is None:
+            return None
+        try:
+            from src.modules.memory.store import MemoryStore
+
+            store = MemoryStore(settings=self.settings)
+        except Exception:
+            store = None
+
+        recalled_chunks: list[dict[str, Any]] = []
+        if self.session is not None:
+            try:
+                owner_id = await self._resolve_run_owner_id(run)
+                messages = await self.journal.list_messages(run.id)
+                latest_user = next(
+                    (
+                        m.content.strip()
+                        for m in reversed(messages)
+                        if m.role == "user" and m.content and m.content.strip()
+                    ),
+                    None,
+                )
+                if owner_id is not None and latest_user and len(latest_user) >= 4:
+                    from src.modules.memory.service import MemoryService
+
+                    memory_svc = MemoryService(session=self.session, settings=self.settings)
+                    scopes = list(config.memory_scopes or ["global"])
+                    results = await memory_svc.search_memory(
+                        user_id=owner_id,
+                        query=latest_user,
+                        scopes=scopes,
+                        top_n=4,
+                    )
+                    recalled_chunks = [
+                        {
+                            "id": str(item.id),
+                            "content": item.content,
+                            "summary": item.summary,
+                            "similarity": float(item.similarity),
+                            "age_days": float(item.age_days),
+                            "final_score": float(item.final_score),
+                        }
+                        for item in results
+                        if float(item.final_score) > 0
+                    ]
+            except Exception:
+                recalled_chunks = []
+
+        merged_skills = list(config.skills or ())
+        for required_skill in ("proactivity", "vigil-agent"):
+            if required_skill not in merged_skills:
+                merged_skills.append(required_skill)
+
+        return compose_run_system_prompt(
+            config.system_prompt,
+            store=store,
+            recalled_chunks=recalled_chunks,
+            skills=merged_skills,
+        )
+
+    async def _sync_card_status(self, card_id: UUID | None, status: str) -> None:
+        """Keep the linked action card's lifecycle status synchronized with its run."""
+        if card_id is None or self.session is None:
+            return
+        try:
+            from src.modules.cards.repository import CardUpdateDTO
+            from src.modules.cards.service import CardsService
+
+            cards = CardsService(session=self.session, settings=self.settings)
+            await cards.update_card(card_id, CardUpdateDTO(status=status))
+        except Exception:
+            pass
 
     async def enqueue_index_for_completed_run(self, run: RunDTO) -> list[JobDTO]:
         """Enqueue one memory index job for each session of a completed run.

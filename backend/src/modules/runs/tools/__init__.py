@@ -30,7 +30,7 @@ ApprovalLevel = Literal["read", "local", "external"]
 APPROVAL_LEVELS: tuple[ApprovalLevel, ...] = ("read", "local", "external")
 
 #: The harness exposes built-in tools.
-TOOL_COUNT = 18
+TOOL_COUNT = 27
 
 
 class ToolResult(BaseModel):
@@ -163,9 +163,11 @@ class Tool:
 
 # The tool modules import the shared types above, so they load after the definitions.
 from src.modules.runs.tools.browser import BROWSER_TOOLS  # noqa: E402
+from src.modules.runs.tools.cards import CARD_TOOLS  # noqa: E402
 from src.modules.runs.tools.delivery import DELIVERY_TOOLS  # noqa: E402
 from src.modules.runs.tools.files import FILE_TOOLS  # noqa: E402
 from src.modules.runs.tools.human import HUMAN_TOOLS  # noqa: E402
+from src.modules.runs.tools.memory import MEMORY_TOOLS  # noqa: E402
 from src.modules.runs.tools.search import EXA_TOOLS  # noqa: E402
 from src.modules.runs.tools.shell import SHELL_TOOLS  # noqa: E402
 from src.modules.runs.tools.skills import SKILL_TOOLS  # noqa: E402
@@ -195,6 +197,8 @@ TOOLS: Mapping[str, Tool] = build_registry(
         *EXA_TOOLS,
         *BROWSER_TOOLS,
         *WIDGET_TOOLS,
+        *CARD_TOOLS,
+        *MEMORY_TOOLS,
     )
 )
 

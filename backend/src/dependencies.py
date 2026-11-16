@@ -567,6 +567,12 @@ DELIVERY_ARTIFACT_KINDS: dict[str, str] = {
     "deliver_file": "document",
     "generate_document": "document",
     "browser_navigate": "screenshot",
+    "browser_snapshot": "screenshot",
+    "browser_click": "screenshot",
+    "browser_type": "screenshot",
+    "browser_scroll": "screenshot",
+    "browser_press_key": "screenshot",
+    "browser_cua_task": "screenshot",
 }
 """Artifact kind for each tool that delivers a file to the user."""
 
@@ -593,8 +599,17 @@ class RunToolExecutor:
             "web_fetch",
             "manage_tasks",
             "ask_user",
+            "raise_card",
             "browser_navigate",
+            "browser_snapshot",
+            "browser_click",
+            "browser_type",
+            "browser_scroll",
+            "browser_press_key",
             "browser_extract",
+            "browser_cua_task",
+            "memory",
+            "memory_search",
         }
     )
 
@@ -656,9 +671,16 @@ class RunToolExecutor:
                     pass
         return self._container_id
 
-    async def close(self) -> None:
-        """Close the live browser session, snapshot the workspace, and tear down the container."""
-        await self._close_browser_session()
+    async def close(self, *, close_browser: bool = True) -> None:
+        """Close the live browser/MCP sessions, snapshot the workspace, and tear down the container."""
+        if close_browser:
+            await self._close_browser_session()
+            close_session = getattr(self.mcp_host, "close_session", None)
+            if callable(close_session):
+                try:
+                    await close_session(str(self.delivery_dir))
+                except Exception:  # noqa: BLE001
+                    pass
         if self._container_id is not None:
             container_id = self._container_id
             self._container_id = None
@@ -700,11 +722,11 @@ class RunToolExecutor:
         return str(created.container_id)
 
     async def _load_tool_secrets(self) -> Mapping[str, str]:
-        """Resolve vault secrets that host-side tools need.
+        """Resolve vault secrets that host-side tools and MCP servers need.
 
-        The browser tools read the Firecrawl key from the vault of the run owner.
-        A vault read never breaks a tool call: a failure degrades to the settings
-        fallback inside the tool.
+        Reads all stored secrets for the run owner so both built-in tools
+        (Firecrawl, etc.) and external MCP transports receive their credentials.
+        A vault read never breaks a tool call: a failure degrades gracefully.
         """
         if self._tool_secrets is not None:
             return self._tool_secrets
@@ -716,10 +738,16 @@ class RunToolExecutor:
                     from src.modules.settings.vault import KeyVaultService
 
                     vault = KeyVaultService(session=self.session, settings=self.settings)
-                    for key in ("FIRECRAWL_API_KEY",):
-                        value = await vault.get_secret(user_id, key)
+                    entries = await vault.list_secrets(user_id)
+                    for entry in entries:
+                        value = await vault.get_secret(user_id, entry.key_name)
                         if value:
-                            secrets[key] = value
+                            secrets[entry.key_name] = value
+                    # Fallback explicit check in case list_secrets is mocked/omitted
+                    if "FIRECRAWL_API_KEY" not in secrets:
+                        value = await vault.get_secret(user_id, "FIRECRAWL_API_KEY")
+                        if value:
+                            secrets["FIRECRAWL_API_KEY"] = value
             except Exception:  # noqa: BLE001 - a missing vault row must not fail the run
                 secrets = {}
         self._tool_secrets = secrets
@@ -773,8 +801,24 @@ class RunToolExecutor:
     async def execute(
         self, name: str, arguments: Mapping[str, Any]
     ) -> Mapping[str, Any]:
-        """Run one local tool in the sandbox and return its result."""
-        from src.modules.runs.tools import ToolContext, invoke_tool
+        """Run one local tool in the sandbox (or via MCP host) and return its result."""
+        from src.modules.runs.tools import TOOLS, ToolContext, invoke_tool
+
+        secrets = await self._load_tool_secrets()
+        start_session = getattr(self.mcp_host, "start_session", None)
+        if callable(start_session):
+            start_session(str(self.delivery_dir), vault_secrets=dict(secrets))
+
+        if name not in TOOLS:
+            result_mcp = await self.mcp_host.execute_tool(
+                self.connector_id, name, dict(arguments)
+            )
+            return {
+                "ok": not result_mcp.is_error,
+                "content": result_mcp.output,
+                "artifact_ref": None,
+                "error": result_mcp.output if result_mcp.is_error else None,
+            }
 
         if name in self.HOST_ONLY_TOOLS and self._container_id is None:
             container_id = "host-only"
@@ -785,7 +829,7 @@ class RunToolExecutor:
             container_id=container_id,
             delivery_dir=Path(self.delivery_dir),
             llm=self.llm,
-            secrets=await self._load_tool_secrets(),
+            secrets=secrets,
             run_id=self.run_id,
             user_id=await self._owner_id_or_none(),
             session=self.session,
@@ -818,6 +862,10 @@ class RunToolExecutor:
 
         if name in TOOLS:
             return await self.execute(name, dict(arguments))
+        secrets = await self._load_tool_secrets()
+        start_session = getattr(self.mcp_host, "start_session", None)
+        if callable(start_session):
+            start_session(str(self.delivery_dir), vault_secrets=dict(secrets))
         result = await self.mcp_host.execute_tool(
             self.connector_id, name, dict(arguments)
         )
