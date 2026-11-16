@@ -76,7 +76,11 @@ docker compose -f deploy/docker-compose.yml exec api alembic upgrade head
 Once running:
 - **Web UI**: `http://localhost:5173`
 - **API**: `http://localhost:8000`
-- **View pairing code**: `docker compose -f deploy/docker-compose.yml logs api`
+- **View startup pairing code**: `docker compose -f deploy/docker-compose.yml logs api`
+- **Generate a fresh pairing code anytime** (even after the 5-minute startup code expires):
+  ```bash
+  docker compose -f deploy/docker-compose.yml exec api python -m src.modules.auth.pair_code
+  ```
 
 ### Run with the startup script
 
