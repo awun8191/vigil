@@ -32,17 +32,51 @@ Every action that leaves your machine waits for your approval.
 - Python 3.12 or newer and [uv](https://docs.astral.sh/uv/)
 - PostgreSQL 16 with the `pgvector` extension (Compose provides this)
 
-### Run with Docker Compose (easiest)
+### Run the whole environment in Docker (Linux & Windows)
 
+#### Prerequisites
+- **Linux**: Docker Engine + Docker Compose plugin (`docker compose version`)
+- **Windows**: [Docker Desktop for Windows](https://www.docker.com/products/docker-desktop/) with the **WSL 2** backend enabled
+
+#### 1. Clone and build the sandbox image
+
+**Linux (bash):**
 ```bash
 git clone https://github.com/awun8191/vigil.git
 cd vigil
-
-export SECRET_KEY=$(openssl rand -hex 32)
-docker compose -f deploy/docker-compose.yml up --build
+docker build -f deploy/Dockerfile.sandbox -t vigil-sandbox:latest .
 ```
 
-The API listens on `http://localhost:8000`.
+**Windows (PowerShell):**
+```powershell
+git clone https://github.com/awun8191/vigil.git
+cd vigil
+docker build -f deploy/Dockerfile.sandbox -t vigil-sandbox:latest .
+```
+
+#### 2. Set `SECRET_KEY` and start the full stack (`postgres`, `api`, `worker`, `web`)
+
+**Linux (bash):**
+```bash
+export SECRET_KEY=$(openssl rand -hex 32)
+docker compose -f deploy/docker-compose.yml up -d --build
+docker compose -f deploy/docker-compose.yml exec api alembic upgrade head
+```
+
+**Windows (PowerShell):**
+```powershell
+$bytes = New-Object byte[] 32
+[System.Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($bytes)
+$env:SECRET_KEY = ($bytes | ForEach-Object { $_.ToString("x2") }) -join ""
+
+docker compose -f deploy/docker-compose.yml up -d --build
+docker compose -f deploy/docker-compose.yml exec api alembic upgrade head
+```
+
+Once running:
+- **Web UI**: `http://localhost:5173`
+- **API**: `http://localhost:8000`
+- **View pairing code**: `docker compose -f deploy/docker-compose.yml logs api`
 
 ### Run with the startup script
 
@@ -145,6 +179,7 @@ These keys matter most:
 | `MEMORY_RETRIEVAL_HALF_LIFE_DAYS` | `30.0` | Decay rate for memory scores. |
 | `SANDBOX_IMAGE` | `vigil-sandbox:latest` | Image for the sandbox runner. |
 | `WORKSPACE_BASE_PATH` | `/var/vigil/workspaces` | Host path for workspace snapshots. |
+| `VIGIL_HOME` | `~/.vigil` | Directory for `SOUL.md` (personality) and `memories/{USER,MEMORY}.md`. |
 
 Money is stored as `cost_micros`, an integer count of micro-USD. No column holds a float.
 
