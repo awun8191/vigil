@@ -368,7 +368,11 @@ export function HarkLeftRail({ mode }: Props) {
             </ul>
           ) : (
             <div className="rail-inset mt-3 rounded-[14px] px-3 py-4 text-center">
-              <Sparkles size={16} strokeWidth={1.5} className="mx-auto text-[var(--text-muted)]" />
+              <CalendarDays
+                size={16}
+                strokeWidth={1.5}
+                className="mx-auto text-[var(--text-muted)]"
+              />
               <p className="mt-2 text-[12px] leading-relaxed text-[var(--text-secondary)]">
                 Nothing on the calendar. Vigil will surface what matters.
               </p>
