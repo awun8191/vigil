@@ -54,7 +54,7 @@ function EmptyBriefing({
       </p>
       <h1 className="mt-3 text-[clamp(1.9rem,4vw,2.65rem)] font-semibold leading-[1.08] tracking-[-0.035em] text-[var(--text)]">
         {timeOfDayGreeting()}.
-        <span className="block text-[var(--text-muted)]">What needs you?</span>
+        <span className="block text-[var(--text-muted)]">How can I help?</span>
       </h1>
 
       {waiting.length > 0 ? (
