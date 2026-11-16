@@ -22,6 +22,7 @@ import {
 } from 'lucide-react';
 import type { RunStepEvent } from '@/types';
 import { InlineApprovalCard } from './InlineApprovalCard';
+import { HarkEmailCard } from '@/components/hark/HarkEmailCard';
 
 interface Props {
   active: boolean;
@@ -319,22 +320,34 @@ function StepStateMark({
   active: boolean;
   exitCode?: number | null;
 }) {
-  if (!completed) {
-    return active ? (
-      <RotateCw size={12} strokeWidth={2} className="shrink-0 animate-spin text-[var(--text-muted)]" />
-    ) : (
-      <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-[var(--text-muted)] opacity-50" />
-    );
-  }
-  if (!ok) {
-    return (
-      <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-rose-500/12 px-2 py-0.5 font-mono text-[10px] font-medium text-rose-400">
-        <XCircle size={11} strokeWidth={2} />
-        {exitCode !== undefined && exitCode !== null ? `exit ${exitCode}` : 'failed'}
-      </span>
-    );
-  }
-  return <Check size={13} strokeWidth={2} className="shrink-0 text-emerald-400/80" />;
+  const stateKey = !completed ? (active ? 'running' : 'pending') : ok ? 'ok' : 'err';
+  return (
+    <AnimatePresence mode="wait" initial={false}>
+      <motion.span
+        key={stateKey}
+        initial={{ opacity: 0, scale: 0.78 }}
+        animate={{ opacity: 1, scale: 1 }}
+        exit={{ opacity: 0, scale: 0.78 }}
+        transition={{ duration: 0.14, ease: [0.22, 1, 0.36, 1] }}
+        className="inline-flex shrink-0 items-center"
+      >
+        {!completed ? (
+          active ? (
+            <RotateCw size={12} strokeWidth={2} className="shrink-0 animate-spin text-[var(--text-muted)]" />
+          ) : (
+            <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-[var(--text-muted)] opacity-50" />
+          )
+        ) : !ok ? (
+          <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-rose-500/12 px-2 py-0.5 font-mono text-[10px] font-medium text-rose-400">
+            <XCircle size={11} strokeWidth={2} />
+            {exitCode !== undefined && exitCode !== null ? `exit ${exitCode}` : 'failed'}
+          </span>
+        ) : (
+          <Check size={13} strokeWidth={2} className="shrink-0 text-emerald-400/80" />
+        )}
+      </motion.span>
+    </AnimatePresence>
+  );
 }
 
 /* -------------------------------------------------------------------------------------------
@@ -481,7 +494,7 @@ function CommandExecutionCard({
             initial={{ height: 0, opacity: 0 }}
             animate={{ height: 'auto', opacity: 1 }}
             exit={{ height: 0, opacity: 0 }}
-            transition={{ duration: 0.18, ease: [0.25, 1, 0.5, 1] }}
+            transition={{ duration: 0.24, ease: [0.22, 1, 0.36, 1] }}
             className="overflow-hidden border-t border-[var(--border)] bg-[color-mix(in_srgb,var(--surface-solid)_85%,transparent)]"
           >
             <div className="space-y-2.5 p-3 font-mono text-[11.5px]">
@@ -918,22 +931,32 @@ function GenericToolCard({
         </div>
       </button>
 
-      {expanded && canExpand ? (
-        <div className="space-y-2 border-t border-[var(--border)] bg-[color-mix(in_srgb,var(--surface-solid)_85%,transparent)] p-3 font-mono text-[11px]">
-          {hasArgs ? (
-            <pre className="scroll-soft max-h-40 overflow-auto rounded-[7px] bg-[color-mix(in_srgb,var(--text)_4%,transparent)] p-2 text-[var(--text-muted)]">
-              {JSON.stringify(item.arguments, null, 2)}
-            </pre>
-          ) : null}
-          {hasResult ? (
-            <pre className="scroll-soft max-h-44 overflow-auto rounded-[7px] bg-[color-mix(in_srgb,var(--text)_4%,transparent)] p-2 text-[var(--text)]">
-              {typeof outcome.content === 'string'
-                ? outcome.content
-                : JSON.stringify(outcome.rawResult, null, 2)}
-            </pre>
-          ) : null}
-        </div>
-      ) : null}
+      <AnimatePresence initial={false}>
+        {expanded && canExpand ? (
+          <motion.div
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: 'auto', opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            transition={{ duration: 0.24, ease: [0.22, 1, 0.36, 1] }}
+            className="overflow-hidden border-t border-[var(--border)] bg-[color-mix(in_srgb,var(--surface-solid)_85%,transparent)]"
+          >
+            <div className="space-y-2 p-3 font-mono text-[11px]">
+              {hasArgs ? (
+                <pre className="scroll-soft max-h-40 overflow-auto rounded-[7px] bg-[color-mix(in_srgb,var(--text)_4%,transparent)] p-2 text-[var(--text-muted)]">
+                  {JSON.stringify(item.arguments, null, 2)}
+                </pre>
+              ) : null}
+              {hasResult ? (
+                <pre className="scroll-soft max-h-44 overflow-auto rounded-[7px] bg-[color-mix(in_srgb,var(--text)_4%,transparent)] p-2 text-[var(--text)]">
+                  {typeof outcome.content === 'string'
+                    ? outcome.content
+                    : JSON.stringify(outcome.rawResult, null, 2)}
+                </pre>
+              ) : null}
+            </div>
+          </motion.div>
+        ) : null}
+      </AnimatePresence>
     </div>
   );
 }
@@ -1032,6 +1055,43 @@ function renderTimelineItem(item: TimelineItem, active: boolean) {
     return <WebSearchCard item={item} active={active} />;
   }
 
+  if (
+    toolName === 'gmail_create_draft' ||
+    toolName === 'gmail_update_draft' ||
+    toolName === 'gmail_read'
+  ) {
+    const outcome = parseToolOutcome(item.resultStep);
+    const contentObj =
+      typeof outcome.content === 'object' && outcome.content !== null
+        ? (outcome.content as Record<string, unknown>)
+        : {};
+    const to = (contentObj.to ?? item.arguments.to) as string | string[] | undefined;
+    const cc = (contentObj.cc ?? item.arguments.cc) as string | string[] | undefined;
+    const subject =
+      typeof contentObj.subject === 'string'
+        ? contentObj.subject
+        : typeof item.arguments.subject === 'string'
+          ? item.arguments.subject
+          : '';
+    const body =
+      typeof contentObj.body === 'string'
+        ? contentObj.body
+        : typeof item.arguments.body === 'string'
+          ? item.arguments.body
+          : '';
+    if (subject || body) {
+      return (
+        <HarkEmailCard
+          mode={toolName === 'gmail_read' ? 'preview' : 'draft'}
+          to={to}
+          cc={cc}
+          subject={subject}
+          body={body}
+        />
+      );
+    }
+  }
+
   return <GenericToolCard item={item} active={active} />;
 }
 
@@ -1117,23 +1177,31 @@ export function ThinkingCapsule({ active, steps = [], summary, defaultOpen }: Pr
             initial={{ height: 0, opacity: 0 }}
             animate={{ height: 'auto', opacity: 1 }}
             exit={{ height: 0, opacity: 0 }}
-            transition={{ duration: 0.22, ease: [0.25, 1, 0.5, 1] }}
+            transition={{ duration: 0.24, ease: [0.22, 1, 0.36, 1] }}
             className="overflow-hidden"
           >
             <ol className="relative mt-2.5 ml-3 space-y-2.5 border-l border-[var(--border)] pl-4">
-              {items.map((item) => (
-                <li key={item.id} className="relative min-w-0">
-                  {/* Timeline Node Icon sitting cleanly on the left rail */}
-                  <span
-                    aria-hidden="true"
-                    className="absolute -left-[25px] top-1.5 flex h-[18px] w-[18px] items-center justify-center rounded-full border border-[var(--border)] bg-[var(--surface-solid)]"
+              <AnimatePresence initial={false}>
+                {items.map((item) => (
+                  <motion.li
+                    key={item.id}
+                    initial={{ opacity: 0, y: 8, scale: 0.985 }}
+                    animate={{ opacity: 1, y: 0, scale: 1 }}
+                    transition={{ type: 'spring', stiffness: 460, damping: 32, mass: 0.8 }}
+                    className="relative min-w-0"
                   >
-                    {getTimelineNodeIcon(item)}
-                  </span>
+                    {/* Timeline Node Icon sitting cleanly on the left rail */}
+                    <span
+                      aria-hidden="true"
+                      className="absolute -left-[25px] top-1.5 flex h-[18px] w-[18px] items-center justify-center rounded-full border border-[var(--border)] bg-[var(--surface-solid)]"
+                    >
+                      {getTimelineNodeIcon(item)}
+                    </span>
 
-                  {renderTimelineItem(item, active)}
-                </li>
-              ))}
+                    {renderTimelineItem(item, active)}
+                  </motion.li>
+                ))}
+              </AnimatePresence>
             </ol>
           </motion.div>
         ) : null}

@@ -63,17 +63,28 @@ export function useRun(runId: string | null): RunSubscription {
   const [steps, setSteps] = useState<RunStepEvent[]>([]);
   const [connection, setConnection] = useState<RunSubscription['connection']>('idle');
   const bufferRef = useRef<RunStepEvent[]>([]);
+  const rafRef = useRef<number | null>(null);
   const streamVersionRef = useRef(0);
 
   // Merging on every single frame would thrash React. Frames land in a ref buffer and a
-  // rAF-aligned flush publishes them at most once per frame.
-  const scheduleFlush = useCallback(() => {
+  // rAF-aligned flush publishes them at most once per animation frame.
+  const flushBuffer = useCallback(() => {
+    rafRef.current = null;
     if (bufferRef.current.length === 0) return;
     const buffered = bufferRef.current;
     bufferRef.current = [];
     streamVersionRef.current += 1;
     setSteps((current) => mergeSteps(current, buffered));
   }, []);
+
+  const scheduleFlush = useCallback(() => {
+    if (rafRef.current !== null) return;
+    if (typeof window === 'undefined' || typeof window.requestAnimationFrame !== 'function') {
+      flushBuffer();
+      return;
+    }
+    rafRef.current = window.requestAnimationFrame(flushBuffer);
+  }, [flushBuffer]);
 
   const runQuery = useQuery<Run>({
     queryKey: runKey(runId ?? 'none'),
@@ -138,6 +149,10 @@ export function useRun(runId: string | null): RunSubscription {
 
     return () => {
       cancelled = true;
+      if (rafRef.current !== null && typeof window !== 'undefined') {
+        window.cancelAnimationFrame(rafRef.current);
+        rafRef.current = null;
+      }
       close();
     };
   }, [runId, queryClient, scheduleFlush]);

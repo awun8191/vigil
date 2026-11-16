@@ -199,10 +199,19 @@ export function buildDeliverables(
   >();
 
   // Browser screenshots belong to the live browser panel, not the file list.
+  const browserToolNames = new Set([
+    'browser_navigate',
+    'browser_snapshot',
+    'browser_click',
+    'browser_type',
+    'browser_scroll',
+    'browser_press_key',
+    'browser_cua_task',
+  ]);
   const browserScreenshotPaths = new Set<string>();
   for (const step of steps) {
     if (!step || step.event_type !== 'tool_result') continue;
-    if (String(step.payload.tool_name ?? '') !== 'browser_navigate') continue;
+    if (!browserToolNames.has(String(step.payload.tool_name ?? ''))) continue;
     const res =
       typeof step.payload.result === 'object' && step.payload.result !== null
         ? (step.payload.result as Record<string, unknown>)

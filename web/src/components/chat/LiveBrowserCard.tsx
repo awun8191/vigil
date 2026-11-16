@@ -1,7 +1,26 @@
 import { useEffect, useState } from 'react';
-import { AlertCircle, ExternalLink, Globe, Maximize2, X } from 'lucide-react';
+import {
+  AlertCircle,
+  ExternalLink,
+  Eye,
+  Globe,
+  Hand,
+  Maximize2,
+  MousePointerClick,
+  X,
+} from 'lucide-react';
 import { api } from '@/lib/api';
 import type { Artifact, RunStepEvent } from '@/types';
+
+export interface BrowserActionStep {
+  id: string;
+  toolName: string;
+  action: string;
+  label: string;
+  url: string;
+  status: 'running' | 'error' | 'success';
+  screenshotArtifactId: string | null;
+}
 
 export interface BrowserPreview {
   id: string;
@@ -9,14 +28,27 @@ export interface BrowserPreview {
   title: string | null;
   status: 'running' | 'error' | 'success';
   statusText: string;
+  action: string;
+  target: string | null;
+  driver: string | null;
+  elementCount: number;
   liveViewUrl: string | null;
   interactiveLiveViewUrl: string | null;
   expiresAt: string | null;
   screenshotArtifactId: string | null;
   error: string | null;
+  history: BrowserActionStep[];
 }
 
-const BROWSER_TOOL_NAMES = new Set(['browser_navigate']);
+const BROWSER_TOOL_NAMES = new Set([
+  'browser_navigate',
+  'browser_snapshot',
+  'browser_click',
+  'browser_type',
+  'browser_scroll',
+  'browser_press_key',
+  'browser_cua_task',
+]);
 
 function record(value: unknown): Record<string, unknown> | null {
   return typeof value === 'object' && value !== null
@@ -32,10 +64,42 @@ function httpsUrl(value: string | null): string | null {
   return value && /^https:\/\//i.test(value) ? value : null;
 }
 
+function formatActionLabel(toolName: string, args: Record<string, unknown>): string {
+  if (toolName === 'browser_navigate') {
+    const url = text(args.url);
+    return url ? `Open ${hostOf(url)}` : 'Navigate';
+  }
+  if (toolName === 'browser_click') {
+    const sel = text(args.selector);
+    if (sel) return `Click ${sel}`;
+    if (typeof args.x === 'number' && typeof args.y === 'number') {
+      return `Click (${Math.round(args.x)}, ${Math.round(args.y)})`;
+    }
+    return 'Click';
+  }
+  if (toolName === 'browser_type') {
+    const val = text(args.text);
+    const preview = val ? `"${val.slice(0, 18)}${val.length > 18 ? '…' : ''}"` : 'text';
+    return `Type ${preview}`;
+  }
+  if (toolName === 'browser_scroll') {
+    return `Scroll ${text(args.direction) ?? 'down'}`;
+  }
+  if (toolName === 'browser_press_key') {
+    return `Key ${text(args.key) ?? ''}`.trim();
+  }
+  if (toolName === 'browser_snapshot') return 'Snapshot';
+  if (toolName === 'browser_cua_task') {
+    const goal = text(args.goal);
+    return goal ? `CUA: ${goal.slice(0, 24)}` : 'CUA Task';
+  }
+  return toolName.replace(/^browser_/, '');
+}
+
 /**
- * Pair `browser_navigate` tool calls with their results. The newest entry of a
- * live run is the one that renders the live browser window; the rest fall back
- * to their own screenshots.
+ * Pair CUA browser tool calls with their results into a unified live browser
+ * console card per run, keeping an action timeline so users can inspect any
+ * intermediate screenshot or take interactive control of the live browser.
  */
 export function buildBrowserPreviews(
   steps: RunStepEvent[],
@@ -44,6 +108,7 @@ export function buildBrowserPreviews(
   const artifactByPath = new Map(artifacts.map((artifact) => [artifact.path, artifact.id]));
   const items: BrowserPreview[] = [];
   const byCallId = new Map<string, BrowserPreview>();
+  let currentConsole: BrowserPreview | null = null;
 
   for (const step of steps) {
     const toolName = text(step.payload.tool_name);
@@ -52,20 +117,46 @@ export function buildBrowserPreviews(
       if (!toolName || !BROWSER_TOOL_NAMES.has(toolName)) continue;
       const args = record(step.payload.arguments) ?? {};
       const id = text(step.payload.tool_call_id) ?? `browser-${step.step_number}`;
-      const preview: BrowserPreview = {
+      const actionLabel = formatActionLabel(toolName, args);
+      const url: string = text(args.url) ?? currentConsole?.url ?? '';
+
+      if (!currentConsole) {
+        currentConsole = {
+          id,
+          url,
+          title: null,
+          status: 'running',
+          statusText: 'Running',
+          action: toolName.replace(/^browser_/, ''),
+          target: text(args.selector) ?? null,
+          driver: null,
+          elementCount: 0,
+          liveViewUrl: null,
+          interactiveLiveViewUrl: null,
+          expiresAt: null,
+          screenshotArtifactId: null,
+          error: null,
+          history: [],
+        };
+        items.push(currentConsole);
+      } else {
+        currentConsole.status = 'running';
+        currentConsole.statusText = 'Running';
+        currentConsole.action = toolName.replace(/^browser_/, '');
+        currentConsole.target = text(args.selector) ?? currentConsole.target;
+        if (text(args.url)) currentConsole.url = text(args.url)!;
+      }
+
+      currentConsole.history.push({
         id,
-        url: text(args.url) ?? '',
-        title: null,
+        toolName,
+        action: toolName.replace(/^browser_/, ''),
+        label: actionLabel,
+        url,
         status: 'running',
-        statusText: 'Running',
-        liveViewUrl: null,
-        interactiveLiveViewUrl: null,
-        expiresAt: null,
         screenshotArtifactId: null,
-        error: null,
-      };
-      items.push(preview);
-      byCallId.set(id, preview);
+      });
+      byCallId.set(id, currentConsole);
       continue;
     }
 
@@ -74,7 +165,7 @@ export function buildBrowserPreviews(
 
     const callId = text(step.payload.tool_call_id);
     const preview =
-      (callId ? byCallId.get(callId) : undefined) ?? items[items.length - 1];
+      (callId ? byCallId.get(callId) : undefined) ?? currentConsole ?? items[items.length - 1];
     if (!preview) continue;
 
     const result = record(step.payload.result);
@@ -84,22 +175,43 @@ export function buildBrowserPreviews(
     preview.status = ok ? 'success' : 'error';
     preview.statusText = ok ? 'Live' : 'Error';
     preview.url = text(content?.url) ?? preview.url;
-    preview.title = text(content?.title);
-    preview.liveViewUrl = text(content?.live_view_url);
-    preview.interactiveLiveViewUrl = text(content?.interactive_live_view_url);
-    preview.expiresAt = text(content?.session_expires_at);
+    preview.title = text(content?.title) ?? preview.title;
+    preview.driver = text(content?.driver) ?? preview.driver;
+    if (Array.isArray(content?.elements)) {
+      preview.elementCount = content.elements.length;
+    }
+    preview.liveViewUrl = text(content?.live_view_url) ?? preview.liveViewUrl;
+    preview.interactiveLiveViewUrl =
+      text(content?.interactive_live_view_url) ?? preview.interactiveLiveViewUrl;
+    preview.expiresAt = text(content?.session_expires_at) ?? preview.expiresAt;
     if (!ok) {
       preview.error =
         text(result?.error) ?? text(content?.error) ?? 'The browser step failed.';
+    } else {
+      preview.error = null;
     }
+
     const path = text(content?.path) ?? text(result?.artifact_ref);
-    const artifactId = path ? artifactByPath.get(path) : undefined;
+    const artifactId =
+      text(content?.artifact_id) ??
+      text(result?.artifact_id) ??
+      (path ? artifactByPath.get(path) : undefined) ??
+      null;
     if (artifactId) preview.screenshotArtifactId = artifactId;
+
+    const historyEntry =
+      (callId ? preview.history.find((h) => h.id === callId) : undefined) ??
+      preview.history[preview.history.length - 1];
+    if (historyEntry) {
+      historyEntry.status = ok ? 'success' : 'error';
+      historyEntry.url = preview.url;
+      if (artifactId) historyEntry.screenshotArtifactId = artifactId;
+    }
   }
 
   for (const preview of items) {
     if (preview.status === 'success' && !preview.liveViewUrl) {
-      preview.statusText = 'Snapshot';
+      preview.statusText = preview.driver === 'cdp' ? 'CUA Live' : 'Snapshot';
     }
   }
 
@@ -179,14 +291,24 @@ export function LiveBrowserCard({
   live?: boolean;
 }) {
   const [expanded, setExpanded] = useState(false);
-  const screenshotUrl = useArtifactImage(preview.screenshotArtifactId);
+  const [takeControl, setTakeControl] = useState(false);
+  const [selectedStepId, setSelectedStepId] = useState<string | null>(null);
 
-  const inlineLiveUrl =
+  const selectedStep = selectedStepId
+    ? preview.history.find((h) => h.id === selectedStepId) ?? null
+    : null;
+  const activeArtifactId = selectedStep?.screenshotArtifactId ?? preview.screenshotArtifactId;
+  const screenshotUrl = useArtifactImage(activeArtifactId);
+
+  const inlineWatchUrl =
     httpsUrl(preview.liveViewUrl) ?? httpsUrl(preview.interactiveLiveViewUrl);
-  const expandedLiveUrl =
+  const interactiveUrl =
     httpsUrl(preview.interactiveLiveViewUrl) ?? httpsUrl(preview.liveViewUrl);
+  const inlineLiveUrl = takeControl ? interactiveUrl : inlineWatchUrl;
+  const expandedLiveUrl = takeControl ? interactiveUrl : inlineWatchUrl ?? interactiveUrl;
   const expired = isExpired(preview.expiresAt);
-  const showLive = Boolean(live && !expired && inlineLiveUrl);
+  const showLive = Boolean(live && !expired && inlineLiveUrl && !selectedStep);
+  const canTakeControl = Boolean(live && !expired && interactiveUrl);
 
   useEffect(() => {
     if (!expanded) return undefined;
@@ -207,8 +329,12 @@ export function LiveBrowserCard({
   const statusLabel =
     preview.status === 'success'
       ? showLive
-        ? 'Live'
-        : 'Snapshot'
+        ? takeControl
+          ? 'Control'
+          : 'Live'
+        : preview.driver === 'cdp'
+          ? 'CUA'
+          : 'Snapshot'
       : preview.statusText;
 
   return (
@@ -226,7 +352,29 @@ export function LiveBrowserCard({
           <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-[var(--text-muted)]">
             {preview.url || host}
           </span>
-          {showLive ? (
+          {preview.elementCount > 0 ? (
+            <span className="hidden shrink-0 items-center gap-1 rounded bg-[color-mix(in_srgb,var(--text)_7%,transparent)] px-1.5 py-0.5 font-mono text-[10px] text-[var(--text-muted)] sm:inline-flex">
+              <MousePointerClick size={10} />
+              {preview.elementCount}
+            </span>
+          ) : null}
+          {canTakeControl ? (
+            <button
+              type="button"
+              onClick={() => {
+                setSelectedStepId(null);
+                setTakeControl((v) => !v);
+              }}
+              className={`inline-flex shrink-0 cursor-pointer items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold transition-colors ${
+                takeControl
+                  ? 'bg-emerald-500/20 text-emerald-400'
+                  : 'bg-[color-mix(in_srgb,var(--text)_8%,transparent)] text-[var(--text-muted)] hover:text-[var(--text)]'
+              }`}
+            >
+              {takeControl ? <Hand size={10} /> : <Eye size={10} />}
+              {takeControl ? 'Interactive' : 'Take Control'}
+            </button>
+          ) : showLive ? (
             <span className="shrink-0 text-[10px] font-semibold uppercase tracking-[0.08em] text-emerald-400">
               Live
             </span>
@@ -281,6 +429,32 @@ export function LiveBrowserCard({
             ) : null}
           </div>
         </div>
+
+        {preview.history.length > 1 ? (
+          <div className="flex items-center gap-1.5 overflow-x-auto border-t border-[var(--border)] px-3 py-2">
+            {preview.history.map((step, index) => {
+              const isSelected = selectedStepId
+                ? selectedStepId === step.id
+                : index === preview.history.length - 1;
+              return (
+                <button
+                  key={step.id}
+                  type="button"
+                  onClick={() =>
+                    setSelectedStepId(index === preview.history.length - 1 ? null : step.id)
+                  }
+                  className={`shrink-0 cursor-pointer rounded-md px-2 py-0.5 font-mono text-[10px] transition-colors ${
+                    isSelected
+                      ? 'bg-[var(--text)] text-[var(--surface)]'
+                      : 'bg-[color-mix(in_srgb,var(--text)_6%,transparent)] text-[var(--text-muted)] hover:text-[var(--text)]'
+                  }`}
+                >
+                  {index + 1}. {step.label}
+                </button>
+              );
+            })}
+          </div>
+        ) : null}
       </div>
 
       {expanded ? (
@@ -300,6 +474,23 @@ export function LiveBrowserCard({
               <span className="min-w-0 flex-1 truncate font-mono text-[12px] text-[var(--text)]">
                 {preview.url || host}
               </span>
+              {canTakeControl ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSelectedStepId(null);
+                    setTakeControl((v) => !v);
+                  }}
+                  className={`inline-flex shrink-0 cursor-pointer items-center gap-1.5 rounded-full px-3 py-1 text-[11px] font-semibold transition-colors ${
+                    takeControl
+                      ? 'bg-emerald-500/20 text-emerald-400'
+                      : 'bg-[color-mix(in_srgb,var(--text)_8%,transparent)] text-[var(--text-muted)] hover:text-[var(--text)]'
+                  }`}
+                >
+                  {takeControl ? <Hand size={12} /> : <Eye size={12} />}
+                  {takeControl ? 'Interactive Control' : 'Take Control'}
+                </button>
+              ) : null}
               {expandedLiveUrl ? (
                 <a
                   href={expandedLiveUrl}
@@ -323,7 +514,7 @@ export function LiveBrowserCard({
             </div>
 
             <div className="min-h-0 flex-1 bg-[var(--surface-solid)]">
-              {!expired && expandedLiveUrl ? (
+              {!expired && expandedLiveUrl && !selectedStep ? (
                 <iframe
                   src={expandedLiveUrl}
                   title={`Browser preview: ${preview.url}`}

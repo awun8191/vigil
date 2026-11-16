@@ -1,6 +1,8 @@
 import { useState } from 'react';
 import { Check, Loader2, ShieldAlert, X } from 'lucide-react';
 import { useApproval, useDecideApproval } from '@/queries/approvals';
+import { AskUserQuestionCard } from './AskUserQuestionCard';
+import { HarkEmailCard } from '@/components/hark/HarkEmailCard';
 import type { Approval } from '@/types';
 
 interface Props {
@@ -30,6 +32,27 @@ export function InlineApprovalCard({ approvalId, initialData, initialApproval }:
 
   const status = localDecision || approval?.status || 'pending';
   const isPending = decideMutation.isPending;
+
+  if (toolName === 'ask_user') {
+    return (
+      <AskUserQuestionCard
+        approvalId={effectiveId}
+        initialData={initialData}
+        initialApproval={approval}
+      />
+    );
+  }
+
+  if (toolName === 'gmail_send') {
+    return (
+      <HarkEmailCard
+        mode="approval"
+        approvalId={effectiveId}
+        initialData={initialData}
+        initialApproval={approval}
+      />
+    );
+  }
 
   const handleDecision = (decision: 'approved' | 'rejected') => {
     if (!effectiveId) return;

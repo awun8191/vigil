@@ -26,9 +26,11 @@ const STICK_THRESHOLD = 120;
 
 function EmptyBriefing({
   onCard,
+  onCardVerb,
   onPrompt,
 }: {
   onCard: (card: Card) => void;
+  onCardVerb: (card: Card) => void;
   onPrompt: (prompt: string) => void;
 }) {
   const cards = useCards();
@@ -74,7 +76,7 @@ function EmptyBriefing({
                 key={card.id}
                 verb={verb}
                 summary={card.title}
-                onVerbClick={() => onCard(card)}
+                onVerbClick={() => onCardVerb(card)}
                 onPillClick={() => onCard(card)}
               />
             );
@@ -241,9 +243,24 @@ export function HarkUnifiedApp() {
 
   const openCard = (card: Card) => {
     setActiveTab('chat');
-    const prompt = `Help me with this: ${card.title}. ${card.summary ?? ''}`.trim();
-    setSeed(prompt);
+    const replyAction = card.actions.find((a) => a.action_type === 'reply');
+    const seedText =
+      typeof replyAction?.payload?.seed === 'string' && replyAction.payload.seed
+        ? replyAction.payload.seed
+        : `Help me with this: ${card.title}. ${card.summary ?? ''}`.trim();
+    setSeed(seedText);
     if (!location.pathname.startsWith('/agent/chat')) navigate('/agent/chat');
+  };
+
+  const executeCardVerb = (card: Card) => {
+    setActiveTab('chat');
+    const primary = card.actions[0];
+    const initialPrompt =
+      typeof primary?.payload?.initial_prompt === 'string' && primary.payload.initial_prompt
+        ? primary.payload.initial_prompt
+        : `Help me with this: ${card.title}. ${card.summary ?? ''}`.trim();
+    if (!location.pathname.startsWith('/agent/chat')) navigate('/agent/chat');
+    void handleSend(initialPrompt);
   };
 
   const messages = messagesQuery.data ?? [];
@@ -308,6 +325,7 @@ export function HarkUnifiedApp() {
                 emptyHint={
                   <EmptyBriefing
                     onCard={openCard}
+                    onCardVerb={executeCardVerb}
                     onPrompt={(prompt) => {
                       setSeed(prompt);
                       if (!location.pathname.startsWith('/agent/chat')) navigate('/agent/chat');

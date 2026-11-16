@@ -1,4 +1,4 @@
-import { ChevronRight, Clock, CreditCard, Globe, Info, LogOut, MessageSquare, Shield, Sliders, User, X } from 'lucide-react';
+import { ChevronRight, CreditCard, Globe, LogOut, Shield, Sliders, User, X } from 'lucide-react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { useSession } from '@/store/useSession';
 
@@ -8,6 +8,19 @@ interface Props {
   onNavigate?: (section: string) => void;
   onSignOut?: () => void;
 }
+
+/** Every id here must be a real section in SettingsPage, or the link falls back to Appearance. */
+const GROUPS = [
+  [
+    { id: 'profile', label: 'Profile', Icon: User },
+    { id: 'connectors', label: 'Accounts & Vault', Icon: Globe },
+    { id: 'usage', label: 'Usage', Icon: CreditCard },
+  ],
+  [
+    { id: 'appearance', label: 'System Preferences', Icon: Sliders },
+    { id: 'security', label: 'Security', Icon: Shield },
+  ],
+];
 
 export function HarkProfileSheet({ open, onClose, onNavigate, onSignOut }: Props) {
   const device = useSession((state) => state.device);
@@ -59,93 +72,27 @@ export function HarkProfileSheet({ open, onClose, onNavigate, onSignOut }: Props
             </div>
 
             <div className="flex flex-col gap-2.5">
-              {/* Group 1: User Operations */}
-              <div className="divide-y divide-[var(--border)] rounded-[18px] border border-[var(--border)] bg-[var(--panel-inset)] px-3.5">
+              {GROUPS.map((group, index) => (
                 <div
-                  onClick={() => onNavigate?.('profile')}
-                  className="flex cursor-pointer items-center justify-between py-2.5 text-[13px] text-[var(--text-secondary)] hover:text-[var(--text)]"
+                  key={index}
+                  className="divide-y divide-[var(--border)] rounded-[18px] border border-[var(--border)] bg-[var(--panel-inset)] px-3.5"
                 >
-                  <div className="flex items-center gap-2.5">
-                    <User size={15} className="text-[var(--text-muted)]" />
-                    <span>Profile</span>
-                  </div>
-                  <ChevronRight size={14} />
+                  {group.map(({ id, label, Icon }) => (
+                    <button
+                      key={id}
+                      type="button"
+                      onClick={() => onNavigate?.(id)}
+                      className="flex w-full items-center justify-between py-2.5 text-left text-[13px] text-[var(--text-secondary)] transition-colors hover:text-[var(--text)]"
+                    >
+                      <span className="flex items-center gap-2.5">
+                        <Icon size={15} className="text-[var(--text-muted)]" />
+                        {label}
+                      </span>
+                      <ChevronRight size={14} />
+                    </button>
+                  ))}
                 </div>
-                <div
-                  onClick={() => onNavigate?.('scheduled')}
-                  className="flex cursor-pointer items-center justify-between py-2.5 text-[13px] text-[var(--text-secondary)] hover:text-[var(--text)]"
-                >
-                  <div className="flex items-center gap-2.5">
-                    <Clock size={15} className="text-[var(--text-muted)]" />
-                    <span>Scheduled tasks</span>
-                  </div>
-                  <ChevronRight size={14} />
-                </div>
-                <div
-                  onClick={() => onNavigate?.('connectors')}
-                  className="flex cursor-pointer items-center justify-between py-2.5 text-[13px] text-[var(--text-secondary)] hover:text-[var(--text)]"
-                >
-                  <div className="flex items-center gap-2.5">
-                    <Globe size={15} className="text-[var(--text-muted)]" />
-                    <span>Accounts & Vault</span>
-                  </div>
-                  <ChevronRight size={14} />
-                </div>
-                <div
-                  onClick={() => onNavigate?.('wallet')}
-                  className="flex cursor-pointer items-center justify-between py-2.5 text-[13px] text-[var(--text-secondary)] hover:text-[var(--text)]"
-                >
-                  <div className="flex items-center gap-2.5">
-                    <CreditCard size={15} className="text-[var(--text-muted)]" />
-                    <span>Wallet</span>
-                  </div>
-                  <ChevronRight size={14} />
-                </div>
-              </div>
-
-              {/* Group 2: System Preferences */}
-              <div className="divide-y divide-[var(--border)] rounded-[18px] border border-[var(--border)] bg-[var(--panel-inset)] px-3.5">
-                <div
-                  onClick={() => onNavigate?.('appearance')}
-                  className="flex cursor-pointer items-center justify-between py-2.5 text-[13px] text-[var(--text-secondary)] hover:text-[var(--text)]"
-                >
-                  <div className="flex items-center gap-2.5">
-                    <Sliders size={15} className="text-[var(--text-muted)]" />
-                    <span>System Preferences</span>
-                  </div>
-                  <ChevronRight size={14} />
-                </div>
-                <div
-                  onClick={() => onNavigate?.('security')}
-                  className="flex cursor-pointer items-center justify-between py-2.5 text-[13px] text-[var(--text-secondary)] hover:text-[var(--text)]"
-                >
-                  <div className="flex items-center gap-2.5">
-                    <Shield size={15} className="text-[var(--text-muted)]" />
-                    <span>Security</span>
-                  </div>
-                  <ChevronRight size={14} />
-                </div>
-                <div
-                  onClick={() => onNavigate?.('feedback')}
-                  className="flex cursor-pointer items-center justify-between py-2.5 text-[13px] text-[var(--text-secondary)] hover:text-[var(--text)]"
-                >
-                  <div className="flex items-center gap-2.5">
-                    <MessageSquare size={15} className="text-[var(--text-muted)]" />
-                    <span>Submit Feedback</span>
-                  </div>
-                  <ChevronRight size={14} />
-                </div>
-                <div
-                  onClick={() => onNavigate?.('about')}
-                  className="flex cursor-pointer items-center justify-between py-2.5 text-[13px] text-[var(--text-secondary)] hover:text-[var(--text)]"
-                >
-                  <div className="flex items-center gap-2.5">
-                    <Info size={15} className="text-[var(--text-muted)]" />
-                    <span>About</span>
-                  </div>
-                  <ChevronRight size={14} />
-                </div>
-              </div>
+              ))}
 
               {/* Sign Out Action */}
               <button

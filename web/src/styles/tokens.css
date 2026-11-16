@@ -99,6 +99,8 @@
   --bg-mid: #080808;
   --bg-to: #1a1a1a;
   --surface-solid: #101010;
+  --surface: var(--surface-solid);
+  --bg: var(--surface-solid);
   --card: rgba(26, 26, 26, 0.70);
   --card-hover: rgba(36, 36, 36, 0.86);
   --card-strong: rgba(46, 46, 46, 0.94);
@@ -228,6 +230,8 @@
   --bg-mid: #f1e8dc;
   --bg-to: #ece1d2;
   --surface-solid: #ffffff;
+  --surface: var(--surface-solid);
+  --bg: var(--surface-solid);
   --card: rgba(255, 255, 255, 0.72);
   --card-hover: rgba(255, 255, 255, 0.88);
   --card-strong: rgba(255, 255, 255, 0.95);
