@@ -63,10 +63,24 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             qr.print_ascii(out=buf)
             qr_ascii = buf.getvalue()
 
+            import socket
+
+            def _get_lan_ip() -> str | None:
+                try:
+                    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+                        sock.connect(("8.8.8.8", 80))
+                        ip = sock.getsockname()[0]
+                        return ip if ip and not ip.startswith("127.") else None
+                except OSError:
+                    return None
+
+            lan_ip = _get_lan_ip()
             logger.info("============================================================")
             logger.info("VIGIL DEVICE PAIRING READY")
             logger.info(f"Temporary Pairing Code: {pairing_code}")
             logger.info(f"Pairing URL: {pair_url}")
+            if lan_ip:
+                logger.info(f"Network Web UI: http://{lan_ip}:5173")
             logger.info(f"\n{qr_ascii}")
             logger.info("Scan QR code or enter pairing code in mobile app to pair.")
             logger.info("============================================================")
