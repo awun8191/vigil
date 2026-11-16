@@ -12,6 +12,7 @@ export default defineConfig({
   },
   server: {
     host: true,
+    allowedHosts: true,
     port: 5173,
     proxy: {
       // The FastAPI backend. Override with VITE_API_PROXY when the backend is remote.
