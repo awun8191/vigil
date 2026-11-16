@@ -77,6 +77,8 @@ def build_approvals_router(settings: Settings) -> APIRouter:
             approval_id=approval_id,
             decision=payload.decision,
             note=payload.decision_note,
+            answers=payload.answers,
+            updated_arguments=payload.updated_arguments,
         )
 
     return router

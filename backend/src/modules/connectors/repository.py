@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 from uuid import UUID
 
 
@@ -86,6 +86,8 @@ class MCPServerDTO:
     url: str | None
     enabled: bool
     created_at: datetime
+    tools: list[dict[str, Any]] = field(default_factory=list)
+    headers: dict[str, str] = field(default_factory=dict)
 
 
 @runtime_checkable

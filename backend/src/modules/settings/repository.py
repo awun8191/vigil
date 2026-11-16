@@ -15,6 +15,8 @@ class UserSettingsDTO:
     polling_interval_seconds: int
     approval_defaults: dict[str, str]
     preferred_model_tier: str
+    default_browser_driver: str = "auto"
+    disabled_browser_drivers: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)

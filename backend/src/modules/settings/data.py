@@ -1,8 +1,11 @@
 """Pydantic v2 request/response wire schemas for the settings module."""
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field
+
+
+BrowserDriverChoice = Literal["auto", "cdp", "firecrawl", "mcp", "disabled"]
 
 
 class UserSettingsResponse(BaseModel):
@@ -14,6 +17,11 @@ class UserSettingsResponse(BaseModel):
     polling_interval_seconds: int = Field(..., description="Connector background poll cadence.")
     approval_defaults: dict[str, str] = Field(..., description="Default approval policy mapping.")
     preferred_model_tier: str = Field(..., description="Preferred inference tier.")
+    default_browser_driver: str = Field(default="auto", description="Default CUA browser driver.")
+    disabled_browser_drivers: list[str] = Field(
+        default_factory=list,
+        description="Browser drivers explicitly disabled by the user.",
+    )
 
 
 class UserSettingsUpdateRequest(BaseModel):
@@ -22,6 +30,8 @@ class UserSettingsUpdateRequest(BaseModel):
     polling_interval_seconds: int | None = Field(default=None, ge=30)
     approval_defaults: dict[str, str] | None = None
     preferred_model_tier: str | None = None
+    default_browser_driver: BrowserDriverChoice | None = None
+    disabled_browser_drivers: list[Literal["firecrawl", "cdp", "mcp"]] | None = None
 
 
 class AuditLogResponse(BaseModel):

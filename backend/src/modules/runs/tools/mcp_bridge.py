@@ -128,11 +128,12 @@ class MCPToolAdapterFactory:
 
         async def handler(parsed: BaseModel, context: ToolContext) -> ToolResult:
             args = parsed.model_dump()
+            remote_name = getattr(tool_def, "remote_name", None) or tool_def.name
 
             # Mode 1: MCPTransportProtocol with call_tool(name, arguments) -> (output, is_error)
             if hasattr(executor, "call_tool") and callable(executor.call_tool):
                 try:
-                    outcome = executor.call_tool(tool_def.name, args)
+                    outcome = executor.call_tool(remote_name, args)
                     if inspect.isawaitable(outcome):
                         outcome = await outcome
                     output, is_error = outcome
@@ -167,7 +168,7 @@ class MCPToolAdapterFactory:
             # Mode 3: Direct callable(name, arguments)
             if callable(executor):
                 try:
-                    outcome = executor(tool_def.name, args)
+                    outcome = executor(remote_name, args)
                     if inspect.isawaitable(outcome):
                         outcome = await outcome
                     if isinstance(outcome, ToolResult):

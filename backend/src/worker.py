@@ -45,6 +45,9 @@ IDLE_SWEEP_INTERVAL_SECONDS = 300
 WIDGET_SWEEP_INTERVAL_SECONDS = 60
 """The worker sweeps due widget refreshes on this fixed interval."""
 
+CONNECTOR_SWEEP_INTERVAL_SECONDS = 120
+"""The worker sweeps active connector accounts for polling on this fixed interval."""
+
 
 class UnknownJobTypeError(RuntimeError):
     """Raised when the queue holds a job type with no registered handler."""
@@ -121,6 +124,8 @@ def _payload_run_id(job: JobDTO) -> UUID:
 
 async def _drive_run(job: JobDTO, context: JobContext, run_id: UUID) -> None:
     """Drive one run through the loop with the real tools of that run."""
+    from src.modules.runs.state import AWAITING_RUN_STATUSES
+
     executor = build_tool_executor(
         context.session,
         context.settings,
@@ -137,10 +142,14 @@ async def _drive_run(job: JobDTO, context: JobContext, run_id: UUID) -> None:
         mcp_host=context.mcp_host,
         tools=executor,
     )
+    run_result = None
     try:
-        await service.process(run_id, observer=context.observer)
+        run_result = await service.process(run_id, observer=context.observer)
     finally:
-        await executor.close()
+        keep_browser = (
+            run_result is not None and run_result.status in AWAITING_RUN_STATUSES
+        )
+        await executor.close(close_browser=not keep_browser)
 
 
 async def _run_background_tool(
@@ -195,9 +204,54 @@ async def handle_execute_run(job: JobDTO, context: JobContext) -> None:
 
 async def handle_triage_item(job: JobDTO, context: JobContext) -> None:
     """Run the two-stage triage pipeline on one connector item."""
-    raise JobHandlerUnavailableError(
-        job.type, "the triage pipeline is not wired to the worker"
+    from src.dependencies import get_jev_client
+    from src.modules.cards.service import CardsService
+    from src.modules.connectors.service import ConnectorsService
+    from src.modules.triage.service import TriageService
+
+    payload = _payload(job)
+    raw_item_id = payload.get("item_id")
+    if not raw_item_id:
+        raise PermanentJobError("triage_item payload has no item_id")
+    try:
+        item_id = UUID(str(raw_item_id))
+    except ValueError as exc:
+        raise PermanentJobError(f"invalid item_id {raw_item_id!r}: {exc}") from exc
+
+    connectors = ConnectorsService(session=context.session, settings=context.settings)
+    item = await connectors.get_item_by_id(item_id)
+    if item is None:
+        raise PermanentJobError(f"connector item {item_id} not found")
+
+    raw_user_id = payload.get("user_id")
+    user_id: UUID | None = None
+    if raw_user_id:
+        user_id = UUID(str(raw_user_id))
+    else:
+        account = await connectors.get_account(item.connector_account_id)
+        if account is not None:
+            user_id = account.user_id
+
+    cards = CardsService(session=context.session, settings=context.settings)
+    triage = TriageService(
+        session=context.session,
+        settings=context.settings,
+        jev_client=get_jev_client(context.settings),
+        llm_client=context.llm or get_llm_client(context.settings),
+        cards_service=cards,
     )
+    item_data = {
+        "external_id": item.external_id,
+        "thread_id": item.thread_id,
+        "sender": item.sender,
+        "recipients": item.recipients,
+        "subject": item.subject,
+        "body": item.body_text,
+        "snippet": item.body_text[:200],
+        "labels": item.labels,
+        "type": "email",
+    }
+    await triage.triage_item(item_id=item.id, item_data=item_data, user_id=user_id)
 
 
 async def handle_index_memory(job: JobDTO, context: JobContext) -> None:
@@ -213,10 +267,115 @@ async def handle_index_memory(job: JobDTO, context: JobContext) -> None:
 
 
 async def handle_poll_connector(job: JobDTO, context: JobContext) -> None:
-    """Poll one connector account for new items."""
-    raise JobHandlerUnavailableError(
-        job.type, "the connector poller is not wired to the worker"
+    """Poll one connector account for new items and enqueue triage jobs."""
+    from email.utils import parsedate_to_datetime
+    import httpx
+
+    from connectors.gmail.auth import GmailAuthManager
+    from connectors.gmail.sync import GmailSyncEngine
+    from src.modules.connectors.repository import ItemCreateDTO, SyncStateDTO
+    from src.modules.connectors.service import ConnectorsService
+    from src.modules.triage.service import TriageService
+
+    payload = _payload(job)
+    raw_account_id = payload.get("account_id")
+    if not raw_account_id:
+        raise PermanentJobError("poll_connector payload has no account_id")
+    try:
+        account_id = UUID(str(raw_account_id))
+    except ValueError as exc:
+        raise PermanentJobError(f"invalid account_id {raw_account_id!r}: {exc}") from exc
+
+    connectors = ConnectorsService(session=context.session, settings=context.settings)
+    account = await connectors.get_account(account_id)
+    if account is None:
+        raise PermanentJobError(f"connector account {account_id} not found")
+    if account.status != "active":
+        return
+    if account.connector_id != "gmail":
+        raise PermanentJobError(f"unsupported connector_id {account.connector_id!r}")
+
+    auth_mgr = GmailAuthManager(context.settings.SECRET_KEY)
+    creds = auth_mgr.decrypt_credentials(
+        account.encrypted_credentials,
+        default_client_id=context.settings.GOOGLE_CLIENT_ID,
+        default_client_secret=context.settings.GOOGLE_CLIENT_SECRET,
     )
+    old_access = creds.access_token
+    sync_state = await connectors.get_sync_state(account.id)
+    last_cursor = sync_state.cursor if sync_state else None
+    engine = GmailSyncEngine(auth_mgr)
+
+    try:
+        raw_items, new_cursor = await engine.sync_incremental(creds, last_cursor)
+    except httpx.HTTPStatusError as exc:
+        if exc.response.status_code in (400, 401):
+            await connectors.update_account_status(account.id, "needs_reauth")
+            raise PermanentJobError(
+                f"connector {account.id} authorization expired ({exc.response.status_code})"
+            ) from exc
+        raise
+
+    if creds.access_token != old_access:
+        await connectors.update_account_credentials(
+            account.id, auth_mgr.encrypt_credentials(creds)
+        )
+
+    now = datetime.now(timezone.utc)
+    to_save: list[ItemCreateDTO] = []
+    for m in raw_items:
+        received_at = now
+        raw_date = m.get("date")
+        if isinstance(raw_date, str) and raw_date:
+            try:
+                parsed = parsedate_to_datetime(raw_date)
+                received_at = parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+            except Exception:
+                received_at = now
+        to_field = m.get("to") or ""
+        recipients = [addr.strip() for addr in str(to_field).split(",") if addr.strip()]
+        to_save.append(
+            ItemCreateDTO(
+                connector_account_id=account.id,
+                external_id=str(m["id"]),
+                thread_id=str(m.get("thread_id") or m["id"]),
+                sender=str(m.get("sender") or "Unknown"),
+                recipients=recipients,
+                subject=str(m.get("subject") or "No Subject"),
+                body_text=str(m.get("body") or m.get("snippet") or ""),
+                received_at=received_at,
+                labels=list(m.get("labels") or []),
+            )
+        )
+
+    saved_items = await connectors.save_items(to_save) if to_save else []
+    await connectors.save_sync_state(
+        SyncStateDTO(
+            connector_account_id=account.id,
+            cursor=new_cursor,
+            last_success_at=now,
+            last_error=None,
+        )
+    )
+
+    triage_svc = TriageService(session=context.session, settings=context.settings)
+    jobs_svc = JobsService(session=context.session, settings=context.settings)
+    for item in saved_items:
+        # Skip outbound/sent messages so we don't raise cards on our own replies
+        if "SENT" in (item.labels or []):
+            continue
+        existing = await triage_svc.get_triage_result_by_item(item.id)
+        if existing is None:
+            await jobs_svc.enqueue(
+                JobCreateDTO(
+                    type="triage_item",
+                    payload={
+                        "item_id": str(item.id),
+                        "user_id": str(account.user_id),
+                        "account_id": str(account.id),
+                    },
+                )
+            )
 
 
 async def handle_cleanup_sandbox(job: JobDTO, context: JobContext) -> None:
@@ -235,6 +394,7 @@ async def handle_reindex_memory(job: JobDTO, context: JobContext) -> None:
 
 async def handle_discover_mcp_tools(job: JobDTO, context: JobContext) -> None:
     """Run MCP handshake and tool discovery for a third party MCP server."""
+    from src.integrations.mcp.factory import MCP_PRESETS
     from src.modules.connectors.service import ConnectorsService
 
     payload = _payload(job)
@@ -242,15 +402,50 @@ async def handle_discover_mcp_tools(job: JobDTO, context: JobContext) -> None:
     transport = str(payload.get("transport") or "")
     command = payload.get("command")
     url = payload.get("url")
+    raw_user_id = payload.get("user_id")
+
+    env: dict[str, str] = {}
+    headers: dict[str, str] = {}
+    if raw_user_id and context.session is not None:
+        try:
+            from src.modules.settings.vault import KeyVaultService
+
+            user_id = UUID(str(raw_user_id))
+            vault = KeyVaultService(session=context.session, settings=context.settings)
+            entries = await vault.list_secrets(user_id)
+            secrets: dict[str, str] = {}
+            for entry in entries:
+                val = await vault.get_secret(user_id, entry.key_name)
+                if val:
+                    secrets[entry.key_name] = val
+            preset = MCP_PRESETS.get(name)
+            if preset is not None:
+                for vault_key, env_var in preset.env_mappings.items():
+                    if vault_key in secrets:
+                        env[env_var] = secrets[vault_key]
+                for vault_key, header_spec in preset.header_mappings.items():
+                    if vault_key in secrets:
+                        if ":" in header_spec:
+                            h_name, h_pat = header_spec.split(":", 1)
+                            headers[h_name.strip()] = h_pat.strip().format(value=secrets[vault_key])
+                        else:
+                            headers[header_spec] = secrets[vault_key]
+            else:
+                env.update(secrets)
+        except Exception:  # noqa: BLE001
+            pass
+
     service = ConnectorsService(session=context.session, settings=context.settings)  # type: ignore[arg-type]
     if await service.get_mcp_server(name) is not None:
-        await service.refresh_mcp_tools(name)
+        await service.refresh_mcp_tools(name, env=env or None, headers=headers or None)
     else:
         await service.register_mcp_server(
             name=name,
             transport=transport,
             command=str(command) if command is not None else None,
             url=str(url) if url is not None else None,
+            env=env or None,
+            headers=headers or None,
         )
 
 
@@ -455,7 +650,7 @@ EXTRA_JOB_HANDLERS: dict[str, JobHandler] = {
 }
 
 UNWIRED_JOB_TYPES: frozenset[str] = frozenset(
-    {"triage_item", "poll_connector", "cleanup_sandbox", "reindex_memory"}
+    {"cleanup_sandbox", "reindex_memory"}
 )
 """Job types whose handler has no executor in this worker build.
 
@@ -669,6 +864,29 @@ async def process_job(
     log.info("Completed job", job_id=str(job.id), job_type=job.type)
 
 
+async def sweep_due_connector_polls(
+    session: Any,
+    settings: Any,
+    limit: int = 50,
+) -> int:
+    """Enqueue one poll_connector job per active Gmail connector account."""
+    from src.modules.connectors.service import ConnectorsService
+
+    connectors = ConnectorsService(session=session, settings=settings)
+    jobs_service = JobsService(session=session, settings=settings)
+    accounts = await connectors.list_active_accounts(connector_id="gmail")
+    enqueued = 0
+    for account in accounts[:limit]:
+        await jobs_service.enqueue(
+            JobCreateDTO(
+                type="poll_connector",
+                payload={"account_id": str(account.id)},
+            )
+        )
+        enqueued += 1
+    return enqueued
+
+
 async def run_worker(
     *,
     stop_event: asyncio.Event | None = None,
@@ -703,6 +921,7 @@ async def run_worker(
     last_reap = 0.0
     last_idle_sweep = 0.0
     last_widget_sweep = 0.0
+    last_connector_sweep = 0.0
 
     # Main worker poll loop
     while not stop_event.is_set():
@@ -720,6 +939,13 @@ async def run_worker(
         )
         if should_sweep_widgets:
             last_widget_sweep = now_monotonic
+        should_sweep_connectors = reap_is_due(
+            now_monotonic,
+            last_connector_sweep,
+            float(getattr(settings, "CONNECTOR_POLL_INTERVAL_SECONDS", CONNECTOR_SWEEP_INTERVAL_SECONDS)),
+        )
+        if should_sweep_connectors:
+            last_connector_sweep = now_monotonic
 
         try:
             async for session in get_db_session(settings):
@@ -759,6 +985,16 @@ async def run_worker(
                     if widget_jobs:
                         logger.info(
                             "Enqueued widget refresh jobs", count=widget_jobs
+                        )
+
+                # 2c. Enqueue one poll_connector job per active connector account.
+                if should_sweep_connectors:
+                    connector_jobs = await sweep_due_connector_polls(
+                        session=session, settings=settings
+                    )
+                    if connector_jobs:
+                        logger.info(
+                            "Enqueued connector poll jobs", count=connector_jobs
                         )
 
                 # 3. Claim the next job.

@@ -25,6 +25,14 @@ class ApprovalDecisionRequest(BaseModel):
     """Inbound decision submission from companion app."""
     decision: Literal["approved", "rejected"] = Field(..., description="Decision outcome.")
     decision_note: str | None = Field(default=None, description="Optional commentary.")
+    answers: dict[str, Any] | None = Field(
+        default=None,
+        description="Structured answers for ask_user multi-question prompts.",
+    )
+    updated_arguments: dict[str, Any] | None = Field(
+        default=None,
+        description="Optional user-edited tool arguments (e.g. edited email draft before sending).",
+    )
 
 
 class ApprovalDecisionResponse(BaseModel):

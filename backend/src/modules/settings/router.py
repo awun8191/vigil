@@ -106,7 +106,12 @@ def build_settings_router(settings: Settings) -> APIRouter:
         vault: KeyVaultService = Depends(get_key_vault_service),
         user: UserDTO = Depends(get_current_user),
     ) -> list[VaultSecretDTO]:
-        return await vault.list_secrets(user.id)
+        secrets = await vault.list_secrets(user.id)
+        return [
+            s
+            for s in secrets
+            if s.key_name not in ("BROWSER_DRIVER", "DISABLED_BROWSER_DRIVERS")
+        ]
 
     @router.post(
         "/vault",

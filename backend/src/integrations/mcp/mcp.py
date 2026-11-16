@@ -23,6 +23,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import os
 import shlex
 from asyncio.subprocess import PIPE
 from dataclasses import dataclass, field
@@ -77,6 +78,8 @@ class MCPServerConfig:
     transport: str  # "stdio" or "sse"
     command: str | None = None
     url: str | None = None
+    env: dict[str, str] = field(default_factory=dict)
+    headers: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -87,6 +90,7 @@ class MCPToolDefinition:
     description: str = ""
     input_schema: dict[str, Any] = field(default_factory=dict)
     level: str = "external"
+    remote_name: str | None = None
 
 
 def _normalize_tools(raw: Any) -> list[dict[str, Any]]:
@@ -106,11 +110,14 @@ def _normalize_tools(raw: Any) -> list[dict[str, Any]]:
             raise MCPHandshakeError(
                 "handshake failed: a tools/list entry has no name"
             )
+        schema = entry.get("input_schema")
+        if not isinstance(schema, dict):
+            schema = entry.get("inputSchema")
         tools.append(
             {
                 "name": name,
                 "description": entry.get("description", ""),
-                "input_schema": entry.get("input_schema", {}),
+                "input_schema": schema if isinstance(schema, dict) else {},
             }
         )
     return tools
@@ -172,6 +179,9 @@ async def _write_message(
         proc.stdin.write(line)  # type: ignore[union-attr]
         await proc.stdin.drain()  # type: ignore[union-attr]
     except (BrokenPipeError, ConnectionResetError) as exc:
+        if proc.returncode is None:
+            with contextlib.suppress(TimeoutError):
+                await asyncio.wait_for(proc.wait(), 0.2)
         code = proc.returncode
         raise MCPHandshakeError(
             f"stdio handshake failed during {step}: "
@@ -209,6 +219,9 @@ async def _exchange(
                 f"no response within {timeout:g} seconds"
             ) from exc
         if not raw:
+            if proc.returncode is None:
+                with contextlib.suppress(TimeoutError):
+                    await asyncio.wait_for(proc.wait(), 0.2)
             code = proc.returncode
             raise MCPHandshakeError(
                 f"stdio handshake failed during {step}: "
@@ -272,6 +285,7 @@ async def _handshake(
 
 async def _spawn_stdio(
     command: str,
+    env: dict[str, str] | None = None,
 ) -> tuple[asyncio.subprocess.Process, _StderrTail, asyncio.Task[None]]:
     """Start a stdio server and drain its stderr concurrently from the first byte."""
     try:
@@ -282,6 +296,10 @@ async def _spawn_stdio(
         ) from exc
     if not argv:
         raise MCPHandshakeError("stdio handshake failed: the command is empty")
+    merged_env: dict[str, str] | None = None
+    if env:
+        merged_env = os.environ.copy()
+        merged_env.update(env)
     try:
         proc = await asyncio.create_subprocess_exec(
             *argv,
@@ -289,6 +307,7 @@ async def _spawn_stdio(
             stdout=PIPE,
             stderr=PIPE,
             limit=MAX_LINE_BYTES,
+            env=merged_env,
         )
     except (FileNotFoundError, PermissionError, OSError) as exc:
         raise MCPHandshakeError(
@@ -368,9 +387,13 @@ async def _stop_stdio(
                 await stderr_task
 
 
-async def _discover_stdio(command: str, timeout: float) -> list[dict[str, Any]]:
+async def _discover_stdio(
+    command: str,
+    timeout: float,
+    env: dict[str, str] | None = None,
+) -> list[dict[str, Any]]:
     """Run the handshake against a stdio server command and return raw tools."""
-    proc, tail, stderr_task = await _spawn_stdio(command)
+    proc, tail, stderr_task = await _spawn_stdio(command, env=env)
     try:
         await _handshake(proc, timeout)
         result = await _exchange(
@@ -392,19 +415,52 @@ async def _discover_stdio(command: str, timeout: float) -> list[dict[str, Any]]:
         await _stop_stdio(proc, stderr_task)
 
 
-async def _discover_sse(server_url: str, timeout: float) -> list[dict[str, Any]]:
+async def _discover_sse(
+    server_url: str,
+    timeout: float,
+    headers: dict[str, str] | None = None,
+) -> list[dict[str, Any]]:
     """Run the handshake against an SSE / StreamMCP server URL and return raw tools."""
-    # First attempt: modern HTTP StreamMCP / SSE POST tools/list
+    base_headers = {
+        "Content-Type": "application/json",
+        "Accept": "application/json, text/event-stream",
+        "User-Agent": "vigil/1.0",
+    }
+    if headers:
+        base_headers.update(headers)
+
+    # First attempt: Streamable HTTP initialize + tools/list (with stateless fallback)
     try:
         async with httpx.AsyncClient(timeout=timeout) as client:
+            req_headers = dict(base_headers)
+            try:
+                init_resp = await client.post(
+                    server_url,
+                    json={
+                        "jsonrpc": "2.0",
+                        "id": 0,
+                        "method": "initialize",
+                        "params": _initialize_params(),
+                    },
+                    headers=req_headers,
+                )
+                session_id = init_resp.headers.get("Mcp-Session-Id") or init_resp.headers.get("mcp-session-id")
+                if session_id:
+                    req_headers["Mcp-Session-Id"] = session_id
+                if init_resp.status_code == 200:
+                    with contextlib.suppress(httpx.HTTPError, OSError):
+                        await client.post(
+                            server_url,
+                            json={"jsonrpc": "2.0", "method": "notifications/initialized"},
+                            headers=req_headers,
+                        )
+            except (httpx.HTTPError, OSError):
+                pass
+
             post_resp = await client.post(
                 server_url,
                 json={"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}},
-                headers={
-                    "Content-Type": "application/json",
-                    "Accept": "application/json, text/event-stream",
-                    "User-Agent": "vigil/1.0",
-                },
+                headers=req_headers,
             )
             if post_resp.status_code == 200:
                 body = post_resp.text
@@ -429,8 +485,10 @@ async def _discover_sse(server_url: str, timeout: float) -> list[dict[str, Any]]
     # Fallback attempt: classic GET event-stream handshake
     try:
         async with httpx.AsyncClient(timeout=timeout) as client:
+            stream_headers = dict(base_headers)
+            stream_headers["Accept"] = "text/event-stream"
             async with client.stream(
-                "GET", server_url, headers={"Accept": "text/event-stream"}
+                "GET", server_url, headers=stream_headers
             ) as response:
                 if response.status_code != 200:
                     raise MCPHandshakeError(
@@ -481,13 +539,15 @@ async def discover_tools(
             raise MCPHandshakeError(
                 "stdio handshake failed: a stdio server needs a command"
             )
-        raw_tools = await _discover_stdio(config.command, timeout)
+        raw_tools = await _discover_stdio(config.command, timeout, env=config.env or None)
     elif config.transport == "sse":
         if not config.url or not config.url.strip():
             raise MCPHandshakeError(
                 "SSE handshake failed: an SSE server needs a URL"
             )
-        raw_tools = await _discover_sse(config.url, SSE_TIMEOUT_SECONDS)
+        raw_tools = await _discover_sse(
+            config.url, SSE_TIMEOUT_SECONDS, headers=config.headers or None
+        )
     else:
         raise MCPHandshakeError(
             f"handshake failed: unknown transport {config.transport!r}"
@@ -512,9 +572,10 @@ async def _call_stdio_tool(
     tool_name: str,
     arguments: dict[str, Any],
     timeout: float = HANDSHAKE_TIMEOUT_SECONDS,
+    env: dict[str, str] | None = None,
 ) -> tuple[str, bool]:
     """Invoke tools/call on a stdio MCP server and return (output, is_error)."""
-    proc, tail, stderr_task = await _spawn_stdio(command)
+    proc, tail, stderr_task = await _spawn_stdio(command, env=env)
     try:
         await _handshake(proc, timeout)
         result = await _exchange(
@@ -556,6 +617,7 @@ async def _call_sse_tool(
     tool_name: str,
     arguments: dict[str, Any],
     timeout: float = HANDSHAKE_TIMEOUT_SECONDS,
+    headers: dict[str, str] | None = None,
 ) -> tuple[str, bool]:
     """Invoke tools/call on an SSE / StreamMCP server URL and return (output, is_error).
 
@@ -569,15 +631,18 @@ async def _call_sse_tool(
         "method": "tools/call",
         "params": {"name": tool_name, "arguments": arguments},
     }
+    req_headers = {
+        "Content-Type": "application/json",
+        "Accept": "application/json, text/event-stream",
+        "User-Agent": "vigil/1.0",
+    }
+    if headers:
+        req_headers.update(headers)
     async with httpx.AsyncClient(timeout=timeout) as client:
         resp = await client.post(
             server_url,
             json=payload,
-            headers={
-                "Content-Type": "application/json",
-                "Accept": "application/json, text/event-stream",
-                "User-Agent": "vigil/1.0",
-            },
+            headers=req_headers,
         )
         if resp.status_code != 200:
             return f"HTTP error {resp.status_code}: {resp.text[:300]}", True
@@ -630,10 +695,79 @@ async def _call_sse_tool(
 
 
 class MCPHostClient:
-    """Host client satisfying MCPHostProtocol for registered MCP servers."""
+    """Host client satisfying MCPHostProtocol for registered MCP servers.
 
-    def __init__(self, settings: Any) -> None:
+    Supports both ephemeral one-off calls and persistent run-scoped transport
+    sessions (for stateful servers such as Playwright/CUA browser drivers) with
+    vault credential injection.
+    """
+
+    def __init__(self, settings: Any, *, persistent: bool = False) -> None:
         self.settings = settings
+        self._persistent = persistent
+        self._session_key: str | None = None
+        self._vault_secrets: dict[str, str] = {}
+        self._transports: dict[tuple[str, str], Any] = {}
+
+    def start_session(
+        self,
+        session_key: str,
+        *,
+        vault_secrets: dict[str, str] | None = None,
+    ) -> None:
+        """Enable persistent transport pooling for a run session."""
+        self._session_key = session_key
+        self._persistent = True
+        if vault_secrets:
+            self._vault_secrets.update(vault_secrets)
+
+    def set_vault_secrets(self, vault_secrets: dict[str, str]) -> None:
+        """Update vault secrets injected into stdio env and SSE headers."""
+        self._vault_secrets.update(vault_secrets)
+
+    async def close_session(self, session_key: str | None = None) -> None:
+        """Close all persistent transports opened for a run session."""
+        target = session_key or self._session_key
+        if not target:
+            return
+        keys = [key for key in self._transports if key[0] == target]
+        for key in keys:
+            transport = self._transports.pop(key, None)
+            if transport is not None:
+                with contextlib.suppress(Exception):
+                    await transport.close()
+
+    async def close_all(self) -> None:
+        """Close every pooled transport held by this host client."""
+        for key in list(self._transports):
+            transport = self._transports.pop(key, None)
+            if transport is not None:
+                with contextlib.suppress(Exception):
+                    await transport.close()
+
+    def _resolve_server_env_and_headers(
+        self, server: Any
+    ) -> tuple[dict[str, str], dict[str, str]]:
+        """Build vault environment variables and headers for one server."""
+        from src.integrations.mcp.factory import MCP_PRESETS
+
+        env: dict[str, str] = dict(self._vault_secrets)
+        headers: dict[str, str] = dict(getattr(server, "headers", None) or {})
+        preset = MCP_PRESETS.get(server.name)
+        if preset is not None:
+            for vault_key, env_var in preset.env_mappings.items():
+                val = self._vault_secrets.get(vault_key)
+                if val:
+                    env[env_var] = val
+            for vault_key, header_spec in preset.header_mappings.items():
+                val = self._vault_secrets.get(vault_key)
+                if val:
+                    if ":" in header_spec:
+                        h_name, h_pat = header_spec.split(":", 1)
+                        headers[h_name.strip()] = h_pat.strip().format(value=val)
+                    else:
+                        headers[header_spec] = val
+        return env, headers
 
     async def list_tools(self, connector_id: str) -> list[Any]:
         from src.integrations.repositories import MCPToolDefinitionDTO
@@ -652,6 +786,33 @@ class MCPHostClient:
             if sid == server.id
         ]
 
+    async def _get_or_create_transport(self, server: Any) -> Any:
+        """Return a persistent transport for the active session, creating if needed."""
+        from src.integrations.mcp.factory import SSETransport, StdioTransport
+
+        session_key = self._session_key or "default"
+        cache_key = (session_key, server.name)
+        transport = self._transports.get(cache_key)
+        if transport is not None:
+            if isinstance(transport, StdioTransport) and not transport.is_connected:
+                with contextlib.suppress(Exception):
+                    await transport.close()
+                transport = None
+            else:
+                return transport
+
+        env, headers = self._resolve_server_env_and_headers(server)
+        if server.transport == "stdio" and server.command:
+            transport = StdioTransport(command=server.command, vault_secrets=env)
+            await transport.connect()
+        elif server.transport == "sse" and server.url:
+            transport = SSETransport(url=server.url, vault_headers=headers)
+            await transport.connect()
+        else:
+            return None
+        self._transports[cache_key] = transport
+        return transport
+
     async def execute_tool(
         self,
         connector_id: str,
@@ -664,10 +825,6 @@ class MCPHostClient:
 
         server = ConnectorsService._mcp_servers_by_name.get(connector_id)
         if server is None:
-            # No server carries ``connector_id`` as its name, and the builder
-            # never sets a real one: the tool name is the only remaining handle.
-            # Resolve by name only when exactly one registered server owns it,
-            # because a call addressed to one server must never run on another.
             owners = sorted(
                 {
                     sid
@@ -695,8 +852,6 @@ class MCPHostClient:
             if len(owners) == 1:
                 server = ConnectorsService._mcp_servers.get(owners[0])
         if server is None:
-            # Never report success for a tool that was not run: an invented
-            # result would be fed back to the model as a real tool result.
             return MCPToolResultDTO(
                 tool_call_id=tool_call_id,
                 output=(
@@ -705,10 +860,40 @@ class MCPHostClient:
                 ),
                 is_error=True,
             )
+
+        tool_meta = ConnectorsService._mcp_tools.get((server.id, tool_name))
+        remote_name = (
+            getattr(tool_meta, "remote_name", None) or tool_name
+            if tool_meta is not None
+            else tool_name
+        )
+
+        if self._persistent and (
+            (server.transport == "stdio" and server.command)
+            or (server.transport == "sse" and server.url)
+        ):
+            try:
+                transport = await self._get_or_create_transport(server)
+                if transport is not None:
+                    output, is_error = await transport.call_tool(
+                        remote_name, dict(arguments)
+                    )
+                    return MCPToolResultDTO(
+                        tool_call_id=tool_call_id, output=output, is_error=is_error
+                    )
+            except Exception as exc:  # noqa: BLE001
+                return MCPToolResultDTO(
+                    tool_call_id=tool_call_id, output=str(exc), is_error=True
+                )
+
+        env, headers = self._resolve_server_env_and_headers(server)
         if server.transport == "stdio" and server.command:
             try:
                 output, is_error = await _call_stdio_tool(
-                    server.command, tool_name, dict(arguments)
+                    server.command,
+                    remote_name,
+                    dict(arguments),
+                    env=env or None,
                 )
                 return MCPToolResultDTO(
                     tool_call_id=tool_call_id, output=output, is_error=is_error
@@ -720,7 +905,10 @@ class MCPHostClient:
         if server.transport == "sse" and server.url:
             try:
                 output, is_error = await _call_sse_tool(
-                    server.url, tool_name, dict(arguments)
+                    server.url,
+                    remote_name,
+                    dict(arguments),
+                    headers=headers or None,
                 )
                 return MCPToolResultDTO(
                     tool_call_id=tool_call_id, output=output, is_error=is_error

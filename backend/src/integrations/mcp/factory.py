@@ -31,6 +31,7 @@ from src.integrations.mcp.mcp import (
     _drain_stderr,
     _exchange,
     _handshake,
+    _initialize_params,
     _join_drain,
     _normalize_tools,
     _stop_stdio,
@@ -240,6 +241,9 @@ class SSETransport:
         self.headers = dict(headers or {})
         self.timeout = timeout
         self._client: httpx.AsyncClient | None = None
+        self._session_id: str | None = None
+        self._initialized: bool = False
+        self._next_id: int = 1
 
     @property
     def default_headers(self) -> dict[str, str]:
@@ -251,6 +255,8 @@ class SSETransport:
         }
         base.update(self.headers)
         base.update(self.vault_headers)
+        if self._session_id:
+            base["Mcp-Session-Id"] = self._session_id
         return base
 
     async def connect(self) -> None:
@@ -261,13 +267,57 @@ class SSETransport:
                 headers=self.default_headers,
             )
 
+    async def _ensure_initialized(self) -> None:
+        """Attempt Streamable HTTP initialize handshake once, capturing Mcp-Session-Id."""
+        if self._initialized:
+            return
+        await self.connect()
+        assert self._client is not None
+        self._initialized = True
+        try:
+            init_resp = await self._client.post(
+                self.url,
+                json={
+                    "jsonrpc": "2.0",
+                    "id": self._alloc_id(),
+                    "method": "initialize",
+                    "params": _initialize_params(),
+                },
+                headers=self.default_headers,
+            )
+            sid = init_resp.headers.get("Mcp-Session-Id") or init_resp.headers.get(
+                "mcp-session-id"
+            )
+            if sid:
+                self._session_id = sid
+            if init_resp.status_code == 200:
+                try:
+                    await self._client.post(
+                        self.url,
+                        json={"jsonrpc": "2.0", "method": "notifications/initialized"},
+                        headers=self.default_headers,
+                    )
+                except (httpx.HTTPError, OSError):
+                    pass
+        except (httpx.HTTPError, OSError):
+            pass
+
+    def _alloc_id(self) -> int:
+        self._next_id += 1
+        return self._next_id
+
     async def list_tools(self) -> list[MCPToolDefinition]:
         """Discover tools from the SSE / StreamMCP endpoint."""
-        await self.connect()
+        await self._ensure_initialized()
         assert self._client is not None
 
         headers = self.default_headers
-        payload = {"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}}
+        payload = {
+            "jsonrpc": "2.0",
+            "id": self._alloc_id(),
+            "method": "tools/list",
+            "params": {},
+        }
 
         # Attempt 1: Modern HTTP StreamMCP POST tools/list
         try:
@@ -323,12 +373,12 @@ class SSETransport:
         self, name: str, arguments: dict[str, Any]
     ) -> tuple[str, bool]:
         """Invoke tools/call over HTTP and return (output, is_error)."""
-        await self.connect()
+        await self._ensure_initialized()
         assert self._client is not None
 
         payload = {
             "jsonrpc": "2.0",
-            "id": 1,
+            "id": self._alloc_id(),
             "method": "tools/call",
             "params": {"name": name, "arguments": arguments},
         }
@@ -390,6 +440,8 @@ class SSETransport:
 
     async def close(self) -> None:
         """Close the underlying HTTP client."""
+        self._initialized = False
+        self._session_id = None
         if self._client is not None and not self._client.is_closed:
             await self._client.aclose()
             self._client = None
@@ -475,6 +527,15 @@ MCP_PRESETS: dict[str, MCPPreset] = {
         command_template="npx -y @linear/mcp-server",
         required_vault_keys=("LINEAR_API_KEY",),
         env_mappings={"LINEAR_API_KEY": "LINEAR_API_KEY"},
+    ),
+    "playwright": MCPPreset(
+        id="playwright",
+        name="Playwright Browser CUA",
+        description="Full interactive Chromium browser automation and DOM/vision control via Playwright MCP.",
+        transport="stdio",
+        command_template="npx -y @playwright/mcp@latest --headless",
+        required_vault_keys=(),
+        env_mappings={},
     ),
 }
 

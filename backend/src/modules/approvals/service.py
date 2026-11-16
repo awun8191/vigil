@@ -299,34 +299,29 @@ class ApprovalsService:
         decision: str,
         decided_at: datetime,
         decision_note: str | None,
+        updated_arguments: dict[str, Any] | None = None,
     ) -> ApprovalDTO | None:
         """
         Move one pending approval to its decision in a single guarded write.
 
         The status check and the write are one statement, so two concurrent
         decisions cannot both succeed.
-
-        Args:
-            approval_id: UUID of the approval.
-            decision: 'approved' or 'rejected'.
-            decided_at: Timestamp of the decision.
-            decision_note: Optional comment from the user.
-
-        Returns:
-            The decided approval, or None when it was not pending.
         """
         if self._is_db_session_active():
+            values: dict[str, object] = {
+                "status": decision,
+                "decided_at": decided_at,
+                "decision_note": decision_note,
+            }
+            if updated_arguments is not None:
+                values["arguments"] = dict(updated_arguments)
             stmt = (
                 update(ApprovalModel)
                 .where(
                     ApprovalModel.id == approval_id,
                     ApprovalModel.status == PENDING_STATUS,
                 )
-                .values(
-                    status=decision,
-                    decided_at=decided_at,
-                    decision_note=decision_note,
-                )
+                .values(**values)
                 .returning(ApprovalModel)
             )
             result = await self.session.execute(stmt)
@@ -343,6 +338,7 @@ class ApprovalsService:
             status=decision,
             decided_at=decided_at,
             decision_note=decision_note,
+            arguments=dict(updated_arguments) if updated_arguments is not None else existing.arguments,
         )
         self._approvals[approval_id] = updated
         return updated
@@ -412,29 +408,12 @@ class ApprovalsService:
         approval_id: UUID,
         decision: str,
         note: str | None = None,
+        *,
+        answers: dict[str, object] | None = None,
+        updated_arguments: dict[str, object] | None = None,
     ) -> ApprovalDecisionResponse:
         """
         Record one user decision and wake the run. Never runs the tool.
-
-        Steps:
-        1. Reject a missing approval with 404.
-        2. Move a pending approval to the decision in one guarded write.
-        3. Reject a second decision with 409.
-        4. On a rejection, write the USER_REJECTED tool result.
-        5. Enqueue one resume_run job.
-
-        Args:
-            approval_id: UUID of the approval.
-            decision: 'approved' or 'rejected'.
-            note: Optional comment from the user.
-
-        Returns:
-            The decision response. It carries no tool output.
-
-        Raises:
-            NotFoundError: The approval does not exist.
-            ConflictError: The approval is not pending.
-            ValidationError: The decision is not 'approved' or 'rejected'.
         """
         if decision not in DECIDED_STATUSES:
             raise ValidationError(
@@ -445,8 +424,22 @@ class ApprovalsService:
         if approval is None:
             raise NotFoundError(f"Approval {approval_id} not found")
 
+        effective_note = note
+        if answers is not None and effective_note is None:
+            effective_note = json.dumps({"answers": answers})
+
+        merged_args: dict[str, object] | None = None
+        if updated_arguments is not None:
+            merged_args = {**dict(approval.arguments or {}), **dict(updated_arguments)}
+
         now = datetime.now(timezone.utc)
-        decided = await self._decide_once(approval_id, decision, now, note)
+        decided = await self._decide_once(
+            approval_id,
+            decision,
+            now,
+            effective_note,
+            updated_arguments=merged_args,
+        )
         if decided is None:
             raise ConflictError(
                 f"Approval {approval_id} is not pending and cannot be decided again"
