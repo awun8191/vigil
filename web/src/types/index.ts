@@ -73,6 +73,8 @@ export interface Approval {
 export interface ApprovalDecisionRequest {
   decision: 'approved' | 'rejected';
   decision_note?: string | null;
+  answers?: Record<string, unknown> | null;
+  updated_arguments?: Record<string, unknown> | null;
 }
 
 export interface ApprovalDecisionResponse {
@@ -225,12 +227,16 @@ export interface PairingResponse {
   user_id: string;
 }
 
+export type BrowserDriverChoice = 'auto' | 'cdp' | 'firecrawl' | 'mcp' | 'disabled';
+
 export interface UserSettings {
   user_id: string;
   spending_cap_usd_monthly: number;
   polling_interval_seconds: number;
   approval_defaults: Record<string, string>;
   preferred_model_tier: string;
+  default_browser_driver?: BrowserDriverChoice;
+  disabled_browser_drivers?: string[];
 }
 
 export interface ConnectorAccount {
@@ -311,6 +317,18 @@ export interface MCPDiscoveryResponse {
   status: string;
 }
 
+export interface MCPToolResponse {
+  server_name: string;
+  name: string;
+  description: string;
+  level: 'read' | 'local' | 'external' | string;
+  input_schema: Record<string, unknown>;
+}
+
+export interface UpdateMCPToolLevelRequest {
+  level: 'read' | 'local' | 'external';
+}
+
 /* -------------------------------------------------------------------------------------------
    Settings mutations and the settings-page audit view.
    ------------------------------------------------------------------------------------------- */
@@ -320,6 +338,8 @@ export interface UserSettingsUpdateRequest {
   polling_interval_seconds?: number;
   approval_defaults?: Record<string, string>;
   preferred_model_tier?: string;
+  default_browser_driver?: BrowserDriverChoice;
+  disabled_browser_drivers?: string[];
 }
 
 export interface AuditLogEntry {
@@ -350,6 +370,75 @@ export interface VaultValidationResult {
   valid: boolean;
   status_code: number | null;
   message: string;
+}
+
+export interface PersonalizationUsage {
+  current: number;
+  limit: number;
+}
+
+export interface PersonalizationPresetItem {
+  id: string;
+  name: string;
+  description: string;
+  content: string;
+}
+
+export interface PersonalizationResponse {
+  display_name: string;
+  soul_md: string;
+  soul_usage: PersonalizationUsage;
+  user_md: string;
+  user_entries: string[];
+  user_usage: PersonalizationUsage;
+  memory_md: string;
+  memory_entries: string[];
+  memory_usage: PersonalizationUsage;
+  presets: PersonalizationPresetItem[];
+}
+
+export interface PersonalizationUpdateRequest {
+  display_name?: string | null;
+  soul_md?: string | null;
+  reset_soul?: boolean;
+  user_md?: string | null;
+  user_entries?: string[] | null;
+  memory_md?: string | null;
+  memory_entries?: string[] | null;
+}
+
+export interface MemoryChunk {
+  id: string;
+  user_id: string;
+  scope: string;
+  content: string;
+  summary: string | null;
+  source_message_ids: string[];
+  embedding_model: string;
+  excluded: boolean;
+  created_at: string;
+}
+
+export interface MemoryChunkListResponse {
+  items: MemoryChunk[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+export interface MemorySearchResultItem {
+  id: string;
+  content: string;
+  summary: string | null;
+  similarity: number;
+  age_days: number;
+  final_score: number;
+}
+
+export interface MemorySearchResponse {
+  results: MemorySearchResultItem[];
+  query: string;
+  path: string | null;
 }
 
 

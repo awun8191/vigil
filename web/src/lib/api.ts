@@ -13,8 +13,10 @@ import type {
   HealthStatus,
   MCPDiscoveryResponse,
   MCPServerResponse,
+  MCPToolResponse,
   PairingResponse,
   RegisterMCPServerRequest,
+  UpdateMCPToolLevelRequest,
   Run,
   RunCancelResponse,
   RunCreateRequest,
@@ -30,6 +32,10 @@ import type {
   VaultSecretDTO,
   SetVaultSecretRequest,
   VaultValidationResult,
+  PersonalizationResponse,
+  PersonalizationUpdateRequest,
+  MemoryChunkListResponse,
+  MemorySearchResponse,
   Widget,
 } from '@/types';
 
@@ -408,6 +414,19 @@ const liveApi: VigilApi = {
     });
   },
 
+  authorizeGoogleConnector(connectorId = 'gmail') {
+    return request<{ authorization_url: string }>('/connectors/google/authorize', {
+      query: { connector_id: connectorId },
+    });
+  },
+
+  deleteConnectorAccount(accountId, scope) {
+    return request<void>(`/connectors/accounts/${accountId}`, {
+      method: 'DELETE',
+      scope,
+    });
+  },
+
   listSkills() {
     return request<SkillResponse[]>('/skills');
   },
@@ -453,6 +472,33 @@ const liveApi: VigilApi = {
     });
   },
 
+  listMCPServerTools(name) {
+    return request<MCPToolResponse[]>(
+      `/connectors/mcp-servers/${encodeURIComponent(name)}/tools`,
+    );
+  },
+
+  updateMCPToolLevel(serverName, toolName, body: UpdateMCPToolLevelRequest, scope: string) {
+    return request<MCPToolResponse>(
+      `/connectors/mcp-servers/${encodeURIComponent(serverName)}/tools/${encodeURIComponent(toolName)}`,
+      {
+        method: 'PATCH',
+        body,
+        scope,
+      },
+    );
+  },
+
+  refreshMCPServer(name, scope) {
+    return request<MCPDiscoveryResponse>(
+      `/connectors/mcp-servers/${encodeURIComponent(name)}/refresh`,
+      {
+        method: 'POST',
+        scope,
+      },
+    );
+  },
+
   listVaultSecrets() {
     return request<VaultSecretDTO[]>('/settings/vault');
   },
@@ -485,6 +531,49 @@ const liveApi: VigilApi = {
       `/settings/vault/${encodeURIComponent(key)}/validate`,
       { method: 'POST', scope },
     );
+  },
+
+  getPersonalization() {
+    return request<PersonalizationResponse>('/memory/personalization');
+  },
+
+  updatePersonalization(body: PersonalizationUpdateRequest, scope: string) {
+    return request<PersonalizationResponse>('/memory/personalization', {
+      method: 'PUT',
+      body,
+      scope,
+    });
+  },
+
+  listMemoryChunks(params) {
+    return request<MemoryChunkListResponse>('/memory/chunks', {
+      query: {
+        limit: params?.limit ?? 50,
+        offset: params?.offset ?? 0,
+        include_excluded: params?.include_excluded ?? true,
+      },
+    });
+  },
+
+  searchMemory(query: string, topN = 10) {
+    return request<MemorySearchResponse>('/memory/search', {
+      query: { q: query, top_n: topN },
+    });
+  },
+
+  excludeMemoryChunk(chunkId: string, excluded: boolean, scope: string) {
+    return request<{ excluded: boolean }>(`/memory/chunks/${chunkId}/exclude`, {
+      method: 'PATCH',
+      body: { excluded },
+      scope,
+    });
+  },
+
+  deleteMemoryChunk(chunkId: string, scope: string) {
+    return request<void>(`/memory/chunks/${chunkId}`, {
+      method: 'DELETE',
+      scope,
+    });
   },
 };
 

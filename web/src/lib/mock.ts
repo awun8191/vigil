@@ -10,6 +10,7 @@ import type {
   HealthStatus,
   MCPDiscoveryResponse,
   MCPServerResponse,
+  MCPToolResponse,
   PairingResponse,
   Run,
   RunCancelResponse,
@@ -23,6 +24,11 @@ import type {
   UserSettingsUpdateRequest,
   VaultSecretDTO,
   VaultValidationResult,
+  PersonalizationResponse,
+  PersonalizationUpdateRequest,
+  MemoryChunk,
+  MemoryChunkListResponse,
+  MemorySearchResponse,
   Widget,
 } from '@/types';
 
@@ -227,6 +233,8 @@ const userSettings: UserSettings = {
   polling_interval_seconds: 300,
   approval_defaults: { gmail_send: 'require_approval' },
   preferred_model_tier: 'balanced',
+  default_browser_driver: 'auto',
+  disabled_browser_drivers: [],
 };
 
 const limits: SystemLimits = {
@@ -276,6 +284,25 @@ let mcpServers: MCPServerResponse[] = [
     created_at: iso(-5_760),
   },
 ];
+
+const mockMcpTools: Record<string, MCPToolResponse[]> = {
+  atlassian: [
+    {
+      server_name: 'atlassian',
+      name: 'jira_search_issues',
+      description: 'Search Jira issues with JQL.',
+      level: 'local',
+      input_schema: { type: 'object', properties: { jql: { type: 'string' } } },
+    },
+    {
+      server_name: 'atlassian',
+      name: 'jira_create_issue',
+      description: 'Create a new Jira issue.',
+      level: 'external',
+      input_schema: { type: 'object', properties: { summary: { type: 'string' } } },
+    },
+  ],
+};
 
 const replyDraft =
   'Both connectors are quiet right now. The draft reply to Sarah is still the only thing actually waiting on you, everything else is informational.';
@@ -825,6 +852,14 @@ export const mockApi: VigilApi = {
     return later({ account_id: accountId, job_id: 'job-1', status: 'dispatched' });
   },
 
+  authorizeGoogleConnector() {
+    return later({ authorization_url: '#mock-google-oauth' });
+  },
+
+  deleteConnectorAccount() {
+    return later(undefined);
+  },
+
   listSkills() {
     return later([...skills]);
   },
@@ -896,7 +931,24 @@ export const mockApi: VigilApi = {
       return Promise.reject(new Error(`MCP server ${name} not found`));
     }
     mcpServers = mcpServers.filter((server) => server.name !== name);
+    delete mockMcpTools[name];
     return later(undefined);
+  },
+
+  listMCPServerTools(name): Promise<MCPToolResponse[]> {
+    return later([...(mockMcpTools[name] ?? [])]);
+  },
+
+  updateMCPToolLevel(serverName, toolName, body) {
+    const tools = mockMcpTools[serverName] ?? [];
+    const target = tools.find((t) => t.name === toolName);
+    if (!target) return Promise.reject(new Error(`MCP tool ${toolName} not found`));
+    target.level = body.level;
+    return later({ ...target });
+  },
+
+  refreshMCPServer(name) {
+    return later({ server_name: name, job_id: `job-refresh-${Date.now()}`, status: 'queued' });
   },
 
   listVaultSecrets() {
@@ -943,6 +995,97 @@ export const mockApi: VigilApi = {
       message: 'Simulated provider accepted the stored key.',
     });
   },
+
+  getPersonalization(): Promise<PersonalizationResponse> {
+    return later({ ...mockPersonalization });
+  },
+
+  updatePersonalization(body: PersonalizationUpdateRequest): Promise<PersonalizationResponse> {
+    if (body.reset_soul) {
+      mockPersonalization.soul_md = DEFAULT_MOCK_SOUL;
+    } else if (typeof body.soul_md === 'string') {
+      mockPersonalization.soul_md = body.soul_md;
+    }
+    if (Array.isArray(body.user_entries)) {
+      mockPersonalization.user_entries = [...body.user_entries];
+      mockPersonalization.user_md = mockPersonalization.user_entries.join('\n§\n');
+    } else if (typeof body.user_md === 'string') {
+      mockPersonalization.user_md = body.user_md;
+      mockPersonalization.user_entries = body.user_md
+        .split('\n§\n')
+        .map((s) => s.trim())
+        .filter(Boolean);
+    }
+    if (Array.isArray(body.memory_entries)) {
+      mockPersonalization.memory_entries = [...body.memory_entries];
+      mockPersonalization.memory_md = mockPersonalization.memory_entries.join('\n§\n');
+    } else if (typeof body.memory_md === 'string') {
+      mockPersonalization.memory_md = body.memory_md;
+      mockPersonalization.memory_entries = body.memory_md
+        .split('\n§\n')
+        .map((s) => s.trim())
+        .filter(Boolean);
+    }
+    if (typeof body.display_name === 'string' && body.display_name.trim()) {
+      mockPersonalization.display_name = body.display_name.trim();
+    }
+    mockPersonalization.soul_usage = {
+      current: mockPersonalization.soul_md.length,
+      limit: 8000,
+    };
+    mockPersonalization.user_usage = {
+      current: mockPersonalization.user_md.length,
+      limit: 1500,
+    };
+    mockPersonalization.memory_usage = {
+      current: mockPersonalization.memory_md.length,
+      limit: 2200,
+    };
+    return later({ ...mockPersonalization });
+  },
+
+  listMemoryChunks(params): Promise<MemoryChunkListResponse> {
+    const limit = params?.limit ?? 50;
+    const offset = params?.offset ?? 0;
+    const includeExcluded = params?.include_excluded ?? true;
+    const filtered = includeExcluded
+      ? mockMemoryChunks
+      : mockMemoryChunks.filter((c) => !c.excluded);
+    return later({
+      items: filtered.slice(offset, offset + limit),
+      total: filtered.length,
+      limit,
+      offset,
+    });
+  },
+
+  searchMemory(query: string, topN = 10): Promise<MemorySearchResponse> {
+    const q = query.trim().toLowerCase();
+    const matches = mockMemoryChunks
+      .filter((c) => !c.excluded && c.content.toLowerCase().includes(q))
+      .slice(0, topN)
+      .map((c) => ({
+        id: c.id,
+        content: c.content,
+        summary: c.summary,
+        similarity: 0.86,
+        age_days: 1.2,
+        final_score: 0.84,
+      }));
+    return later({ results: matches, query, path: 'exact' });
+  },
+
+  excludeMemoryChunk(chunkId: string, excluded: boolean) {
+    const target = mockMemoryChunks.find((c) => c.id === chunkId);
+    if (!target) return Promise.reject(new Error('Chunk not found'));
+    target.excluded = excluded;
+    return later({ excluded });
+  },
+
+  deleteMemoryChunk(chunkId: string) {
+    mockMemoryChunks = mockMemoryChunks.filter((c) => c.id !== chunkId);
+    return later(undefined);
+  },
 };
 
 function mockProvider(key: string): string {
@@ -988,6 +1131,55 @@ let mockVaultSecrets: VaultSecretDTO[] = [
     masked_value: 'gsk****8899',
     created_at: new Date(Date.now() - 43200000).toISOString(),
     updated_at: new Date(Date.now() - 43200000).toISOString(),
+  },
+];
+
+const DEFAULT_MOCK_SOUL = `# Vigil — Core Identity & Persona
+
+You are Vigil, an autonomous, proactive AI collaborator operating within a Hark Pro-inspired living canvas.
+
+## Voice & Disposition
+- **Direct & Candid**: Match the length of your reply to the weight of the ask. Skip filler and never restate the prompt back.
+- **Intellectually Honest**: Agree because a claim is right, not because the user said it.
+- **Genuine Perspective**: Form your own evolving opinion of the user, their working style, priorities, and habits.`;
+
+const mockPersonalization: PersonalizationResponse = {
+  display_name: 'Muhammad',
+  soul_md: DEFAULT_MOCK_SOUL,
+  soul_usage: { current: DEFAULT_MOCK_SOUL.length, limit: 8000 },
+  user_entries: [
+    'Name: Muhammad',
+    'Impression: fast systems thinker who values concrete verification and agency over boilerplate.',
+  ],
+  user_md:
+    'Name: Muhammad\n§\nImpression: fast systems thinker who values concrete verification and agency over boilerplate.',
+  user_usage: { current: 112, limit: 1500 },
+  memory_entries: [
+    'Workspace uses Python 3.12 (uv) on the backend and React + Vite on the frontend.',
+  ],
+  memory_md: 'Workspace uses Python 3.12 (uv) on the backend and React + Vite on the frontend.',
+  memory_usage: { current: 80, limit: 2200 },
+  presets: [
+    {
+      id: 'default',
+      name: 'Default Vigil',
+      description: 'Direct, proactive, candid collaborator who forms genuine opinions.',
+      content: DEFAULT_MOCK_SOUL,
+    },
+  ],
+};
+
+let mockMemoryChunks: MemoryChunk[] = [
+  {
+    id: 'chunk-1',
+    user_id: 'u-1',
+    scope: 'global',
+    content: 'User confirmed Q4 budget allocations: $42,800 for infrastructure tooling and $118,000 for contractor spend.',
+    summary: 'Q4 budget figures confirmed',
+    source_message_ids: ['m-1', 'm-2'],
+    embedding_model: 'bge-small-en-v1.5',
+    excluded: false,
+    created_at: iso(-120),
   },
 ];
 

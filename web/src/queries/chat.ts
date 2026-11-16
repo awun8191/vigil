@@ -135,13 +135,18 @@ export function useAgentChat(sessionId: string | null): AgentChat {
   const awaitingApproval = run?.status === 'awaiting_approval';
 
   // Swallow a stale reader's writes into a different session.
+  // Do NOT reset activeRunId when transitioning from null -> newly created sessionId
+  // on the first message of a new chat, otherwise the in-flight run stream is killed.
   useEffect(() => {
-    if (sessionIdRef.current !== sessionId) {
+    const prev = sessionIdRef.current;
+    if (prev !== sessionId) {
       sessionIdRef.current = sessionId;
-      setActiveRunId(null);
-      setFinalisedRunId(null);
-      setError(null);
-      setLastPrompt(null);
+      if (prev !== null) {
+        setActiveRunId(null);
+        setFinalisedRunId(null);
+        setError(null);
+        setLastPrompt(null);
+      }
     }
   }, [sessionId]);
 
@@ -240,6 +245,8 @@ export function useAgentChat(sessionId: string | null): AgentChat {
           setError(userMessageOf(cause));
           return;
         }
+      } else if (sessionIdRef.current !== target) {
+        sessionIdRef.current = target;
       }
 
       let configId = defaultConfig.data?.id;

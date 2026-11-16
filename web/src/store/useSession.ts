@@ -100,6 +100,7 @@ interface SessionState {
   signIn: (pairing: PairingResponse, me: () => Promise<AuthMe>) => Promise<void>;
   signOut: () => Promise<void>;
   expire: () => void;
+  setDisplayName: (displayName: string) => void;
 }
 
 export const useSession = create<SessionState>((set) => ({
@@ -205,6 +206,14 @@ export const useSession = create<SessionState>((set) => ({
     void clearStoredSession();
     setBearerToken(null);
     set({ status: 'unauthed', device: null });
+  },
+
+  setDisplayName(displayName: string) {
+    set((state) => ({
+      device: state.device
+        ? { ...state.device, user_display_name: displayName }
+        : state.device,
+    }));
   },
 }));
 

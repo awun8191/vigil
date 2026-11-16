@@ -14,8 +14,10 @@ import type {
   HealthStatus,
   MCPDiscoveryResponse,
   MCPServerResponse,
+  MCPToolResponse,
   PairingResponse,
   RegisterMCPServerRequest,
+  UpdateMCPToolLevelRequest,
   Run,
   RunCancelResponse,
   RunCreateRequest,
@@ -32,6 +34,10 @@ import type {
   VaultSecretDTO,
   SetVaultSecretRequest,
   VaultValidationResult,
+  PersonalizationResponse,
+  PersonalizationUpdateRequest,
+  MemoryChunkListResponse,
+  MemorySearchResponse,
   Widget,
 } from '@/types';
 
@@ -115,6 +121,8 @@ export interface VigilApi {
   getLimits(): Promise<SystemLimits>;
   listConnectors(): Promise<ConnectorAccount[]>;
   syncConnector(accountId: string, scope: string): Promise<SyncTrigger>;
+  authorizeGoogleConnector(connectorId?: string): Promise<{ authorization_url: string }>;
+  deleteConnectorAccount(accountId: string, scope: string): Promise<void>;
 
   /* Skills. Mirrors the backend verbs: install and enable/disable are POST routes that take
      no toggle body, so the caller passes the desired state and the hook picks the route. */
@@ -128,6 +136,14 @@ export interface VigilApi {
   listMCPServers(): Promise<MCPServerResponse[]>;
   registerMCPServer(body: RegisterMCPServerRequest, scope: string): Promise<MCPDiscoveryResponse>;
   unregisterMCPServer(name: string, scope: string): Promise<void>;
+  listMCPServerTools(name: string): Promise<MCPToolResponse[]>;
+  updateMCPToolLevel(
+    serverName: string,
+    toolName: string,
+    body: UpdateMCPToolLevelRequest,
+    scope: string,
+  ): Promise<MCPToolResponse>;
+  refreshMCPServer(name: string, scope: string): Promise<MCPDiscoveryResponse>;
 
   /* Key Vault */
   listVaultSecrets(): Promise<VaultSecretDTO[]>;
@@ -137,5 +153,26 @@ export interface VigilApi {
   testVaultSecret(body: SetVaultSecretRequest, scope: string): Promise<VaultValidationResult>;
   /** Check an already-stored key against its provider. */
   validateVaultSecret(key: string, scope: string): Promise<VaultValidationResult>;
+
+  /* Personalization & Hermes-style Memory (SOUL.md, USER.md, MEMORY.md) */
+  getPersonalization(): Promise<PersonalizationResponse>;
+  updatePersonalization(
+    body: PersonalizationUpdateRequest,
+    scope: string,
+  ): Promise<PersonalizationResponse>;
+
+  /* Long-term Semantic Memory Chunks */
+  listMemoryChunks(params?: {
+    limit?: number;
+    offset?: number;
+    include_excluded?: boolean;
+  }): Promise<MemoryChunkListResponse>;
+  searchMemory(query: string, topN?: number): Promise<MemorySearchResponse>;
+  excludeMemoryChunk(
+    chunkId: string,
+    excluded: boolean,
+    scope: string,
+  ): Promise<{ excluded: boolean }>;
+  deleteMemoryChunk(chunkId: string, scope: string): Promise<void>;
 }
 
