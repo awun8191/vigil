@@ -96,7 +96,9 @@ class Settings(BaseSettings):
     REASONING_LLM_BASE_URL: str = "https://api.openai.com/v1"
     REASONING_LLM_API_KEY: str = ""
     REASONING_LLM_MODEL: str = "muse-spark-1.3-contributor"
-    CONTEXT_TOKEN_LIMIT: int = 8_000
+    CONTEXT_TOKEN_LIMIT: int = 64_000
+    COMPACTION_INTERACTION_BARRIER: int = Field(default=8, ge=5, le=20)
+    COMPACTION_OVERFLOW_INTERACTIONS: int = Field(default=4, ge=1, le=20)
 
     # --- Vision Model (view_image) ---
     # The image understanding tier. Every value falls back to the fast tier

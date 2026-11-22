@@ -148,7 +148,28 @@ async def _widget_client(database: ScratchDatabase):
             yield client
 
 
-METRIC_BODY = {"title": "Panel", "widget_type": "metric_card", "data_payload": {"value": "1"}}
+A2UI_SURFACE_PAYLOAD: dict[str, Any] = {
+    "version": "v0.9",
+    "catalog_id": "urn:vigil:a2ui:catalog:panels:v1",
+    "size": "md",
+    "root": "col_1",
+    "components": [
+        {"id": "col_1", "component": "Column", "props": {"gap": "normal"}, "children": ["m_1"]},
+        {
+            "id": "m_1",
+            "component": "Metric",
+            "props": {"label": "Metric", "value": {"path": "/value"}, "tone": "neutral"},
+            "children": [],
+        },
+    ],
+    "data_model": {"value": "1"},
+}
+
+METRIC_BODY = {
+    "title": "Panel",
+    "widget_type": "a2ui_surface",
+    "data_payload": A2UI_SURFACE_PAYLOAD,
+}
 
 
 @pytest.mark.asyncio
@@ -160,8 +181,8 @@ async def test_create_widget_returns_version_one() -> None:
             assert response.status_code == 201, response.text
             body = response.json()
             assert body["version"] == 1
-            assert body["widget_type"] == "metric_card"
-            assert body["data_payload"] == {"value": "1", "delta": None, "caption": None}
+            assert body["widget_type"] == "a2ui_surface"
+            assert body["data_payload"]["data_model"] == {"value": "1"}
             assert body["user_id"] == str(DEFAULT_USER_ID)
 
 
@@ -193,14 +214,14 @@ async def test_create_rejects_bad_refresh_interval() -> None:
 
 @pytest.mark.asyncio
 async def test_create_rejects_mismatched_payload() -> None:
-    """A table payload on a metric_card is a 422."""
+    """A non-A2UI payload on an a2ui_surface is a 422."""
     async with _scratch_database() as database:
         async with _widget_client(database) as client:
             response = await client.post(
                 "/api/v1/widgets",
                 json={
                     "title": "Panel",
-                    "widget_type": "metric_card",
+                    "widget_type": "a2ui_surface",
                     "data_payload": {"columns": ["a"], "rows": []},
                 },
                 headers=AUTH_HEADERS,
@@ -311,13 +332,16 @@ async def test_patch_bumps_version() -> None:
             widget_id = created.json()["id"]
             updated = await client.patch(
                 f"/api/v1/widgets/{widget_id}",
-                json={"widget_id": widget_id, "data_payload": {"value": "2"}},
+                json={
+                    "widget_id": widget_id,
+                    "data_payload": {"data_model": {"value": "2"}},
+                },
                 headers=AUTH_HEADERS,
             )
             assert updated.status_code == 200, updated.text
             body = updated.json()
             assert body["version"] == 2
-            assert body["data_payload"]["value"] == "2"
+            assert body["data_payload"]["data_model"]["value"] == "2"
 
 
 @pytest.mark.asyncio
@@ -359,7 +383,7 @@ async def test_check_constraints_reject_bad_rows() -> None:
                     "id": uuid4(),
                     "user_id": user_id,
                     "title": "Raw",
-                    "widget_type": "metric_card",
+                    "widget_type": "a2ui_surface",
                     "data_payload": '{"value": "1"}',
                     "refresh_interval_minutes": None,
                 }
@@ -410,8 +434,8 @@ async def test_stream_emits_widget_updated_frames() -> None:
                 WidgetCreateDTO(
                     user_id=DEFAULT_USER_ID,
                     title="Panel",
-                    widget_type="metric_card",
-                    data_payload={"value": "1"},
+                    widget_type="a2ui_surface",
+                    data_payload=A2UI_SURFACE_PAYLOAD,
                 )
             )
 
@@ -425,7 +449,7 @@ async def test_stream_emits_widget_updated_frames() -> None:
             payload = _json.loads(data_frames[0].split("data:", 1)[1].strip())
             assert payload["id"] == str(created.id)
             assert payload["version"] == 1
-            assert payload["data_payload"]["value"] == "1"
+            assert payload["data_payload"]["data_model"]["value"] == "1"
 
             replay: list[str] = []
             async for frame in stream_widget_events(
@@ -458,8 +482,8 @@ def test_widget_event_frame_carries_cursor() -> None:
         id=uuid4(),
         user_id=uuid4(),
         title="Panel",
-        widget_type="metric_card",
-        data_payload={"value": "1"},
+        widget_type="a2ui_surface",
+        data_payload=A2UI_SURFACE_PAYLOAD,
         refresh_config=None,
         refresh_interval_minutes=None,
         next_refresh_at=None,

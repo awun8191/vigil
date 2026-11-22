@@ -23,6 +23,7 @@ import {
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import type { Artifact, RunStepEvent } from '@/types';
+import { buildThemedMicroAppSrcDoc } from '@/components/widgets/microAppTheme';
 import { MarkdownContent } from './MarkdownContent';
 
 export const PINNED_WIDGETS_STORAGE_KEY = 'vigil_pinned_widgets';
@@ -292,6 +293,7 @@ export function buildDeliverables(
     if (browserScreenshotPaths.has(art.path)) continue;
     const baseName = art.path.split('/').pop() ?? art.path;
     const stepMeta = stepMetaByPath.get(art.path) ?? stepMetaByPath.get(`name:${baseName}`);
+    if (art.kind === 'attachment' && !stepMeta) continue;
     const name = stepMeta?.name ?? baseName;
     const format = detectDeliverableFormat(name, stepMeta?.format);
     items.push({
@@ -801,13 +803,13 @@ export function ArtifactCard({ item }: { item: DeliverableItem }) {
                 </div>
 
                 {viewMode === 'preview' ? (
-                  <div className="scroll-soft overflow-x-auto rounded-[8px] bg-[color-mix(in_srgb,var(--text)_5%,transparent)]">
+                  <div className="scroll-soft overflow-x-auto rounded-[8px] bg-[var(--surface-solid)]">
                     <iframe
                       sandbox="allow-scripts"
-                      srcDoc={documentText}
+                      srcDoc={buildThemedMicroAppSrcDoc(documentText)}
                       title={item.name}
                       style={{ width: viewportWidth }}
-                      className="mx-auto block h-[380px] border-0 bg-white"
+                      className="mx-auto block h-[380px] border-0 bg-[var(--surface-solid)]"
                     />
                   </div>
                 ) : (
@@ -955,13 +957,13 @@ export function ArtifactCard({ item }: { item: DeliverableItem }) {
             <div className="min-h-0 flex-1 overflow-hidden">
               {item.format === 'html' ? (
                 viewMode === 'preview' ? (
-                  <div className="scroll-soft h-full overflow-auto bg-[color-mix(in_srgb,var(--text)_5%,transparent)]">
+                  <div className="scroll-soft h-full overflow-auto bg-[var(--surface-solid)]">
                     <iframe
                       sandbox="allow-scripts"
-                      srcDoc={documentText}
+                      srcDoc={buildThemedMicroAppSrcDoc(documentText)}
                       title={item.name}
                       style={{ width: viewportWidth }}
-                      className="mx-auto block h-full border-0 bg-white"
+                      className="mx-auto block h-full border-0 bg-[var(--surface-solid)]"
                     />
                   </div>
                 ) : (

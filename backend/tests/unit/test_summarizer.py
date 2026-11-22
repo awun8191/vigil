@@ -157,16 +157,14 @@ def small_history() -> list[dict[str, Any]]:
 
 def service_with(
     answer: str = CANNED_ANSWER,
-    probabilities: dict[str, float] | None = DROP_ALL,
     run_steps: RunsService | None = None,
 ) -> tuple[CompactionService, ScriptedFastLLM]:
-    """Build a compaction service with a scripted Tier 1 and Tier 2."""
+    """Build a JEV-free compaction service with a scripted Fast LLM."""
     settings = Settings()
     llm = ScriptedFastLLM(answer)
     service = CompactionService(
         session=None,
         settings=settings,
-        jev_client=None if probabilities is None else ScriptedJev(probabilities),
         fast_llm=llm,
         token_model=settings.REASONING_LLM_MODEL,
         run_steps=run_steps,
@@ -450,17 +448,23 @@ async def test_second_compaction_gets_next_step_number() -> None:
 
 @pytest.mark.asyncio
 async def test_no_tier2_call_when_nothing_removed() -> None:
-    """A history that needs no removal keeps the empty summary contract."""
-    service, llm = service_with(probabilities=None)
+    """A history that fits within the recent window keeps the empty summary contract."""
+    service, llm = service_with()
+    short_history = [
+        {"id": f"u-{i}", "role": "user", "content": f"Question {i}"}
+        if i % 2 == 0
+        else {"id": f"a-{i}", "role": "assistant", "content": f"Answer {i}"}
+        for i in range(6)
+    ]
 
-    context = await service.compact(uuid4(), small_history())
+    context = await service.compact(uuid4(), short_history)
 
     assert llm.calls == []
     assert context.summary is None
     assert context.summary_block == ""
     assert context.plan.summary_block == ""
     assert [message["content"] for message in context.messages] == [
-        message["content"] for message in small_history()
+        message["content"] for message in short_history
     ]
 
 

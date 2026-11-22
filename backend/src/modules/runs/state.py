@@ -49,6 +49,7 @@ from src.schemas.runtime import (
     MessageModel,
     RunModel,
     RunStepModel,
+    ThreadModel,
 )
 from src.schemas.system import JobModel
 
@@ -64,6 +65,7 @@ __all__ = [
     "RunJournal",
     "RunStateMachine",
     "RunStatus",
+    "SessionCompactionState",
     "SqlRunJournal",
     "TERMINAL_RUN_STATUSES",
     "TOOL_PARTITIONS",
@@ -464,6 +466,15 @@ class RunJournal(Protocol):
 # ---------------------------------------------------------------------------
 
 
+@dataclass(frozen=True)
+class SessionCompactionState:
+    """Rolling compaction summary and cursor for a chat session."""
+
+    rolling_summary: str | None = None
+    compacted_through_message_id: UUID | None = None
+    compacted_through_at: datetime | None = None
+
+
 class InMemoryRunJournal:
     """A journal that keeps rows in dictionaries. Use it in tests only."""
 
@@ -478,6 +489,7 @@ class InMemoryRunJournal:
         # each run owns a workspace ref that a child never shares.
         self.cost_micros: dict[UUID, int] = {}
         self.workspaces: dict[UUID, str] = {}
+        self.session_compaction: dict[UUID, SessionCompactionState] = {}
 
     async def get_run(self, run_id: UUID) -> RunDTO | None:
         return self.runs.get(run_id)
@@ -512,6 +524,7 @@ class InMemoryRunJournal:
             token_usage={"prompt": 0, "completion": 0, "total": 0},
             cost_usd=0.0,
             cost_micros=0,
+            project_id=data.project_id,
         )
         self.runs[run.id] = run
         self.messages[run.id] = []
@@ -547,6 +560,7 @@ class InMemoryRunJournal:
             token_usage=token_usage if token_usage is not None else run.token_usage,
             cost_usd=cost_usd if cost_usd is not None else run.cost_usd,
             cost_micros=self.cost_micros.get(run_id, run.cost_micros),
+            project_id=run.project_id,
         )
         self.runs[run_id] = updated
         return updated
@@ -580,6 +594,7 @@ class InMemoryRunJournal:
             token_usage=run.token_usage,
             cost_usd=total / 1_000_000,
             cost_micros=total,
+            project_id=run.project_id,
         )
         return total
 
@@ -596,13 +611,32 @@ class InMemoryRunJournal:
     async def list_messages(self, run_id: UUID) -> list[MessageDTO]:
         return list(self.messages.get(run_id, ()))
 
+    async def get_session_compaction_state(
+        self, session_id: UUID
+    ) -> SessionCompactionState | None:
+        return self.session_compaction.get(session_id)
+
+    async def save_session_compaction_state(
+        self,
+        session_id: UUID,
+        *,
+        rolling_summary: str,
+        compacted_through_message_id: UUID,
+        compacted_through_at: datetime | None = None,
+    ) -> None:
+        self.session_compaction[session_id] = SessionCompactionState(
+            rolling_summary=rolling_summary,
+            compacted_through_message_id=compacted_through_message_id,
+            compacted_through_at=compacted_through_at,
+        )
+
     async def list_session_history(
         self,
         session_id: UUID,
         exclude_run_id: UUID | None = None,
-        limit: int = 40,
+        limit: int | None = None,
     ) -> list[MessageDTO]:
-        """Return prior user and final assistant messages of a chat session."""
+        """Return prior user and final assistant messages of a chat session after the compaction cursor."""
         out: list[MessageDTO] = []
         for r_id, msgs in self.messages.items():
             if exclude_run_id is not None and r_id == exclude_run_id:
@@ -615,7 +649,19 @@ class InMemoryRunJournal:
                 ):
                     out.append(m)
         out.sort(key=lambda m: m.created_at)
-        return out[-limit:]
+        state = self.session_compaction.get(session_id)
+        if state is not None and state.compacted_through_message_id is not None:
+            cursor_idx = next(
+                (i for i, m in enumerate(out) if m.id == state.compacted_through_message_id),
+                None,
+            )
+            if cursor_idx is not None:
+                out = out[cursor_idx + 1 :]
+            elif state.compacted_through_at is not None:
+                out = [m for m in out if m.created_at > state.compacted_through_at]
+        if limit is not None:
+            return out[-limit:]
+        return out
 
     async def replace_messages(self, run_id: UUID, messages: list[MessageDTO]) -> None:
         self.messages[run_id] = list(messages)
@@ -807,6 +853,7 @@ class SqlRunJournal:
             token_usage=dict(model.token_usage or {}),
             cost_micros=int(model.cost_micros or 0),
             cost_usd=(model.cost_micros or 0) / 1_000_000,
+            project_id=getattr(model, "project_id", None),
         )
 
     @staticmethod
@@ -921,6 +968,7 @@ class SqlRunJournal:
             id=uuid4(),
             config_id=data.config_id,
             card_id=data.card_id,
+            project_id=data.project_id,
             parent_run_id=data.parent_run_id,
             depth=data.depth,
             status=data.status,
@@ -1014,13 +1062,42 @@ class SqlRunJournal:
         )
         return [self._message_dto(row) for row in result.scalars().all()]
 
+    async def get_session_compaction_state(
+        self, session_id: UUID
+    ) -> SessionCompactionState | None:
+        thread = await self.session.get(ThreadModel, session_id)
+        if thread is None:
+            return None
+        return SessionCompactionState(
+            rolling_summary=thread.rolling_summary,
+            compacted_through_message_id=thread.compacted_through_message_id,
+            compacted_through_at=thread.compacted_through_at,
+        )
+
+    async def save_session_compaction_state(
+        self,
+        session_id: UUID,
+        *,
+        rolling_summary: str,
+        compacted_through_message_id: UUID,
+        compacted_through_at: datetime | None = None,
+    ) -> None:
+        thread = await self.session.get(ThreadModel, session_id)
+        if thread is None:
+            return
+        thread.rolling_summary = rolling_summary
+        thread.compacted_through_message_id = compacted_through_message_id
+        thread.compacted_through_at = compacted_through_at
+        await self.session.flush()
+
     async def list_session_history(
         self,
         session_id: UUID,
         exclude_run_id: UUID | None = None,
-        limit: int = 40,
+        limit: int | None = None,
     ) -> list[MessageDTO]:
-        """Return prior user and final assistant messages of a chat session."""
+        """Return prior user and final assistant messages of a chat session after the compaction cursor."""
+        state = await self.get_session_compaction_state(session_id)
         stmt = select(MessageModel).where(
             MessageModel.session_id == session_id,
             MessageModel.role.in_(("user", "assistant")),
@@ -1032,6 +1109,8 @@ class SqlRunJournal:
                     MessageModel.run_id != exclude_run_id,
                 )
             )
+        if state is not None and state.compacted_through_at is not None:
+            stmt = stmt.where(MessageModel.created_at >= state.compacted_through_at)
         stmt = stmt.order_by(MessageModel.created_at.asc(), MessageModel.id.asc())
         result = await self.session.execute(stmt)
         rows = [
@@ -1039,7 +1118,18 @@ class SqlRunJournal:
             for row in result.scalars().all()
             if row.role == "user" or (row.role == "assistant" and not row.tool_calls and row.content)
         ]
-        return [self._message_dto(row) for row in rows[-limit:]]
+        if state is not None and state.compacted_through_message_id is not None:
+            cursor_idx = next(
+                (i for i, row in enumerate(rows) if row.id == state.compacted_through_message_id),
+                None,
+            )
+            if cursor_idx is not None:
+                rows = rows[cursor_idx + 1 :]
+            elif state.compacted_through_at is not None:
+                rows = [row for row in rows if row.created_at > state.compacted_through_at]
+        if limit is not None:
+            rows = rows[-limit:]
+        return [self._message_dto(row) for row in rows]
 
     async def replace_messages(self, run_id: UUID, messages: list[MessageDTO]) -> None:
         await self.session.execute(

@@ -7,14 +7,18 @@ import {
   Clock3,
   Gauge,
   LayoutGrid,
+  MessageSquarePlus,
   Plus,
   ShieldCheck,
   Sparkles,
+  X,
 } from 'lucide-react';
 
+import { WidgetView } from '@/components/widgets/registry';
 import { compareCards, relativeTime } from '@/lib/format';
 import { useCards } from '@/queries/cards';
 import { useConnectors, useLimits } from '@/queries/settings';
+import { useDeleteWidget, useWidgets, useWidgetsStream } from '@/queries/widgets';
 import type { Card } from '@/types';
 
 interface Props {
@@ -146,6 +150,10 @@ export function HarkLeftRail({ mode }: Props) {
   const connectors = useConnectors();
   const limits = useLimits();
   const cardsQuery = useCards();
+  const widgetsQuery = useWidgets();
+  useWidgetsStream();
+  const deleteWidget = useDeleteWidget();
+  const customWidgets = widgetsQuery.data ?? [];
 
   const [panels, setPanels] = useState<PanelId[]>(readPanels);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -385,7 +393,7 @@ export function HarkLeftRail({ mode }: Props) {
         </section>
       ) : null}
 
-      {panels.includes('waiting') && waitingCards.length > 0 ? (
+      { waitingCards.length > 0 && panels.includes('waiting') ? (
         <section className="rail-card p-4">
           <PanelHeader
             icon={<ShieldCheck size={15} strokeWidth={1.6} />}
@@ -403,6 +411,52 @@ export function HarkLeftRail({ mode }: Props) {
           </div>
         </section>
       ) : null}
+
+      {customWidgets.map((panel) => (
+        <section key={panel.id} className="rail-card p-4">
+          <WidgetView
+            widget={panel}
+            trailing={
+              <>
+                <button
+                  type="button"
+                  onClick={() =>
+                    navigate('/agent/chat', {
+                      state: { seed: `About my "${panel.title}" panel: ` },
+                    })
+                  }
+                  aria-label={`Ask Vigil about ${panel.title}`}
+                  title="Ask Vigil about this panel"
+                  className="cursor-pointer rounded-full p-1 text-[var(--text-muted)] transition-colors hover:bg-[var(--panel-inset)] hover:text-[var(--text)]"
+                >
+                  <MessageSquarePlus size={13} strokeWidth={1.7} />
+                </button>
+                <button
+                  type="button"
+                  onClick={() =>
+                    deleteWidget.mutate({
+                      widgetId: panel.id,
+                      scope: `widget-delete:${panel.id}`,
+                    })
+                  }
+                  disabled={deleteWidget.isPending}
+                  aria-label={`Remove ${panel.title}`}
+                  title="Remove panel"
+                  className="cursor-pointer rounded-full p-1 text-[var(--text-muted)] transition-colors hover:bg-[var(--panel-inset)] hover:text-[var(--text)] disabled:cursor-default disabled:opacity-50"
+                >
+                  <X size={13} strokeWidth={1.7} />
+                </button>
+              </>
+            }
+            onAskVigil={(prompt) =>
+              navigate('/agent/chat', {
+                state: { seed: prompt || `About my "${panel.title}" panel: ` },
+              })
+            }
+            onRefreshPanel={() => void widgetsQuery.refetch()}
+          />
+        </section>
+      ))}
 
       <div ref={menuRef} className="relative">
         <button

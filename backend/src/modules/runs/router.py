@@ -1,20 +1,37 @@
 """Runs router factory providing agent execution harness endpoints and SSE streams."""
+import hashlib
+from pathlib import Path
 from uuid import UUID
-from fastapi import APIRouter, Depends, Header, Query, status
+from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, Query, UploadFile, status
 from fastapi.responses import StreamingResponse
 
 from src.config.exceptions import NotFoundError
 from src.config.settings import Settings
-from src.dependencies import get_chat_service, get_current_device, get_current_user, get_runs_service
+from src.dependencies import (
+    _build_artifact_preview,
+    get_chat_service,
+    get_current_device,
+    get_current_user,
+    get_projects_service,
+    get_runs_service,
+)
+from src.modules.artifacts.service import resolve_media_type
 from src.modules.auth.repository import DeviceDTO, UserDTO
 from src.modules.chat.service import ChatService
+from src.modules.projects.service import MAX_UPLOAD_FILE_BYTES, ProjectsService
+from src.modules.projects.state import (
+    resolve_session_workspace_dir,
+    sanitize_workspace_filename,
+)
 from src.modules.runs.data import (
     AgentConfigResponse,
+    RunAttachmentItem,
     RunCancelResponse,
     RunCreateRequest,
     RunMessageResponse,
     RunResponse,
     RunStepResponse,
+    RunUploadResponse,
 )
 from src.modules.runs.service import RunsService
 from src.modules.runs.stream import (
@@ -82,6 +99,82 @@ def build_runs_router(settings: Settings) -> APIRouter:
         return RunResponse.model_validate(run)
 
     @router.post(
+        "/uploads",
+        response_model=RunUploadResponse,
+        status_code=status.HTTP_201_CREATED,
+        summary="Upload Files For Agent Run Workspace",
+    )
+    async def upload_run_files(
+        files: list[UploadFile] = File(...),
+        session_id: UUID | None = Form(default=None),
+        project_id: UUID | None = Form(default=None),
+        chat: ChatService = Depends(get_chat_service),
+        projects: ProjectsService = Depends(get_projects_service),
+        user: UserDTO = Depends(get_current_user),
+        _device: DeviceDTO = Depends(get_current_device),
+    ) -> RunUploadResponse:
+        """Stage user-uploaded files into the session or project workspace for agent access in /workspace."""
+        if session_id is not None:
+            thread = await chat.get_session(session_id)
+            if thread is None or thread.user_id != user.id:
+                raise NotFoundError(f"Chat session {session_id} not found")
+        project = None
+        if project_id is not None:
+            project = await projects.get_owned_project(project_id, user.id)
+
+        target_dirs: list[Path] = []
+        if project is not None:
+            proj_dir = Path(project.workspace_path)
+            proj_dir.mkdir(parents=True, exist_ok=True)
+            target_dirs.append(proj_dir.resolve())
+        if session_id is not None:
+            target_dirs.append(resolve_session_workspace_dir(settings, session_id))
+        if not target_dirs:
+            target_dirs.append(resolve_session_workspace_dir(settings, f"user-{user.id}"))
+
+        primary_dir = target_dirs[0]
+        uploaded_items: list[RunAttachmentItem] = []
+
+        for upload in files:
+            content = await upload.read()
+            if len(content) > MAX_UPLOAD_FILE_BYTES:
+                raise HTTPException(
+                    status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                    detail=f"File {upload.filename!r} exceeds maximum upload size of 50 MB.",
+                )
+            safe_name = sanitize_workspace_filename(upload.filename)
+            primary_target = (primary_dir / safe_name).resolve()
+            if primary_target.parent != primary_dir:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Invalid upload filename {upload.filename!r}",
+                )
+            for tdir in target_dirs:
+                dest = (tdir / safe_name).resolve()
+                if dest.parent == tdir:
+                    dest.write_bytes(content)
+
+            sha256_hex = hashlib.sha256(content).hexdigest()
+            resolved_type = resolve_media_type(safe_name)
+            if resolved_type == "application/octet-stream" and upload.content_type:
+                resolved_type = upload.content_type
+            preview = _build_artifact_preview(primary_target, max_chars=500)
+
+            uploaded_items.append(
+                RunAttachmentItem(
+                    name=safe_name,
+                    workspace_path=f"/workspace/{safe_name}",
+                    host_path=str(primary_target),
+                    content_type=resolved_type,
+                    size_bytes=len(content),
+                    sha256=sha256_hex,
+                    preview=preview,
+                )
+            )
+
+        return RunUploadResponse(files=uploaded_items)
+
+    @router.post(
         "",
         response_model=RunResponse,
         status_code=status.HTTP_201_CREATED,
@@ -91,24 +184,29 @@ def build_runs_router(settings: Settings) -> APIRouter:
         payload: RunCreateRequest,
         service: RunsService = Depends(get_runs_service),
         chat: ChatService = Depends(get_chat_service),
+        projects: ProjectsService = Depends(get_projects_service),
         user: UserDTO = Depends(get_current_user),
         _device: DeviceDTO = Depends(get_current_device),
     ) -> RunResponse:
-        """Queue a run, and only into a thread the caller owns.
+        """Queue a run, and only into a thread and project the caller owns.
 
         The read routes (``GET /runs/latest``, ``GET /chat/sessions/{id}/messages``)
         already treat another user's session as 404. The write route matches
-        them, so a run cannot be attached to a stranger's thread.
+        them, so a run cannot be attached to a stranger's thread or project.
         """
         if payload.session_id is not None:
             thread = await chat.get_session(payload.session_id)
             if thread is None or thread.user_id != user.id:
                 raise NotFoundError(f"Chat session {payload.session_id} not found")
+        if payload.project_id is not None:
+            await projects.get_owned_project(payload.project_id, user.id)
         run = await service.start_run(
             config_id=payload.config_id,
             card_id=payload.card_id,
             initial_prompt=payload.initial_prompt,
             session_id=payload.session_id,
+            project_id=payload.project_id,
+            attachments=payload.attachments,
         )
         return RunResponse.model_validate(run)
 

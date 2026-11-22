@@ -1,5 +1,11 @@
-import { useMemo, useState } from 'react';
-import { Check, HelpCircle, Loader2, Send, X } from 'lucide-react';
+import { useEffect, useMemo, useState } from 'react';
+import { Check, HelpCircle, X } from 'lucide-react';
+import {
+  A2UISurface,
+  setJsonPointerValue,
+  type A2UIComponentNode,
+  type A2UISurfacePayload,
+} from '@/components/widgets/A2UISurface';
 import { useApproval, useDecideApproval } from '@/queries/approvals';
 import type { Approval } from '@/types';
 
@@ -93,24 +99,167 @@ function parseSubmittedAnswers(note: string | null | undefined): Record<string, 
   return null;
 }
 
+/**
+ * Compile a set of `ask_user` questions into an A2UI v0.9 surface (`Column` + `Text` +
+ * `ChoiceGroup` + `TextField` + action `Button`s) bound via RFC 6901 JSON Pointers.
+ */
+function buildAskUserA2UISurface(
+  questions: StackedQuestionItem[],
+  dataModel: Record<string, unknown>,
+  isPending: boolean,
+): A2UISurfacePayload {
+  const components: A2UIComponentNode[] = [];
+  const rootChildren: string[] = [];
+
+  questions.forEach((q, idx) => {
+    const groupId = `q_group_${q.id}`;
+    const groupChildren: string[] = [];
+
+    const titleId = `q_title_${q.id}`;
+    const prefix =
+      questions.length > 1
+        ? `${q.header || `Q${idx + 1}`}: `
+        : q.header
+          ? `${q.header}: `
+          : '';
+    components.push({
+      id: titleId,
+      component: 'Text',
+      props: {
+        text: `${prefix}${q.question}`,
+        emphasis: 'primary',
+      },
+    });
+    groupChildren.push(titleId);
+
+    if (q.options.length > 0) {
+      const choiceId = `q_choice_${q.id}`;
+      components.push({
+        id: choiceId,
+        component: 'ChoiceGroup',
+        props: {
+          options: q.options,
+          multi_select: Boolean(q.multi_select),
+          value: { path: `/selections/${q.id}` },
+        },
+      });
+      groupChildren.push(choiceId);
+    }
+
+    if (q.allow_other !== false || q.options.length === 0) {
+      const inputId = `q_input_${q.id}`;
+      components.push({
+        id: inputId,
+        component: 'TextField',
+        props: {
+          placeholder:
+            q.options.length > 0
+              ? 'Or type a custom answer...'
+              : 'Type your answer...',
+          value: { path: `/custom/${q.id}` },
+        },
+      });
+      groupChildren.push(inputId);
+    }
+
+    components.push({
+      id: groupId,
+      component: 'Column',
+      props: { gap: 'tight' },
+      children: groupChildren,
+    });
+    rootChildren.push(groupId);
+  });
+
+  components.push({
+    id: 'q_divider',
+    component: 'Divider',
+  });
+  rootChildren.push('q_divider');
+
+  components.push({
+    id: 'btn_skip',
+    component: 'Button',
+    props: {
+      label: 'Skip',
+      variant: 'ghost',
+      action: { event: { name: 'skip_questions' } },
+    },
+  });
+  components.push({
+    id: 'btn_submit',
+    component: 'Button',
+    props: {
+      label: isPending ? 'Submitting...' : questions.length > 1 ? 'Submit answers' : 'Submit',
+      variant: 'primary',
+      action: { event: { name: 'submit_answers' } },
+    },
+  });
+  components.push({
+    id: 'row_actions',
+    component: 'Row',
+    props: { align: 'between', gap: 'normal' },
+    children: ['btn_skip', 'btn_submit'],
+  });
+  rootChildren.push('row_actions');
+
+  components.unshift({
+    id: 'ask_root',
+    component: 'Column',
+    props: { gap: 'relaxed' },
+    children: rootChildren,
+  });
+
+  return {
+    version: 'v0.9',
+    catalog_id: 'urn:vigil:a2ui:catalog:panels:v1',
+    size: 'lg',
+    icon: 'sparkles',
+    root: 'ask_root',
+    components,
+    data_model: dataModel,
+  };
+}
+
 export function AskUserQuestionCard({ approvalId, initialData, initialApproval }: Props) {
   const effectiveId = approvalId || (initialData?.approval_id ? String(initialData.approval_id) : '');
   const approvalQuery = useApproval(effectiveId || null);
   const approval = initialApproval ?? approvalQuery.data;
   const decideMutation = useDecideApproval();
 
-  const args =
-    approval?.arguments ||
-    (initialData?.arguments as Record<string, unknown>) ||
-    (initialData?.args as Record<string, unknown>) ||
-    {};
+  const args = useMemo(
+    () =>
+      approval?.arguments ||
+      (initialData?.arguments as Record<string, unknown>) ||
+      (initialData?.args as Record<string, unknown>) ||
+      {},
+    [approval?.arguments, initialData],
+  );
 
   const questions = useMemo(() => extractQuestions(args), [args]);
   const contextText = typeof args.context === 'string' ? args.context : null;
 
-  const [selections, setSelections] = useState<Record<string, string[]>>({});
-  const [otherInputs, setOtherInputs] = useState<Record<string, string>>({});
+  const [dataModel, setDataModel] = useState<Record<string, unknown>>(() => ({
+    selections: {},
+    custom: {},
+  }));
   const [localDecision, setLocalDecision] = useState<'approved' | 'rejected' | null>(null);
+
+  useEffect(() => {
+    setDataModel((prev) => {
+      const selections = { ...((prev.selections as Record<string, unknown>) ?? {}) };
+      const custom = { ...((prev.custom as Record<string, unknown>) ?? {}) };
+      for (const q of questions) {
+        if (!(q.id in selections)) {
+          selections[q.id] = q.multi_select ? [] : '';
+        }
+        if (!(q.id in custom)) {
+          custom[q.id] = '';
+        }
+      }
+      return { selections, custom };
+    });
+  }, [questions]);
 
   const status = localDecision || approval?.status || 'pending';
   const isPending = decideMutation.isPending;
@@ -119,32 +268,36 @@ export function AskUserQuestionCard({ approvalId, initialData, initialApproval }
     [approval?.decision_note],
   );
 
-  const toggleOption = (q: StackedQuestionItem, label: string) => {
-    if (status !== 'pending') return;
-    setSelections((prev) => {
-      const current = prev[q.id] ?? [];
-      if (q.multi_select) {
-        const next = current.includes(label)
-          ? current.filter((item) => item !== label)
-          : [...current, label];
-        return { ...prev, [q.id]: next };
-      }
-      return { ...prev, [q.id]: [label] };
-    });
-  };
+  const selectionsMap = (dataModel.selections as Record<string, unknown>) ?? {};
+  const customMap = (dataModel.custom as Record<string, unknown>) ?? {};
 
   const hasAnyAnswer = questions.some((q) => {
-    const picked = selections[q.id] ?? [];
-    const custom = (otherInputs[q.id] ?? '').trim();
-    return picked.length > 0 || custom.length > 0;
+    const rawPicked = selectionsMap[q.id];
+    const pickedCount = Array.isArray(rawPicked)
+      ? rawPicked.length
+      : typeof rawPicked === 'string' && rawPicked.trim().length > 0
+        ? 1
+        : 0;
+    const custom = String(customMap[q.id] ?? '').trim();
+    return pickedCount > 0 || custom.length > 0;
   });
 
+  const handleUpdateDataModel = (path: string, value: unknown) => {
+    if (status !== 'pending' || isPending) return;
+    setDataModel((prev) => setJsonPointerValue(prev, path, value));
+  };
+
   const handleSubmit = () => {
-    if (!effectiveId || !hasAnyAnswer) return;
+    if (!effectiveId || !hasAnyAnswer || status !== 'pending' || isPending) return;
     const answersPayload: Record<string, unknown> = {};
     for (const q of questions) {
-      const picked = selections[q.id] ?? [];
-      const custom = (otherInputs[q.id] ?? '').trim();
+      const rawPicked = selectionsMap[q.id];
+      const picked: string[] = Array.isArray(rawPicked)
+        ? rawPicked.map(String)
+        : typeof rawPicked === 'string' && rawPicked.trim()
+          ? [rawPicked.trim()]
+          : [];
+      const custom = String(customMap[q.id] ?? '').trim();
       const combined = custom ? [...picked, custom] : picked;
       const key = q.header || q.id;
       answersPayload[key] = q.multi_select ? combined : (combined[0] ?? '');
@@ -168,7 +321,7 @@ export function AskUserQuestionCard({ approvalId, initialData, initialApproval }
   };
 
   const handleDismiss = () => {
-    if (!effectiveId) return;
+    if (!effectiveId || status !== 'pending' || isPending) return;
     setLocalDecision('rejected');
     decideMutation.mutate(
       {
@@ -185,6 +338,19 @@ export function AskUserQuestionCard({ approvalId, initialData, initialApproval }
     );
   };
 
+  const handleEventAction = (name: string) => {
+    if (name === 'submit_answers') {
+      handleSubmit();
+    } else if (name === 'skip_questions') {
+      handleDismiss();
+    }
+  };
+
+  const a2uiSurface = useMemo(
+    () => buildAskUserA2UISurface(questions, dataModel, isPending),
+    [questions, dataModel, isPending],
+  );
+
   if (questions.length === 0) {
     return null;
   }
@@ -198,7 +364,9 @@ export function AskUserQuestionCard({ approvalId, initialData, initialApproval }
           </span>
           <div>
             <h3 className="text-[13.5px] font-semibold text-[var(--text)]">
-              {questions.length > 1 ? `Quick Clarification (${questions.length} questions)` : 'Quick Clarification'}
+              {questions.length > 1
+                ? `Quick Clarification (${questions.length} questions)`
+                : 'Quick Clarification'}
             </h3>
             {contextText ? (
               <p className="mt-0.5 text-[12px] text-[var(--text-muted)]">{contextText}</p>
@@ -217,130 +385,32 @@ export function AskUserQuestionCard({ approvalId, initialData, initialApproval }
         ) : null}
       </div>
 
-      {/* Stacked Questions */}
-      <div className="mt-4 space-y-5">
-        {questions.map((q, qIdx) => {
-          const picked = selections[q.id] ?? [];
-          const customText = otherInputs[q.id] ?? '';
-          const savedVal = savedAnswers?.[q.header || q.id] ?? savedAnswers?.[q.id];
-
-          return (
-            <div key={q.id} className="space-y-2.5">
-              <div className="flex items-baseline gap-2">
-                {questions.length > 1 ? (
-                  <span className="shrink-0 rounded-full bg-[var(--panel-inset)] px-2 py-0.5 font-mono text-[10.5px] font-semibold text-[var(--text-muted)]">
-                    {q.header || `Q${qIdx + 1}`}
-                  </span>
-                ) : q.header ? (
-                  <span className="shrink-0 rounded-full bg-[var(--panel-inset)] px-2 py-0.5 font-mono text-[10.5px] font-semibold text-[var(--text-muted)]">
-                    {q.header}
-                  </span>
-                ) : null}
-                <p className="text-[13.5px] font-medium leading-snug text-[var(--text)]">
-                  {q.question}
-                </p>
-              </div>
-
-              {status !== 'pending' && savedVal !== undefined ? (
-                <div className="rounded-[14px] border border-[var(--border)] bg-[var(--panel-inset)] px-3.5 py-2.5 text-[12.5px] text-[var(--text)]">
-                  {Array.isArray(savedVal) ? savedVal.join(', ') : String(savedVal)}
+      <div className="mt-4">
+        {status !== 'pending' && savedAnswers ? (
+          <div className="space-y-2.5">
+            {questions.map((q) => {
+              const savedVal = savedAnswers[q.header || q.id] ?? savedAnswers[q.id];
+              return (
+                <div key={q.id} className="space-y-1">
+                  <p className="text-[13px] font-medium text-[var(--text)]">{q.question}</p>
+                  <div className="rounded-[14px] border border-[var(--border)] bg-[var(--panel-inset)] px-3.5 py-2 text-[12.5px] text-[var(--text)]">
+                    {Array.isArray(savedVal)
+                      ? savedVal.join(', ')
+                      : String(savedVal ?? 'Answered')}
+                  </div>
                 </div>
-              ) : (
-                <>
-                  {q.options.length > 0 ? (
-                    <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-                      {q.options.map((opt) => {
-                        const isSelected = picked.includes(opt.label);
-                        const isRecommended = opt.label.toLowerCase().includes('recommended');
-                        return (
-                          <button
-                            key={opt.label}
-                            type="button"
-                            disabled={status !== 'pending' || isPending}
-                            onClick={() => toggleOption(q, opt.label)}
-                            className={`flex items-start gap-2.5 rounded-[14px] border px-3.5 py-2.5 text-left transition-all ${
-                              isSelected
-                                ? 'border-[var(--text)] bg-[color-mix(in_srgb,var(--text)_8%,transparent)] shadow-xs'
-                                : 'border-[var(--border)] bg-[color-mix(in_srgb,var(--text)_2.5%,transparent)] hover:border-[var(--border-strong)] hover:bg-[color-mix(in_srgb,var(--text)_5%,transparent)]'
-                            } disabled:opacity-60`}
-                          >
-                            <span
-                              className={`mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center border ${
-                                q.multi_select ? 'rounded-[4px]' : 'rounded-full'
-                              } ${
-                                isSelected
-                                  ? 'border-[var(--text)] bg-[var(--text)] text-[var(--surface-solid)]'
-                                  : 'border-[var(--border-strong)]'
-                              }`}
-                            >
-                              {isSelected ? <Check size={11} strokeWidth={2.5} /> : null}
-                            </span>
-                            <span className="min-w-0 flex-1">
-                              <span className="flex flex-wrap items-center gap-1.5 text-[12.5px] font-medium text-[var(--text)]">
-                                <span>{opt.label.replace(/\s*\(Recommended\)/i, '')}</span>
-                                {isRecommended ? (
-                                  <span className="rounded-full bg-[var(--panel-inset)] px-1.5 py-0.5 text-[10px] font-semibold text-[var(--text-muted)]">
-                                    Recommended
-                                  </span>
-                                ) : null}
-                              </span>
-                              {opt.description ? (
-                                <span className="mt-0.5 block text-[11.5px] leading-snug text-[var(--text-muted)]">
-                                  {opt.description}
-                                </span>
-                              ) : null}
-                            </span>
-                          </button>
-                        );
-                      })}
-                    </div>
-                  ) : null}
-
-                  {q.allow_other !== false || q.options.length === 0 ? (
-                    <input
-                      type="text"
-                      disabled={status !== 'pending' || isPending}
-                      value={customText}
-                      onChange={(e) =>
-                        setOtherInputs((prev) => ({ ...prev, [q.id]: e.target.value }))
-                      }
-                      placeholder={
-                        q.options.length > 0
-                          ? 'Other (optional custom answer)...'
-                          : 'Type your answer...'
-                      }
-                      className="w-full rounded-[12px] border border-[var(--border)] bg-[var(--surface-solid)] px-3.5 py-2 text-[12.5px] text-[var(--text)] outline-none placeholder:text-[var(--text-muted)] focus:border-[var(--text)]"
-                    />
-                  ) : null}
-                </>
-              )}
-            </div>
-          );
-        })}
+              );
+            })}
+          </div>
+        ) : (
+          <A2UISurface
+            surface={a2uiSurface}
+            onUpdateDataModel={handleUpdateDataModel}
+            onEventAction={handleEventAction}
+            disabled={status !== 'pending' || isPending}
+          />
+        )}
       </div>
-
-      {status === 'pending' ? (
-        <div className="mt-5 flex flex-wrap items-center justify-between gap-2 border-t border-[var(--border)] pt-3.5">
-          <button
-            type="button"
-            onClick={handleDismiss}
-            disabled={isPending || !effectiveId}
-            className="inline-flex h-9 items-center gap-1.5 rounded-full border border-[var(--border-strong)] px-4 text-[12.5px] font-medium text-[var(--text-muted)] transition-colors hover:text-[var(--text)] disabled:opacity-50"
-          >
-            Skip
-          </button>
-
-          <button
-            type="button"
-            onClick={handleSubmit}
-            disabled={isPending || !effectiveId || !hasAnyAnswer}
-            className="inline-flex h-9 items-center gap-1.5 rounded-full bg-[var(--btn-primary-bg)] px-5 text-[12.5px] font-semibold text-[var(--btn-primary-ink)] transition-transform hover:scale-[1.02] active:scale-95 disabled:opacity-45"
-          >
-            {isPending ? <Loader2 size={13} className="animate-spin" /> : <Send size={13} strokeWidth={2} />}
-            Submit Answers
-          </button>
-        </div>
-      ) : null}
     </div>
   );
 }

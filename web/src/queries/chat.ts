@@ -3,12 +3,27 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/lib/api';
 import { userMessageOf } from '@/lib/errors';
 import { releaseIdempotencyKey } from '@/lib/idempotency';
-import type { ChatSession, RunStepEvent, StreamMessage, StreamState } from '@/types';
+import type {
+  ChatSession,
+  RunAttachmentItem,
+  RunStepEvent,
+  StreamMessage,
+  StreamState,
+} from '@/types';
+import { projectDetailKey } from './projects';
 import { runKey, useCancelRun, useDefaultAgentConfig, useRun } from './runs';
 
+export const PRIMARY_SESSION_KEY = ['chat', 'primary'] as const;
 export const SESSIONS_KEY = ['chat', 'sessions'] as const;
 export const messagesKey = (sessionId: string) =>
   ['chat', 'sessions', sessionId, 'messages'] as const;
+
+export function usePrimarySession() {
+  return useQuery<ChatSession>({
+    queryKey: PRIMARY_SESSION_KEY,
+    queryFn: () => api.getPrimarySession(),
+  });
+}
 
 export function useSessions() {
   return useQuery<ChatSession[]>({
@@ -33,10 +48,49 @@ export function useCreateSession() {
 export function useMessages(sessionId: string | null) {
   return useQuery<StreamMessage[]>({
     queryKey: messagesKey(sessionId ?? 'none'),
-    queryFn: () => api.listMessages(sessionId as string),
+    queryFn: () => api.listMessages(sessionId as string, { limit: 100 }),
     enabled: Boolean(sessionId),
     staleTime: 5_000,
   });
+}
+
+export function useLoadEarlierMessages(sessionId: string | null) {
+  const queryClient = useQueryClient();
+  const [loadingEarlier, setLoadingEarlier] = useState(false);
+  const [hasMore, setHasMore] = useState(true);
+
+  useEffect(() => {
+    setHasMore(true);
+  }, [sessionId]);
+
+  const loadEarlier = useCallback(async () => {
+    if (!sessionId || loadingEarlier || !hasMore) return;
+    const current = queryClient.getQueryData<StreamMessage[]>(messagesKey(sessionId)) ?? [];
+    const oldest = current[0];
+    if (!oldest) return;
+    setLoadingEarlier(true);
+    try {
+      const pageSize = 100;
+      const older = await api.listMessages(sessionId, {
+        limit: pageSize,
+        beforeId: oldest.id,
+      });
+      if (older.length < pageSize) {
+        setHasMore(false);
+      }
+      if (older.length > 0) {
+        queryClient.setQueryData<StreamMessage[]>(messagesKey(sessionId), (prev) => {
+          const existingIds = new Set((prev ?? []).map((m) => m.id));
+          const deduped = older.filter((m) => !existingIds.has(m.id));
+          return [...deduped, ...(prev ?? [])];
+        });
+      }
+    } finally {
+      setLoadingEarlier(false);
+    }
+  }, [sessionId, loadingEarlier, hasMore, queryClient]);
+
+  return { loadEarlier, loadingEarlier, hasMore };
 }
 
 /* -------------------------------------------------------------------------------------------
@@ -60,7 +114,7 @@ export interface AgentChat {
   /** True when the run parked on an approval, the Approvals page holds the decision. */
   awaitingApproval: boolean;
   lastPrompt: string | null;
-  send: (prompt: string, overrideSessionId?: string) => void;
+  send: (prompt: string, overrideSessionId?: string, files?: File[]) => void;
   retry: () => void;
   stop: () => void;
 }
@@ -70,7 +124,10 @@ export interface AgentChat {
  * replays like the CLI harness performs are a backend feature, not yet over HTTP, so every
  * turn stands alone.
  */
-export function useAgentChat(sessionId: string | null): AgentChat {
+export function useAgentChat(
+  sessionId: string | null,
+  projectId: string | null = null,
+): AgentChat {
   const queryClient = useQueryClient();
   const defaultConfig = useDefaultAgentConfig();
   const cancelRunMutation = useCancelRun();
@@ -228,19 +285,18 @@ export function useAgentChat(sessionId: string | null): AgentChat {
   }, [activeRunId, finalisedRunId, steps, run, queryClient, clearOptimisticFlag]);
 
   const send = useCallback(
-    async (prompt: string, overrideSessionId?: string) => {
+    async (prompt: string, overrideSessionId?: string, files?: File[]) => {
       const trimmed = prompt.trim();
+      const attachedFiles = files ?? [];
       let target = overrideSessionId ?? sessionIdRef.current;
-      if (!trimmed) return;
+      if (!trimmed && attachedFiles.length === 0) return;
 
       if (!target) {
         try {
-          const newSession = await api.createSession(
-            trimmed.slice(0, 30),
-            `chat:create-session:${Date.now()}`,
-          );
-          target = newSession.session_id;
+          const primary = await api.getPrimarySession();
+          target = primary.session_id;
           sessionIdRef.current = target;
+          queryClient.setQueryData(PRIMARY_SESSION_KEY, primary);
         } catch (cause) {
           setError(userMessageOf(cause));
           return;
@@ -260,9 +316,22 @@ export function useAgentChat(sessionId: string | null): AgentChat {
         }
       }
 
+      const optimisticAttachments: RunAttachmentItem[] = attachedFiles.map((f) => ({
+        name: f.name,
+        workspace_path: `/workspace/${f.name}`,
+        content_type: f.type || 'application/octet-stream',
+        size_bytes: f.size,
+      }));
+
+      const displayPrompt =
+        trimmed ||
+        (attachedFiles.length === 1
+          ? `Attached ${attachedFiles[0]?.name ?? 'file'}`
+          : `Attached ${attachedFiles.length} files`);
+
       const localId = `local-user-${Date.now()}`;
       optimisticIdRef.current = localId;
-      setLastPrompt(trimmed);
+      setLastPrompt(displayPrompt);
       setError(null);
       queryClient.setQueryData<StreamMessage[]>(messagesKey(target), (current) => {
         const optimistic: StreamMessage = {
@@ -272,21 +341,60 @@ export function useAgentChat(sessionId: string | null): AgentChat {
           content: trimmed,
           created_at: new Date().toISOString(),
           local_state: 'sending',
+          ...(optimisticAttachments.length > 0
+            ? { attachments: optimisticAttachments }
+            : {}),
         };
         return current ? [...current, optimistic] : [optimistic];
       });
 
       try {
+        let uploadedAttachments: RunAttachmentItem[] = [];
+        if (attachedFiles.length > 0) {
+          const uploadRes = await api.uploadRunFiles(attachedFiles, {
+            sessionId: target,
+            projectId,
+          });
+          uploadedAttachments = uploadRes.files;
+          if (projectId) {
+            void queryClient.invalidateQueries({
+              queryKey: projectDetailKey(projectId),
+            });
+          }
+        }
+
         const run = await api.createRun(
           {
             config_id: configId,
             session_id: target,
-            initial_prompt: trimmed,
+            initial_prompt: trimmed || null,
+            project_id: projectId ?? null,
+            ...(uploadedAttachments.length > 0
+              ? { attachments: uploadedAttachments }
+              : {}),
           },
           `chat:send:${target}:${Date.now()}`,
         );
         setActiveRunId(run.id);
         queryClient.setQueryData(runKey(run.id), run);
+        if (target) {
+          queryClient.setQueryData<StreamMessage[]>(messagesKey(target), (current) =>
+            current
+              ? current.map((m) =>
+                  m.id === localId
+                    ? {
+                        ...m,
+                        run_id: run.id,
+                        local_state: undefined,
+                        ...(uploadedAttachments.length > 0
+                          ? { attachments: uploadedAttachments }
+                          : {}),
+                      }
+                    : m,
+                )
+              : current,
+          );
+        }
         if (optimisticIdRef.current) {
           clearOptimisticFlag(optimisticIdRef.current);
         }
@@ -307,7 +415,7 @@ export function useAgentChat(sessionId: string | null): AgentChat {
         setError(userMessageOf(cause));
       }
     },
-    [defaultConfig.data, queryClient, clearOptimisticFlag],
+    [defaultConfig.data, queryClient, clearOptimisticFlag, projectId],
   );
 
   const stop = useCallback(() => {

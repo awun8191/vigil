@@ -88,6 +88,8 @@ class ToolContext:
     """User that owns the run. Never set from tool args, only by the executor."""
     session: Any | None = None
     """Database session for tools that persist rows. Set by the executor."""
+    workspace_dir: Path | None = None
+    """Optional host workspace directory backing /workspace for uploaded and project files."""
 
 
 Handler = Callable[[Any, ToolContext], Awaitable[ToolResult]]

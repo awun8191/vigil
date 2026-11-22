@@ -66,6 +66,16 @@ class ChatService:
     ) -> ChatSessionDTO:
         return await self._repo.create_session(user_id, title)
 
+    async def get_or_create_primary_session(self, user_id: UUID) -> ChatSessionDTO:
+        """Return the user's single primary ambient session, creating it if absent."""
+        getter = getattr(self._repo, "get_or_create_primary_session", None)
+        if callable(getter):
+            return await getter(user_id)  # type: ignore[no-any-return]
+        sessions = await self.list_user_sessions(user_id, limit=1)
+        if sessions:
+            return sessions[0]
+        return await self.create_session(user_id, title="Primary Stream")
+
     async def save_message(self, data: ChatMessageCreateDTO) -> ChatMessageDTO:
         return await self._repo.save_message(data)
 
@@ -76,6 +86,23 @@ class ChatService:
         offset: int = 0,
     ) -> list[ChatMessageDTO]:
         return await self._repo.get_history(session_id, limit, offset)
+
+    async def get_recent_history(
+        self,
+        session_id: UUID,
+        limit: int = 100,
+        before_id: UUID | None = None,
+    ) -> list[ChatMessageDTO]:
+        """Return the newest `limit` turns (or turns before `before_id`) chronologically."""
+        recent_fn = getattr(self._repo, "get_recent_history", None)
+        if callable(recent_fn):
+            return await recent_fn(session_id, limit=limit, before_id=before_id)  # type: ignore[no-any-return]
+        rows = await self.get_history(session_id, limit=limit)
+        if before_id is not None:
+            idx = next((i for i, m in enumerate(rows) if m.id == before_id), None)
+            if idx is not None:
+                rows = rows[:idx]
+        return rows[-limit:]
 
     async def delete_session(self, session_id: UUID) -> bool:
         return await self._repo.delete_session(session_id)

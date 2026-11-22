@@ -1,9 +1,4 @@
-"""Unit tests for the refresh_widget worker handler and the widget sweeper.
-
-No database is needed. The handler and the sweeper run against one shared
-in-memory widget store per test, with the same user scoping and version
-semantics as the Postgres path.
-"""
+"""Unit tests for the A2UI refresh_widget worker handler and the widget sweeper."""
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
@@ -16,6 +11,7 @@ import pytest
 from src.config.settings import Settings
 from src.modules.jobs.repository import JobDTO
 from src.modules.jobs.service import JOB_TYPE_PRIORITIES, priority_for_job_type
+from src.modules.widgets.data import A2UI_KV_MAX_ITEMS, A2UI_TABLE_MAX_ROWS, validate_widget_payload
 from src.modules.widgets.repository import WidgetCreateDTO
 from src.modules.widgets.service import WidgetsService
 import src.worker as worker_mod
@@ -29,6 +25,60 @@ from src.worker import (
     resolve_handler,
     sweep_due_widget_refreshes,
 )
+
+
+def _a2ui_metric_surface(value: str = "1") -> dict[str, Any]:
+    return validate_widget_payload(
+        "a2ui_surface",
+        {
+            "root": "col_1",
+            "components": [
+                {"id": "col_1", "component": "Column", "children": ["kpi_1"]},
+                {
+                    "id": "kpi_1",
+                    "component": "Metric",
+                    "props": {"label": "Score", "value": {"path": "/value"}},
+                },
+            ],
+            "data_model": {"value": value},
+        },
+    ).model_dump()
+
+
+def _a2ui_table_surface(rows: list[list[str]] | None = None) -> dict[str, Any]:
+    return validate_widget_payload(
+        "a2ui_surface",
+        {
+            "root": "col_1",
+            "components": [
+                {"id": "col_1", "component": "Column", "children": ["tbl_1"]},
+                {
+                    "id": "tbl_1",
+                    "component": "DataTable",
+                    "props": {"columns": ["a"], "rows": {"path": "/rows"}},
+                },
+            ],
+            "data_model": {"rows": rows or []},
+        },
+    ).model_dump()
+
+
+def _a2ui_kv_surface(items: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    return validate_widget_payload(
+        "a2ui_surface",
+        {
+            "root": "col_1",
+            "components": [
+                {"id": "col_1", "component": "Column", "children": ["kv_1"]},
+                {
+                    "id": "kv_1",
+                    "component": "KeyValueList",
+                    "props": {"items": {"path": "/entries"}, "max_items": 10},
+                },
+            ],
+            "data_model": {"entries": items or []},
+        },
+    ).model_dump()
 
 
 def _make_job(**overrides: Any) -> JobDTO:
@@ -69,14 +119,12 @@ def _make_context() -> JobContext:
 
 
 async def _create_widget(**overrides: Any):
-    """Insert one metric_card row in the sessionless store."""
-    from uuid import UUID  # noqa: F401 - keeps the helper signature explicit
-
+    """Insert one a2ui_surface row in the sessionless store."""
     values: dict[str, Any] = {
         "user_id": uuid4(),
         "title": "Panel",
-        "widget_type": "metric_card",
-        "data_payload": {"value": "1", "delta": None, "caption": None},
+        "widget_type": "a2ui_surface",
+        "data_payload": _a2ui_metric_surface("1"),
     }
     values.update(overrides)
     service = WidgetsService(session=_test_session(), settings=Settings(APP_ENV="test"))
@@ -135,8 +183,10 @@ async def test_static_refresh_only_reschedules() -> None:
     """A static refresh recomputes next_refresh_at without touching data."""
     owner = uuid4()
     past = datetime.now(timezone.utc) - timedelta(minutes=5)
+    initial_payload = _a2ui_metric_surface("1")
     created = await _create_widget(
         user_id=owner,
+        data_payload=initial_payload,
         refresh_config={"kind": "static"},
         refresh_interval_minutes=60,
         next_refresh_at=past,
@@ -148,7 +198,7 @@ async def test_static_refresh_only_reschedules() -> None:
     stored = await service.get_widget(created.id, owner)
     assert stored is not None
     assert stored.version == 1
-    assert stored.data_payload == {"value": "1", "delta": None, "caption": None}
+    assert stored.data_payload == initial_payload
     assert stored.next_refresh_at is not None
     assert stored.next_refresh_at > past
 
@@ -181,14 +231,15 @@ async def test_connector_query_without_executor_fails_permanently() -> None:
         await handle_refresh_widget(job, _make_context())
 
 
-async def test_connector_query_applies_truncated_payload() -> None:
-    """A connector refresh writes data, bumps the version, and caps rows."""
+async def test_connector_query_applies_truncated_data_model_and_preserves_components() -> None:
+    """A connector refresh updates data_model only, preserves A2UI components, and caps table rows."""
     owner = uuid4()
+    initial = _a2ui_table_surface([])
     created = await _create_widget(
         user_id=owner,
         title="Inbox",
-        widget_type="data_table",
-        data_payload={"columns": ["a"], "rows": []},
+        widget_type="a2ui_surface",
+        data_payload=initial,
         refresh_config={"kind": "connector_query", "connector_id": "gmail", "query": "q"},
         refresh_interval_minutes=60,
         next_refresh_at=datetime.now(timezone.utc) - timedelta(minutes=5),
@@ -198,7 +249,7 @@ async def test_connector_query_applies_truncated_payload() -> None:
         assert connector_id == "gmail"
         assert query == "q"
         assert user_id == owner
-        return {"columns": ["a"], "rows": [[str(i)] for i in range(80)]}
+        return {"data_model": {"rows": [[str(i)] for i in range(80)]}}
 
     worker_mod.WIDGET_CONNECTOR_QUERY = fake_executor
     job = _make_job(payload={"widget_id": str(created.id), "user_id": str(owner)})
@@ -208,18 +259,19 @@ async def test_connector_query_applies_truncated_payload() -> None:
     stored = await service.get_widget(created.id, owner)
     assert stored is not None
     assert stored.version == 2
-    assert len(stored.data_payload["rows"]) == 50
+    assert stored.data_payload["components"] == initial["components"]
+    assert len(stored.data_payload["data_model"]["rows"]) == A2UI_TABLE_MAX_ROWS
     assert stored.next_refresh_at is not None
     assert stored.next_refresh_at > datetime.now(timezone.utc)
 
 
-async def test_connector_query_truncates_feed_entries() -> None:
-    """A refreshed status feed keeps at most 30 entries."""
+async def test_connector_query_truncates_key_value_entries() -> None:
+    """A refreshed A2UI KeyValueList keeps at most A2UI_KV_MAX_ITEMS entries."""
     owner = uuid4()
     created = await _create_widget(
         user_id=owner,
-        widget_type="status_feed",
-        data_payload={"entries": []},
+        widget_type="a2ui_surface",
+        data_payload=_a2ui_kv_surface([]),
         refresh_config={"kind": "connector_query", "connector_id": "gmail", "query": "q"},
         refresh_interval_minutes=60,
         next_refresh_at=datetime.now(timezone.utc) - timedelta(minutes=5),
@@ -227,7 +279,11 @@ async def test_connector_query_truncates_feed_entries() -> None:
 
     async def fake_executor(connector_id: str, query: str, user_id) -> dict[str, Any]:
         return {
-            "entries": [{"ts": f"t{i}", "text": f"line {i}"} for i in range(45)],
+            "data_model": {
+                "entries": [
+                    {"label": f"Item {i}", "value": f"line {i}"} for i in range(45)
+                ]
+            }
         }
 
     worker_mod.WIDGET_CONNECTOR_QUERY = fake_executor
@@ -238,7 +294,7 @@ async def test_connector_query_truncates_feed_entries() -> None:
     stored = await service.get_widget(created.id, owner)
     assert stored is not None
     assert stored.version == 2
-    assert len(stored.data_payload["entries"]) == 30
+    assert len(stored.data_payload["data_model"]["entries"]) == A2UI_KV_MAX_ITEMS
 
 
 async def test_transient_connector_error_retries() -> None:
@@ -266,10 +322,12 @@ async def test_transient_connector_error_retries() -> None:
 
 
 async def test_invalid_refreshed_payload_fails_permanently() -> None:
-    """A refreshed payload that breaks the schema is never written."""
+    """A refreshed payload that breaks the A2UI schema or pointers is never written."""
     owner = uuid4()
+    initial = _a2ui_metric_surface("1")
     created = await _create_widget(
         user_id=owner,
+        data_payload=initial,
         refresh_config={"kind": "connector_query", "connector_id": "gmail", "query": "q"},
         refresh_interval_minutes=60,
         next_refresh_at=datetime.now(timezone.utc) - timedelta(minutes=5),
@@ -287,7 +345,7 @@ async def test_invalid_refreshed_payload_fails_permanently() -> None:
     stored = await service.get_widget(created.id, owner)
     assert stored is not None
     assert stored.version == 1
-    assert stored.data_payload == {"value": "1", "delta": None, "caption": None}
+    assert stored.data_payload == initial
 
 
 async def test_sweeper_enqueues_one_job_per_due_row() -> None:
@@ -304,8 +362,8 @@ async def test_sweeper_enqueues_one_job_per_due_row() -> None:
         WidgetCreateDTO(
             user_id=owner,
             title="Due",
-            widget_type="metric_card",
-            data_payload={"value": "1"},
+            widget_type="a2ui_surface",
+            data_payload=_a2ui_metric_surface("1"),
             refresh_config={"kind": "static"},
             refresh_interval_minutes=60,
             next_refresh_at=past,
@@ -315,8 +373,8 @@ async def test_sweeper_enqueues_one_job_per_due_row() -> None:
         WidgetCreateDTO(
             user_id=owner,
             title="Future",
-            widget_type="metric_card",
-            data_payload={"value": "1"},
+            widget_type="a2ui_surface",
+            data_payload=_a2ui_metric_surface("1"),
             refresh_config={"kind": "static"},
             refresh_interval_minutes=60,
             next_refresh_at=future,

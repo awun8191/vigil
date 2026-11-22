@@ -33,13 +33,27 @@ export function InlineApprovalCard({ approvalId, initialData, initialApproval }:
   const status = localDecision || approval?.status || 'pending';
   const isPending = decideMutation.isPending;
 
-  if (toolName === 'ask_user') {
+  const isAskUser =
+    toolName === 'ask_user' ||
+    typeof args.question === 'string' ||
+    (Array.isArray(args.questions) && args.questions.length > 0);
+
+  if (isAskUser) {
     return (
       <AskUserQuestionCard
         approvalId={effectiveId}
         initialData={initialData}
         initialApproval={approval}
       />
+    );
+  }
+
+  if (approvalQuery.isLoading && !initialData?.tool_name && Object.keys(args).length === 0) {
+    return (
+      <div className="approval-surface my-2 flex items-center gap-2.5 p-4 text-[12.5px] text-[var(--text-muted)]">
+        <Loader2 size={14} className="animate-spin" />
+        <span>Loading prompt...</span>
+      </div>
     );
   }
 

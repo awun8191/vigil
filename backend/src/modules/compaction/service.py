@@ -19,7 +19,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.config.settings import Settings
-from src.integrations.repositories import JevClientProtocol, LLMClientProtocol
+from src.integrations.repositories import LLMClientProtocol
 from src.modules.compaction.data import CompactionDryRunResponse
 from src.modules.compaction.repository import (
     CompactionResultDTO,
@@ -31,10 +31,9 @@ from src.modules.compaction.summarizer import (
     CompactionSummarizer,
     SummaryBlock,
     SummarySource,
+    strip_thinking_blocks,
 )
 from src.modules.compaction.tiers import (
-    JEV_BATCH_SIZE,
-    MAX_JEV_CALLS,
     HistoryUnit,
     Tier0Selection,
     Tier1Result,
@@ -43,7 +42,7 @@ from src.modules.compaction.tiers import (
     Verdict,
     lock_tier0_units,
     resolve_verdicts,
-    score_units,
+    score_units_deterministic,
     units_from_messages,
 )
 from src.modules.compaction.verify import (
@@ -51,10 +50,15 @@ from src.modules.compaction.verify import (
     verify_compacted_history,
 )
 from src.modules.runs.repository import RunStepCreateDTO, RunStepDTO
-from src.schemas.runtime import MessageModel
+from src.schemas.runtime import MessageModel, ThreadModel
 
 # A run compacts when its history passes this share of the token window.
 COMPACTION_TRIGGER_RATIO = 0.7
+
+# Default interaction barrier: keep the last 8 user/assistant interactions verbatim.
+DEFAULT_INTERACTION_BARRIER = 8
+MIN_INTERACTION_BARRIER = 5
+DEFAULT_OVERFLOW_INTERACTIONS = 4
 
 # Event type of the run step that records the summary.
 COMPACTION_STEP_TYPE = "compaction"
@@ -191,21 +195,72 @@ class CompactedContext:
         )
 
 
+@dataclass(frozen=True)
+class SessionCompactionOutcome:
+    """Result of one session-level rolling compaction pass."""
+
+    rolling_summary: str
+    compacted_through_message_id: UUID
+    compacted_through_at: Any
+    kept_messages: tuple[Any, ...]
+    interactions_compacted: int
+    summary_tokens: int
+
+
+def _message_field(msg: Any, name: str, default: Any = None) -> Any:
+    if isinstance(msg, Mapping):
+        return msg.get(name, default)
+    return getattr(msg, name, default)
+
+
+def group_interactions(messages: Sequence[Any]) -> list[list[Any]]:
+    """Group clean conversational prose turns into discrete user/assistant interactions.
+
+    Tool calls, tool results, system messages, and empty turns are excluded.
+    """
+    prose: list[Any] = []
+    for msg in messages:
+        role = str(_message_field(msg, "role", ""))
+        if role not in ("user", "assistant"):
+            continue
+        if role == "assistant" and _message_field(msg, "tool_calls"):
+            continue
+        cleaned = strip_thinking_blocks(str(_message_field(msg, "content") or ""))
+        if not cleaned:
+            continue
+        prose.append(msg)
+
+    interactions: list[list[Any]] = []
+    current: list[Any] = []
+    for msg in prose:
+        role = str(_message_field(msg, "role", ""))
+        if role == "user":
+            if current:
+                interactions.append(current)
+            current = [msg]
+        else:
+            if not current:
+                current = [msg]
+            else:
+                current.append(msg)
+    if current:
+        interactions.append(current)
+    return interactions
+
+
 class CompactionService:
     """
     Context compaction service satisfying CompactionRepository via duck typing.
-    Tier 0: Deterministic safety lock (retains user messages, last 6 turns, approvals).
-    Tier 1: Jev probability gate (converts bulk logs to artifact stubs, drops irrelevant turns).
-    Tier 2: Fast LLM summarizer compiling dropped turns into concise executive block.
+    Handles JEV-free session-level rolling compaction (8-interaction barrier,
+    clean prose summarizer input) and deterministic intra-run tool-stubbing.
     """
 
     _compacted_history: ClassVar[dict[UUID, tuple[list[dict[str, Any]], str]]] = {}
 
     def __init__(
         self,
-        session: AsyncSession,
+        session: AsyncSession | None,
         settings: Settings,
-        jev_client: JevClientProtocol | None = None,
         fast_llm: LLMClientProtocol | None = None,
         token_counter: TokenCounter | None = None,
         token_model: str | None = None,
@@ -214,7 +269,6 @@ class CompactionService:
     ) -> None:
         self.session = session
         self.settings = settings
-        self.jev_client = jev_client
         self.fast_llm = fast_llm
         self._token_counter = token_counter
         self._token_model = token_model
@@ -283,22 +337,16 @@ class CompactionService:
     async def plan_compaction(
         self,
         units: Sequence[HistoryUnit],
-        batch_size: int = JEV_BATCH_SIZE,
-        max_calls: int = MAX_JEV_CALLS,
     ) -> CompactionPlan:
-        """Run Tier 0 and Tier 1 over a history and return the plan.
+        """Build a deterministic intra-run compaction plan without calling Jev.
 
-        Every token count comes from the provider tokenizer of the configured
-        model. A unit that Tier 1 does not score stays in the context. A system
-        message always stays, because the system prompt is not history.
+        Tier 0 locks user messages, approvals, decisions, recent turns, and
+        final tool-chain results. Unlocked bulk tool outputs become artifact
+        stubs when they carry an artifact reference, or are dropped so Tier 2
+        can summarize them.
         """
         tier0 = lock_tier0_units(units)
-        tier1 = await score_units(
-            units,
-            self.jev_client,
-            batch_size=batch_size,
-            max_calls=max_calls,
-        )
+        tier1 = score_units_deterministic(units, tier0)
         verdicts = resolve_verdicts(units, tier1, tier0)
 
         kept: list[PlannedUnit] = []
@@ -455,6 +503,15 @@ class CompactionService:
         compacted_tokens = self.token_counter.count_many(
             [str(message.get("content") or "") for message in assembled]
         )
+        if plan.units_dropped == 0 and plan.units_stubbed == 0:
+            return CompactedContext(
+                run_id=run_id,
+                messages=assembled,
+                plan=plan,
+                verification=verification,
+                compacted_tokens=compacted_tokens,
+                step=None,
+            )
         await self.save_compacted_history(run_id, assembled, plan.summary_block)
         step = await self.record_compaction_step(
             run_id=run_id,
@@ -556,6 +613,127 @@ class CompactionService:
 
         context = await self.compact(run_id, source)
         return context.to_result()
+
+    async def compact_session_history(
+        self,
+        session_id: UUID,
+        *,
+        rolling_summary: str | None,
+        uncompacted_messages: Sequence[Any],
+        interaction_barrier: int | None = None,
+        overflow_threshold: int | None = None,
+        max_tokens: int | None = None,
+        trigger_ratio: float = COMPACTION_TRIGGER_RATIO,
+    ) -> SessionCompactionOutcome | None:
+        """Roll older interactions above the verbatim tail barrier into `rolling_summary`.
+
+        Only clean user and final assistant prose enters the summarizer; tool
+        calls, tool results, and thinking blocks are never passed. Returns None
+        when the uncompacted history does not cross the barrier trigger.
+        """
+        barrier = (
+            interaction_barrier
+            if interaction_barrier is not None
+            else getattr(self.settings, "COMPACTION_INTERACTION_BARRIER", DEFAULT_INTERACTION_BARRIER)
+        )
+        overflow_min = (
+            overflow_threshold
+            if overflow_threshold is not None
+            else getattr(self.settings, "COMPACTION_OVERFLOW_INTERACTIONS", DEFAULT_OVERFLOW_INTERACTIONS)
+        )
+        token_limit = (
+            max_tokens
+            if max_tokens is not None
+            else getattr(self.settings, "CONTEXT_TOKEN_LIMIT", 8_000)
+        )
+
+        interactions = group_interactions(uncompacted_messages)
+        if len(interactions) <= MIN_INTERACTION_BARRIER:
+            return None
+
+        history_texts = [
+            strip_thinking_blocks(str(_message_field(msg, "content") or ""))
+            for group in interactions
+            for msg in group
+        ]
+        if rolling_summary:
+            history_texts.insert(0, rolling_summary)
+        estimated_tokens = self.token_counter.count_many(history_texts)
+        over_token_budget = estimated_tokens > int(token_limit * trigger_ratio)
+        overflow_count = len(interactions) - barrier
+
+        if overflow_count < overflow_min and not (overflow_count > 0 and over_token_budget):
+            if not over_token_budget:
+                return None
+
+        # Keep up to `barrier` interactions verbatim; if even `barrier` exceeds the
+        # token trigger, step down to at most `MIN_INTERACTION_BARRIER` (5) interactions.
+        keep_count = barrier
+        if over_token_budget and len(interactions) > MIN_INTERACTION_BARRIER:
+            while keep_count > MIN_INTERACTION_BARRIER:
+                tail_texts = [
+                    strip_thinking_blocks(str(_message_field(msg, "content") or ""))
+                    for group in interactions[-keep_count:]
+                    for msg in group
+                ]
+                if self.token_counter.count_many(tail_texts) <= int(token_limit * trigger_ratio):
+                    break
+                keep_count -= 1
+
+        split_idx = max(0, len(interactions) - keep_count)
+        if split_idx == 0:
+            return None
+
+        outgoing_groups = interactions[:split_idx]
+        kept_groups = interactions[split_idx:]
+        sources: list[SummarySource] = []
+        last_rolled_msg: Any = None
+
+        for group in outgoing_groups:
+            for msg in group:
+                last_rolled_msg = msg
+                role = str(_message_field(msg, "role", "assistant"))
+                cleaned = strip_thinking_blocks(str(_message_field(msg, "content") or ""))
+                if not cleaned:
+                    continue
+                unit_kind = UnitKind.USER if role == "user" else UnitKind.ASSISTANT
+                sources.append(
+                    SummarySource(
+                        unit_id=str(_message_field(msg, "id", "")),
+                        kind=unit_kind,
+                        role=role,
+                        content=cleaned,
+                        tokens=self.token_counter.count(cleaned),
+                        verdict="drop",
+                    )
+                )
+
+        if not sources or last_rolled_msg is None:
+            return None
+
+        summary_block = await self.summarizer.summarize_rolling(rolling_summary, sources)
+        if summary_block is None:
+            return None
+
+        cursor_id = _message_field(last_rolled_msg, "id")
+        cursor_at = _message_field(last_rolled_msg, "created_at")
+        if self.session is not None and cursor_id is not None:
+            thread = await self.session.get(ThreadModel, session_id)
+            if thread is not None:
+                thread.rolling_summary = summary_block.text
+                thread.compacted_through_message_id = cursor_id
+                thread.compacted_through_at = cursor_at
+                await self.session.flush()
+
+        kept_messages = tuple(msg for group in kept_groups for msg in group)
+        return SessionCompactionOutcome(
+            rolling_summary=summary_block.text,
+            compacted_through_message_id=cursor_id,
+            compacted_through_at=cursor_at,
+            kept_messages=kept_messages,
+            interactions_compacted=len(outgoing_groups),
+            summary_tokens=summary_block.tokens,
+        )
 
     async def load_messages(self, run_id: UUID) -> list[dict[str, Any]]:
         """Load the run history as messages, from the repository units."""

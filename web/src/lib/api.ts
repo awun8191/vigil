@@ -15,6 +15,11 @@ import type {
   MCPServerResponse,
   MCPToolResponse,
   PairingResponse,
+  Project,
+  ProjectCreateRequest,
+  ProjectDetail,
+  ProjectFile,
+  ProjectUpdateRequest,
   RegisterMCPServerRequest,
   UpdateMCPToolLevelRequest,
   Run,
@@ -22,6 +27,7 @@ import type {
   RunCreateRequest,
   RunMessageResponse,
   RunStep,
+  RunUploadResponse,
   AgentConfigResponse,
   SkillInstallRequest,
   SkillResponse,
@@ -245,6 +251,43 @@ const liveApi: VigilApi = {
     });
   },
 
+  async uploadRunFiles(files, opts) {
+    const formData = new FormData();
+    for (const file of files) {
+      formData.append('files', file, file.name);
+    }
+    if (opts?.sessionId) formData.append('session_id', opts.sessionId);
+    if (opts?.projectId) formData.append('project_id', opts.projectId);
+
+    const headers: Record<string, string> = { Accept: 'application/json' };
+    const effectiveToken = getEffectiveBearerToken();
+    if (effectiveToken) headers['Authorization'] = `Bearer ${effectiveToken}`;
+
+    let response: Response;
+    try {
+      response = await fetch(buildUrl('/runs/uploads'), {
+        method: 'POST',
+        headers,
+        body: formData,
+      });
+    } catch (error) {
+      throw new NetworkError(error instanceof Error ? error.message : 'Network request failed');
+    }
+
+    const text = await response.text();
+    const payload = text ? parseJson(text) : null;
+    if (!response.ok) {
+      const envelope =
+        payload && typeof payload === 'object' ? (payload as Record<string, unknown>) : null;
+      if (response.status === 401) {
+        notifyAuthFailure();
+        throw new AuthError(401, envelope as never);
+      }
+      throw new ApiError(response.status, envelope as never);
+    }
+    return payload as RunUploadResponse;
+  },
+
   getRun(runId) {
     return request<Run>(`/runs/${runId}`);
   },
@@ -359,6 +402,10 @@ const liveApi: VigilApi = {
     });
   },
 
+  getPrimarySession() {
+    return request<ChatSession>('/chat/primary');
+  },
+
   listSessions() {
     return request<ChatSession[]>('/chat/sessions');
   },
@@ -371,8 +418,13 @@ const liveApi: VigilApi = {
     });
   },
 
-  listMessages(sessionId) {
-    return request<ChatMessage[]>(`/chat/sessions/${sessionId}/messages`);
+  listMessages(sessionId, opts) {
+    return request<ChatMessage[]>(`/chat/sessions/${sessionId}/messages`, {
+      query: {
+        limit: opts?.limit,
+        before_id: opts?.beforeId,
+      },
+    });
   },
 
   sendMessage(sessionId, content, scope) {
@@ -571,6 +623,71 @@ const liveApi: VigilApi = {
 
   deleteMemoryChunk(chunkId: string, scope: string) {
     return request<void>(`/memory/chunks/${chunkId}`, {
+      method: 'DELETE',
+      scope,
+    });
+  },
+
+  listProjects() {
+    return request<Project[]>('/projects');
+  },
+
+  createProject(body: ProjectCreateRequest, scope: string) {
+    return request<Project>('/projects', {
+      method: 'POST',
+      body,
+      scope,
+    });
+  },
+
+  getProject(projectId: string) {
+    return request<ProjectDetail>(`/projects/${projectId}`);
+  },
+
+  updateProject(projectId: string, body: ProjectUpdateRequest, scope: string) {
+    return request<Project>(`/projects/${projectId}`, {
+      method: 'PATCH',
+      body,
+      scope,
+    });
+  },
+
+  async uploadProjectFiles(projectId: string, files: File[]) {
+    const formData = new FormData();
+    for (const file of files) {
+      formData.append('files', file, file.name);
+    }
+    const headers: Record<string, string> = { Accept: 'application/json' };
+    const effectiveToken = getEffectiveBearerToken();
+    if (effectiveToken) headers['Authorization'] = `Bearer ${effectiveToken}`;
+
+    let response: Response;
+    try {
+      response = await fetch(buildUrl(`/projects/${projectId}/files`), {
+        method: 'POST',
+        headers,
+        body: formData,
+      });
+    } catch (error) {
+      throw new NetworkError(error instanceof Error ? error.message : 'Network request failed');
+    }
+
+    const text = await response.text();
+    const payload = text ? parseJson(text) : null;
+    if (!response.ok) {
+      const envelope =
+        payload && typeof payload === 'object' ? (payload as Record<string, unknown>) : null;
+      if (response.status === 401) {
+        notifyAuthFailure();
+        throw new AuthError(401, envelope as never);
+      }
+      throw new ApiError(response.status, envelope as never);
+    }
+    return payload as ProjectFile[];
+  },
+
+  deleteProject(projectId: string, scope: string) {
+    return request<void>(`/projects/${projectId}`, {
       method: 'DELETE',
       scope,
     });

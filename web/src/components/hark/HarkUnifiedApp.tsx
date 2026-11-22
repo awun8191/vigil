@@ -1,6 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useNavigate, useParams } from 'react-router-dom';
-import { FolderPlus, MessageSquare } from 'lucide-react';
+import {
+  FileText,
+  FolderKanban,
+  FolderPlus,
+  MessageSquare,
+  Trash2,
+  Upload,
+  X,
+} from 'lucide-react';
 
 import { HarkTopChrome } from './HarkTopChrome';
 import { HarkLeftRail } from './HarkLeftRail';
@@ -13,7 +21,23 @@ import { InputPill } from '@/components/chat/InputPill';
 import { ThinkingCapsule } from '@/components/chat/ThinkingCapsule';
 import { LiveBrowserCard, buildBrowserPreviews } from '@/components/chat/LiveBrowserCard';
 import { useCards } from '@/queries/cards';
-import { useAgentChat, useCreateSession, useMessages, useSessions } from '@/queries/chat';
+import {
+  PRIMARY_SESSION_KEY,
+  useAgentChat,
+  useLoadEarlierMessages,
+  useMessages,
+  usePrimarySession,
+} from '@/queries/chat';
+import {
+  useCreateProject,
+  useDeleteProject,
+  useProjectDetail,
+  useProjects,
+  useUpdateProject,
+  useUploadProjectFiles,
+} from '@/queries/projects';
+import { api } from '@/lib/api';
+import { useQueryClient } from '@tanstack/react-query';
 import { compareCards, timeOfDayGreeting } from '@/lib/format';
 import type { Card } from '@/types';
 
@@ -119,33 +143,46 @@ export function HarkUnifiedApp() {
 
   const state = (location.state ?? {}) as LocationState;
   const [seed, setSeed] = useState<string | undefined>(state.seed);
-  const [createdSessionId, setCreatedSessionId] = useState<string | null>(null);
+  const [activeProjectId, setActiveProjectId] = useState<string | null>(null);
+  const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
+  const [creatingProject, setCreatingProject] = useState(false);
+  const [newProjectName, setNewProjectName] = useState('');
+  const [newProjectDescription, setNewProjectDescription] = useState('');
+  const [newProjectInstructions, setNewProjectInstructions] = useState('');
+  const [editInstructions, setEditInstructions] = useState('');
+  const [editDescription, setEditDescription] = useState('');
+  const queryClient = useQueryClient();
 
-  const sessions = useSessions();
-  const createSession = useCreateSession();
-  const creatingRef = useRef(false);
+  const primarySession = usePrimarySession();
+  const projectsQuery = useProjects();
+  const projectDetailQuery = useProjectDetail(selectedProjectId);
+  const createProjectMutation = useCreateProject();
+  const updateProjectMutation = useUpdateProject();
+  const deleteProjectMutation = useDeleteProject();
+  const uploadProjectFilesMutation = useUploadProjectFiles();
+  const projectFileInputRef = useRef<HTMLInputElement>(null);
 
   const activeSessionId =
-    routeSessionId ?? createdSessionId ?? sessions.data?.[0]?.session_id ?? null;
+    routeSessionId ?? primarySession.data?.session_id ?? null;
+
+  const activeProject = useMemo(
+    () => (projectsQuery.data ?? []).find((p) => p.id === activeProjectId) ?? null,
+    [projectsQuery.data, activeProjectId],
+  );
+
+  useEffect(() => {
+    if (!projectDetailQuery.data) return;
+    setEditDescription(projectDetailQuery.data.description ?? '');
+    setEditInstructions(projectDetailQuery.data.instructions ?? '');
+  }, [projectDetailQuery.data]);
 
   const messagesQuery = useMessages(activeSessionId);
-  const chat = useAgentChat(activeSessionId);
+  const { loadEarlier, loadingEarlier, hasMore } = useLoadEarlierMessages(activeSessionId);
+  const chat = useAgentChat(activeSessionId, activeProjectId);
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const stickRef = useRef(true);
   const lastTopRef = useRef(0);
-
-  useEffect(() => {
-    if (routeSessionId || createdSessionId) return;
-    if (!sessions.data || sessions.data.length > 0) return;
-    if (creatingRef.current) return;
-
-    creatingRef.current = true;
-    createSession.mutate(
-      { title: undefined, scope: 'chat:create-session' },
-      { onSuccess: (session) => setCreatedSessionId(session.session_id) },
-    );
-  }, [routeSessionId, createdSessionId, sessions.data, createSession]);
 
   const handleSeedConsumed = useCallback(() => {
     setSeed(undefined);
@@ -210,35 +247,20 @@ export function HarkUnifiedApp() {
     });
   };
 
-  const handleCreateNewProject = () => {
-    createSession.mutate(
-      { title: 'New Project', scope: 'chat:create-session' },
-      {
-        onSuccess: (session) => {
-          navigate(`/agent/chat/${session.session_id}`);
-          setActiveTab('chat');
-        },
-      },
-    );
-  };
-
-  const handleSend = async (text: string) => {
+  const handleSend = async (text: string, files?: File[]) => {
     let sid = activeSessionId;
     if (!sid) {
       try {
-        const newSession = await createSession.mutateAsync({
-          title: text.slice(0, 35),
-          scope: `chat:create-session:${Date.now()}`,
-        });
-        sid = newSession.session_id;
-        setCreatedSessionId(sid);
+        const primary = await api.getPrimarySession();
+        sid = primary.session_id;
+        queryClient.setQueryData(PRIMARY_SESSION_KEY, primary);
       } catch (error) {
-        console.error('Failed to create session', error);
+        console.error('Failed to resolve primary session', error);
         return;
       }
     }
     stickRef.current = true;
-    void chat.send(text, sid ?? undefined);
+    void chat.send(text, sid ?? undefined, files);
   };
 
   const openCard = (card: Card) => {
@@ -308,31 +330,45 @@ export function HarkUnifiedApp() {
         <div className={railOpen ? 'md:pl-[324px] md:pr-6' : ''}>
           <div className="mx-auto w-full max-w-[780px] px-4 pb-44 pt-28 sm:px-6 sm:pt-32">
             {activeTab === 'chat' ? (
-              <MessageStream
-                messages={messages}
-                streamedText={chat.streamedText}
-                streaming={chat.streaming}
-                trailing={
-                  showThinking ? (
-                    <div className="w-full min-w-0 space-y-2">
-                      <ThinkingCapsule active steps={chat.steps} />
-                      {liveBrowserPreview ? (
-                        <LiveBrowserCard preview={liveBrowserPreview} live />
-                      ) : null}
-                    </div>
-                  ) : null
-                }
-                emptyHint={
-                  <EmptyBriefing
-                    onCard={openCard}
-                    onCardVerb={executeCardVerb}
-                    onPrompt={(prompt) => {
-                      setSeed(prompt);
-                      if (!location.pathname.startsWith('/agent/chat')) navigate('/agent/chat');
-                    }}
-                  />
-                }
-              />
+              <div className="space-y-4">
+                {messages.length >= 100 && hasMore ? (
+                  <div className="flex justify-center">
+                    <button
+                      type="button"
+                      onClick={() => void loadEarlier()}
+                      disabled={loadingEarlier}
+                      className="rounded-full border border-[var(--border)] bg-[var(--card)] px-3.5 py-1.5 text-[12px] font-medium text-[var(--text-muted)] transition-colors hover:border-[var(--border-strong)] hover:text-[var(--text)] disabled:opacity-50"
+                    >
+                      {loadingEarlier ? 'Loading earlier turns...' : 'Load earlier messages'}
+                    </button>
+                  </div>
+                ) : null}
+                <MessageStream
+                  messages={messages}
+                  streamedText={chat.streamedText}
+                  streaming={chat.streaming}
+                  trailing={
+                    showThinking ? (
+                      <div className="w-full min-w-0 space-y-2">
+                        <ThinkingCapsule active steps={chat.steps} />
+                        {liveBrowserPreview ? (
+                          <LiveBrowserCard preview={liveBrowserPreview} live />
+                        ) : null}
+                      </div>
+                    ) : null
+                  }
+                  emptyHint={
+                    <EmptyBriefing
+                      onCard={openCard}
+                      onCardVerb={executeCardVerb}
+                      onPrompt={(prompt) => {
+                        setSeed(prompt);
+                        if (!location.pathname.startsWith('/agent/chat')) navigate('/agent/chat');
+                      }}
+                    />
+                  }
+                />
+              </div>
             ) : (
               <div className="w-full space-y-5 py-4">
                 <div className="flex items-end justify-between gap-3 pb-1">
@@ -341,12 +377,15 @@ export function HarkUnifiedApp() {
                       Projects
                     </h1>
                     <p className="mt-1 text-[13px] text-[var(--text-muted)]">
-                      Every conversation Vigil has kept for you.
+                      Scoped workspaces with isolated directories and standing instructions for your unified Vigil stream.
                     </p>
                   </div>
                   <button
                     type="button"
-                    onClick={handleCreateNewProject}
+                    onClick={() => {
+                      setCreatingProject((prev) => !prev);
+                      setSelectedProjectId(null);
+                    }}
                     className="inline-flex h-9 items-center gap-1.5 rounded-full bg-[var(--btn-primary-bg)] px-3.5 text-[12.5px] font-semibold text-[var(--btn-primary-ink)] transition-transform hover:scale-105 active:scale-95"
                   >
                     <FolderPlus size={14} strokeWidth={1.75} />
@@ -354,73 +393,302 @@ export function HarkUnifiedApp() {
                   </button>
                 </div>
 
-                {sessions.isLoading ? (
+                {creatingProject ? (
+                  <form
+                    onSubmit={(e) => {
+                      e.preventDefault();
+                      const trimmed = newProjectName.trim();
+                      if (!trimmed || createProjectMutation.isPending) return;
+                      createProjectMutation.mutate(
+                        {
+                          body: {
+                            name: trimmed,
+                            description: newProjectDescription.trim() || null,
+                            instructions: newProjectInstructions.trim() || null,
+                          },
+                          scope: `projects:create:${Date.now()}`,
+                        },
+                        {
+                          onSuccess: (created) => {
+                            setCreatingProject(false);
+                            setNewProjectName('');
+                            setNewProjectDescription('');
+                            setNewProjectInstructions('');
+                            setSelectedProjectId(created.id);
+                            setActiveProjectId(created.id);
+                          },
+                        },
+                      );
+                    }}
+                    className="rail-card space-y-3 p-4"
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="text-[13px] font-semibold text-[var(--text)]">
+                        Create Project Workspace
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => setCreatingProject(false)}
+                        className="rounded-full p-1 text-[var(--text-muted)] hover:text-[var(--text)]"
+                        aria-label="Cancel project creation"
+                      >
+                        <X size={14} />
+                      </button>
+                    </div>
+                    <input
+                      type="text"
+                      value={newProjectName}
+                      onChange={(e) => setNewProjectName(e.target.value)}
+                      placeholder="Project name (e.g. Q4 Launch, Vigil Core)"
+                      required
+                      className="w-full rounded-[12px] border border-[var(--border)] bg-[var(--panel-inset)] px-3 py-2 text-[13px] text-[var(--text)] placeholder:text-[var(--text-muted)] focus:border-[var(--border-strong)] focus:outline-none"
+                    />
+                    <input
+                      type="text"
+                      value={newProjectDescription}
+                      onChange={(e) => setNewProjectDescription(e.target.value)}
+                      placeholder="Short description (optional)"
+                      className="w-full rounded-[12px] border border-[var(--border)] bg-[var(--panel-inset)] px-3 py-2 text-[13px] text-[var(--text)] placeholder:text-[var(--text-muted)] focus:border-[var(--border-strong)] focus:outline-none"
+                    />
+                    <textarea
+                      value={newProjectInstructions}
+                      onChange={(e) => setNewProjectInstructions(e.target.value)}
+                      placeholder="Standing project instructions injected into runs (optional)"
+                      rows={3}
+                      className="w-full rounded-[12px] border border-[var(--border)] bg-[var(--panel-inset)] px-3 py-2 text-[13px] text-[var(--text)] placeholder:text-[var(--text-muted)] focus:border-[var(--border-strong)] focus:outline-none"
+                    />
+                    <div className="flex justify-end gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setCreatingProject(false)}
+                        className="rounded-full border border-[var(--border)] px-3.5 py-1.5 text-[12px] font-medium text-[var(--text-muted)] hover:text-[var(--text)]"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        type="submit"
+                        disabled={!newProjectName.trim() || createProjectMutation.isPending}
+                        className="rounded-full bg-[var(--btn-primary-bg)] px-4 py-1.5 text-[12px] font-semibold text-[var(--btn-primary-ink)] disabled:opacity-50"
+                      >
+                        {createProjectMutation.isPending ? 'Creating...' : 'Create workspace'}
+                      </button>
+                    </div>
+                  </form>
+                ) : null}
+
+                {projectsQuery.isLoading ? (
                   <div className="space-y-2">
-                    {[0, 1, 2].map((index) => (
+                    {[0, 1].map((idx) => (
                       <div
-                        key={index}
-                        className="h-[70px] animate-pulse rounded-[18px] border border-[var(--border)] bg-[var(--card)] motion-reduce:animate-none"
+                        key={idx}
+                        className="h-[74px] animate-pulse rounded-[18px] border border-[var(--border)] bg-[var(--card)] motion-reduce:animate-none"
                       />
                     ))}
                   </div>
-                ) : (sessions.data ?? []).length === 0 ? (
-                  <div className="rail-card flex flex-col items-center px-6 py-14 text-center">
-                    <MessageSquare size={20} strokeWidth={1.5} className="text-[var(--text-muted)]" />
+                ) : (projectsQuery.data ?? []).length === 0 ? (
+                  <div className="rail-card flex flex-col items-center px-6 py-12 text-center">
+                    <FolderKanban size={20} strokeWidth={1.5} className="text-[var(--text-muted)]" />
                     <p className="mt-3 text-[14px] font-medium text-[var(--text)]">
-                      No projects yet.
+                      No project workspaces yet.
                     </p>
-                    <p className="mt-1 max-w-xs text-[12.5px] leading-relaxed text-[var(--text-muted)]">
-                      Start a conversation and it will appear here, with everything the run touched.
+                    <p className="mt-1 max-w-sm text-[12.5px] leading-relaxed text-[var(--text-muted)]">
+                      All conversation lives in your single primary stream. Create a project workspace when you want isolated files and standing instructions.
                     </p>
                   </div>
                 ) : (
-                  <div className="space-y-2">
-                    {(sessions.data ?? []).map((session) => {
-                      const active = session.session_id === activeSessionId;
+                  <div className="space-y-2.5">
+                    {(projectsQuery.data ?? []).map((project) => {
+                      const isScoped = project.id === activeProjectId;
+                      const isSelected = project.id === selectedProjectId;
                       return (
-                        <button
-                          key={session.session_id}
-                          type="button"
-                          onClick={() => {
-                            navigate(`/agent/chat/${session.session_id}`);
-                            setActiveTab('chat');
-                          }}
-                          className={`flex w-full items-center justify-between gap-3 rounded-[18px] border p-3.5 text-left transition-all hover:border-[var(--border-strong)] ${
-                            active
+                        <div
+                          key={project.id}
+                          className={`rounded-[18px] border transition-all ${
+                            isScoped || isSelected
                               ? 'border-[var(--text)]/30 bg-[var(--card-strong)]'
                               : 'border-[var(--border)] bg-[var(--card)]'
                           }`}
                         >
-                          <div className="flex min-w-0 items-center gap-3">
-                            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[var(--panel-inset)] text-[var(--text)]">
-                              <MessageSquare size={16} strokeWidth={1.6} />
-                            </div>
-                            <div className="min-w-0">
-                              <div className="truncate text-[13.5px] font-semibold text-[var(--text)]">
-                                {session.title || 'Untitled session'}
+                          <div className="flex items-center justify-between gap-3 p-3.5">
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setSelectedProjectId((prev) =>
+                                  prev === project.id ? null : project.id,
+                                )
+                              }
+                              className="flex min-w-0 flex-1 items-center gap-3 text-left"
+                            >
+                              <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[var(--panel-inset)] text-[var(--text)]">
+                                <FolderKanban size={16} strokeWidth={1.6} />
                               </div>
-                              <div className="mt-0.5 flex items-center gap-2 text-[11px] text-[var(--text-muted)]">
-                                <span>
-                                  {new Date(session.updated_at).toLocaleDateString(undefined, {
-                                    month: 'short',
-                                    day: 'numeric',
-                                  })}
-                                </span>
-                                <span aria-hidden="true">·</span>
-                                <span>
-                                  {session.message_count} message
-                                  {session.message_count === 1 ? '' : 's'}
-                                </span>
+                              <div className="min-w-0">
+                                <div className="flex items-center gap-2">
+                                  <span className="truncate text-[13.5px] font-semibold text-[var(--text)]">
+                                    {project.name}
+                                  </span>
+                                  {isScoped ? (
+                                    <span className="rounded-full bg-[var(--btn-primary-bg)] px-2 py-0.5 text-[10px] font-semibold text-[var(--btn-primary-ink)]">
+                                      Active
+                                    </span>
+                                  ) : null}
+                                </div>
+                                <div className="mt-0.5 truncate text-[11.5px] text-[var(--text-muted)]">
+                                  {project.description || project.workspace_path}
+                                </div>
                               </div>
+                            </button>
+                            <div className="flex shrink-0 items-center gap-1.5">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setActiveProjectId(isScoped ? null : project.id);
+                                  if (!isScoped) {
+                                    setActiveTab('chat');
+                                  }
+                                }}
+                                className="inline-flex h-8 items-center gap-1 rounded-full border border-[var(--border)] bg-[var(--panel-bg)] px-3 text-[11.5px] font-medium text-[var(--text)] transition-colors hover:border-[var(--border-strong)]"
+                              >
+                                <MessageSquare size={12} />
+                                {isScoped ? 'Clear scope' : 'Use in stream'}
+                              </button>
                             </div>
                           </div>
-                          <span
-                            aria-hidden="true"
-                            className="shrink-0 font-mono text-[14px] font-light text-[var(--text-muted)]"
-                          >
-                            ⌝
-                          </span>
-                        </button>
+
+                          {isSelected ? (
+                            <div className="space-y-3 border-t border-[var(--border)] px-4 py-3.5 text-[12.5px]">
+                              <div className="flex items-center justify-between gap-2 text-[11px] text-[var(--text-muted)]">
+                                <span className="truncate font-mono">{project.workspace_path}</span>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    deleteProjectMutation.mutate(
+                                      {
+                                        projectId: project.id,
+                                        scope: `projects:delete:${project.id}`,
+                                      },
+                                      {
+                                        onSuccess: () => {
+                                          if (activeProjectId === project.id) {
+                                            setActiveProjectId(null);
+                                          }
+                                          setSelectedProjectId(null);
+                                        },
+                                      },
+                                    );
+                                  }}
+                                  className="inline-flex items-center gap-1 rounded-full px-2 py-1 text-rose-500 hover:bg-rose-500/10"
+                                >
+                                  <Trash2 size={12} />
+                                  Delete
+                                </button>
+                              </div>
+
+                              <div className="space-y-2">
+                                <label className="block text-[11px] font-medium uppercase tracking-wider text-[var(--text-muted)]">
+                                  Description
+                                </label>
+                                <input
+                                  type="text"
+                                  value={editDescription}
+                                  onChange={(e) => setEditDescription(e.target.value)}
+                                  className="w-full rounded-[10px] border border-[var(--border)] bg-[var(--panel-inset)] px-2.5 py-1.5 text-[12.5px] text-[var(--text)] focus:border-[var(--border-strong)] focus:outline-none"
+                                />
+                                <label className="block text-[11px] font-medium uppercase tracking-wider text-[var(--text-muted)]">
+                                  Standing Instructions
+                                </label>
+                                <textarea
+                                  value={editInstructions}
+                                  onChange={(e) => setEditInstructions(e.target.value)}
+                                  rows={3}
+                                  className="w-full rounded-[10px] border border-[var(--border)] bg-[var(--panel-inset)] px-2.5 py-1.5 text-[12.5px] text-[var(--text)] focus:border-[var(--border-strong)] focus:outline-none"
+                                />
+                                <div className="flex justify-end">
+                                  <button
+                                    type="button"
+                                    disabled={updateProjectMutation.isPending}
+                                    onClick={() =>
+                                      updateProjectMutation.mutate({
+                                        projectId: project.id,
+                                        body: {
+                                          description: editDescription.trim() || null,
+                                          instructions: editInstructions.trim() || null,
+                                        },
+                                        scope: `projects:update:${project.id}:${Date.now()}`,
+                                      })
+                                    }
+                                    className="rounded-full bg-[var(--btn-primary-bg)] px-3 py-1 text-[11.5px] font-semibold text-[var(--btn-primary-ink)] disabled:opacity-50"
+                                  >
+                                    {updateProjectMutation.isPending ? 'Saving...' : 'Save changes'}
+                                  </button>
+                                </div>
+                              </div>
+
+                              <div>
+                                <div className="mb-1.5 flex items-center justify-between gap-2">
+                                  <div className="text-[11px] font-medium uppercase tracking-wider text-[var(--text-muted)]">
+                                    Workspace Files
+                                  </div>
+                                  <div>
+                                    <input
+                                      ref={projectFileInputRef}
+                                      type="file"
+                                      multiple
+                                      hidden
+                                      onChange={(e) => {
+                                        const selected = Array.from(e.target.files ?? []);
+                                        if (selected.length > 0) {
+                                          uploadProjectFilesMutation.mutate({
+                                            projectId: project.id,
+                                            files: selected,
+                                          });
+                                        }
+                                        e.target.value = '';
+                                      }}
+                                    />
+                                    <button
+                                      type="button"
+                                      disabled={uploadProjectFilesMutation.isPending}
+                                      onClick={() => projectFileInputRef.current?.click()}
+                                      className="inline-flex items-center gap-1 rounded-full border border-[var(--border)] bg-[var(--panel-bg)] px-2.5 py-1 text-[11px] font-medium text-[var(--text)] transition-colors hover:border-[var(--border-strong)] disabled:opacity-50"
+                                    >
+                                      <Upload size={11} />
+                                      {uploadProjectFilesMutation.isPending
+                                        ? 'Uploading...'
+                                        : 'Upload files'}
+                                    </button>
+                                  </div>
+                                </div>
+                                {projectDetailQuery.isLoading ? (
+                                  <div className="text-[12px] text-[var(--text-muted)]">
+                                    Scanning workspace...
+                                  </div>
+                                ) : (projectDetailQuery.data?.files ?? []).length === 0 ? (
+                                  <div className="text-[12px] text-[var(--text-muted)]">
+                                    No files in this project workspace yet.
+                                  </div>
+                                ) : (
+                                  <ul className="space-y-1">
+                                    {(projectDetailQuery.data?.files ?? []).map((f) => (
+                                      <li
+                                        key={f.path}
+                                        className="flex items-center justify-between rounded-[8px] bg-[var(--panel-inset)] px-2.5 py-1 font-mono text-[11.5px] text-[var(--text)]"
+                                      >
+                                        <span className="flex items-center gap-1.5 truncate">
+                                          <FileText size={12} className="shrink-0 text-[var(--text-muted)]" />
+                                          <span className="truncate">{f.path}</span>
+                                        </span>
+                                        <span className="shrink-0 text-[10.5px] text-[var(--text-muted)]">
+                                          {f.size_bytes} B
+                                        </span>
+                                      </li>
+                                    ))}
+                                  </ul>
+                                )}
+                              </div>
+                            </div>
+                          ) : null}
+                        </div>
                       );
                     })}
                   </div>
@@ -449,6 +717,24 @@ export function HarkUnifiedApp() {
           </div>
         ) : null}
         <div className="pointer-events-auto w-full max-w-[780px]">
+          {activeProject ? (
+            <div className="mb-2 flex items-center justify-center">
+              <div className="inline-flex items-center gap-2 rounded-full border border-[var(--border)] bg-[var(--panel-bg)] px-3 py-1 text-[11.5px] text-[var(--text)] shadow-[var(--shadow)] backdrop-blur-md">
+                <FolderKanban size={12} className="text-[var(--text-muted)]" />
+                <span>
+                  Workspace: <strong>{activeProject.name}</strong>
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setActiveProjectId(null)}
+                  className="rounded-full p-0.5 text-[var(--text-muted)] hover:text-[var(--text)]"
+                  aria-label="Clear active project workspace"
+                >
+                  <X size={12} />
+                </button>
+              </div>
+            </div>
+          ) : null}
           <InputPill
             onSend={handleSend}
             onStop={() => chat.stop()}

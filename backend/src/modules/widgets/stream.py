@@ -122,23 +122,38 @@ async def stream_widget_events(
     loop = asyncio.get_running_loop()
     started_at = loop.time()
     last_write_at = started_at
-    while True:
-        if max_duration_seconds is not None and (
-            loop.time() - started_at
-        ) >= max_duration_seconds:
-            return
-        widgets = await store.list_widgets(user_id)
-        fresh = [w for w in widgets if _cursor_value(w) > current]
-        fresh.sort(key=_cursor_value)
-        for widget in fresh:
-            yield format_widget_event(widget)
-            current = _cursor_value(widget)
-            last_write_at = loop.time()
-        if max_duration_seconds is not None and (
-            loop.time() - started_at
-        ) >= max_duration_seconds:
-            return
-        await asyncio.sleep(poll_interval)
-        if (loop.time() - last_write_at) >= keepalive_interval:
-            yield KEEPALIVE_COMMENT
-            last_write_at = loop.time()
+    async def _release_read_tx() -> None:
+        session = getattr(store, "session", None)
+        in_tx = getattr(session, "in_transaction", None)
+        rollback = getattr(session, "rollback", None)
+        if callable(rollback) and (not callable(in_tx) or in_tx()):
+            try:
+                await asyncio.shield(rollback())
+            except BaseException:
+                pass
+
+    try:
+        while True:
+            if max_duration_seconds is not None and (
+                loop.time() - started_at
+            ) >= max_duration_seconds:
+                return
+            widgets = await store.list_widgets(user_id)
+            await _release_read_tx()
+            fresh = [w for w in widgets if _cursor_value(w) > current]
+            fresh.sort(key=_cursor_value)
+            for widget in fresh:
+                yield format_widget_event(widget)
+                current = _cursor_value(widget)
+                last_write_at = loop.time()
+            if max_duration_seconds is not None and (
+                loop.time() - started_at
+            ) >= max_duration_seconds:
+                return
+            await asyncio.sleep(poll_interval)
+            if (loop.time() - last_write_at) >= keepalive_interval:
+                yield KEEPALIVE_COMMENT
+                last_write_at = loop.time()
+    except asyncio.CancelledError:
+        await _release_read_tx()
+        return

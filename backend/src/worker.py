@@ -499,7 +499,7 @@ async def handle_refresh_widget(job: JobDTO, context: JobContext) -> None:
     """
     from pydantic import ValidationError as PydanticValidationError
 
-    from src.modules.widgets.data import validate_widget_payload
+    from src.modules.widgets.data import merge_a2ui_payload_update
     from src.modules.widgets.service import WidgetsService
 
     payload = _payload(job)
@@ -543,8 +543,10 @@ async def handle_refresh_widget(job: JobDTO, context: JobContext) -> None:
     except Exception as exc:  # noqa: BLE001 - a connector failure retries
         raise RuntimeError(f"connector query failed: {exc}") from exc
     try:
-        parsed = validate_widget_payload(
-            row.widget_type, _truncate_refresh_payload(row.widget_type, raw_payload)
+        parsed = merge_a2ui_payload_update(
+            row.data_payload,
+            raw_payload,
+            truncate=True,
         )
     except (ValueError, PydanticValidationError) as exc:
         await service.touch_refresh(widget_id, user_id, next_at)

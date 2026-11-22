@@ -162,13 +162,12 @@ def history_with_last_turn_tool_chain() -> list[dict[str, Any]]:
 
 
 def service_with(run_steps: Any = None) -> tuple[CompactionService, ScriptedFastLLM]:
-    """Build a compaction service with scripted Tier 1 and Tier 2."""
+    """Build a JEV-free compaction service with scripted Fast LLM."""
     settings = Settings()
     llm = ScriptedFastLLM()
     service = CompactionService(
         session=None,
         settings=settings,
-        jev_client=ScriptedJev(DROP_ALL),
         fast_llm=llm,
         token_model=settings.REASONING_LLM_MODEL,
         run_steps=run_steps,

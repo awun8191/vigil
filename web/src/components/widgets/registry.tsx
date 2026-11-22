@@ -1,99 +1,77 @@
+import type { ReactNode } from 'react';
 import { z } from 'zod';
-import type { ComponentType } from 'react';
 import type { Widget } from '@/types';
-import { MetricCard } from './MetricCard';
-import { DataTable } from './DataTable';
-import { TaskList } from './TaskList';
-import { StatusFeed } from './StatusFeed';
+import { A2UISurface, resolveA2UIIcon, type A2UISurfacePayload } from './A2UISurface';
 import { FallbackCard } from './FallbackCard';
 
-/* Payload shapes mirror backend/src/modules/widgets/data.py caps. */
+export const A2UI_PANEL_CATALOG_ID = 'urn:vigil:a2ui:catalog:panels:v1' as const;
 
-const metricPayloadSchema = z
-  .object({
-    value: z.string().min(1).max(64),
-    delta: z.string().max(64).optional(),
-    caption: z.string().max(200).optional(),
-  })
-  .strict();
-
-const tablePayloadSchema = z
-  .object({
-    columns: z.array(z.string()).min(1).max(8),
-    rows: z.array(z.array(z.string())).max(50),
-  })
-  .strict();
-
-const taskItemSchema = z
+const a2uiComponentNodeSchema = z
   .object({
     id: z.string().min(1).max(64),
-    label: z.string().min(1).max(200),
-    done: z.boolean().optional().default(false),
+    component: z.enum([
+      'Column',
+      'Row',
+      'Divider',
+      'Metric',
+      'Sparkline',
+      'ProgressBar',
+      'Badge',
+      'KeyValueList',
+      'DataTable',
+      'Text',
+      'CheckList',
+      'Button',
+      'TextField',
+      'ChoiceGroup',
+    ]),
+    props: z.record(z.unknown()).optional().default({}),
+    children: z.array(z.string()).max(8).optional().default([]),
   })
   .strict();
 
-const taskListPayloadSchema = z
+export const a2uiSurfacePayloadSchema = z
   .object({
-    items: z.array(taskItemSchema).max(50),
+    version: z.literal('v0.9').optional().default('v0.9'),
+    catalog_id: z
+      .literal(A2UI_PANEL_CATALOG_ID)
+      .optional()
+      .default(A2UI_PANEL_CATALOG_ID),
+    size: z.enum(['sm', 'md', 'lg']).optional().default('md'),
+    icon: z.string().nullable().optional(),
+    root: z.string().min(1).max(64),
+    components: z.array(a2uiComponentNodeSchema).min(1).max(16),
+    data_model: z.record(z.unknown()).optional().default({}),
   })
-  .strict();
+  .strict()
+  .refine(
+    (payload) => payload.components.some((node) => node.id === payload.root),
+    { message: 'A2UI root component must exist in components' },
+  );
 
-const feedEntrySchema = z
-  .object({
-    ts: z.string().min(1).max(64),
-    text: z.string().min(1).max(280),
-  })
-  .strict();
-
-const feedPayloadSchema = z
-  .object({
-    entries: z.array(feedEntrySchema).max(30),
-  })
-  .strict();
-
-const baseWidgetSchema = z.object({
+export const widgetSchema = z.object({
   id: z.string(),
   title: z.string(),
+  widget_type: z.literal('a2ui_surface'),
+  data_payload: a2uiSurfacePayloadSchema,
   version: z.number(),
   updated_at: z.string(),
 });
 
-export const widgetSchema = z.discriminatedUnion('widget_type', [
-  baseWidgetSchema.extend({ widget_type: z.literal('metric_card'), data_payload: metricPayloadSchema }),
-  baseWidgetSchema.extend({ widget_type: z.literal('data_table'), data_payload: tablePayloadSchema }),
-  baseWidgetSchema.extend({ widget_type: z.literal('task_list'), data_payload: taskListPayloadSchema }),
-  baseWidgetSchema.extend({ widget_type: z.literal('status_feed'), data_payload: feedPayloadSchema }),
-]);
-
 export type ParsedWidget = z.infer<typeof widgetSchema>;
 
-export const WIDGET_MAP = {
-  metric_card: MetricCard,
-  data_table: DataTable,
-  task_list: TaskList,
-  status_feed: StatusFeed,
-} satisfies Record<string, ComponentType<never>>;
-
-function renderPayload(widget: ParsedWidget) {
-  switch (widget.widget_type) {
-    case 'metric_card':
-      return (
-        <MetricCard value={widget.data_payload.value} delta={widget.data_payload.delta} caption={widget.data_payload.caption} />
-      );
-    case 'data_table':
-      return <DataTable columns={widget.data_payload.columns} rows={widget.data_payload.rows} />;
-    case 'task_list':
-      return <TaskList items={widget.data_payload.items} />;
-    case 'status_feed':
-      return <StatusFeed entries={widget.data_payload.entries} />;
-  }
+export interface WidgetViewProps {
+  widget: Widget;
+  trailing?: ReactNode;
+  onAskVigil?: (prompt?: string) => void;
+  onRefreshPanel?: () => void;
 }
 
 /**
- * One dashboard panel. Parses with safeParse and renders the fallback card on
- * any failure, so a bad row or an unknown type never blanks the rail.
+ * One A2UI dashboard panel. Parses with safeParse and renders FallbackCard on
+ * any failure, so a malformed row or unknown type never blanks the rail.
  */
-export function WidgetView({ widget }: { widget: Widget }) {
+export function WidgetView({ widget, trailing, onAskVigil, onRefreshPanel }: WidgetViewProps) {
   const parsed = widgetSchema.safeParse({
     id: widget.id,
     title: widget.title,
@@ -102,13 +80,32 @@ export function WidgetView({ widget }: { widget: Widget }) {
     version: widget.version,
     updated_at: widget.updated_at,
   });
+
   if (!parsed.success) {
     return <FallbackCard title={widget.title} updatedAt={widget.updated_at} />;
   }
+
+  const surface = parsed.data.data_payload as A2UISurfacePayload;
+  const Icon = resolveA2UIIcon(surface.icon);
+
   return (
     <div>
-      <div className="truncate pr-6 text-sm font-medium">{parsed.data.title}</div>
-      <div className="mt-2">{renderPayload(parsed.data)}</div>
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex min-w-0 items-center gap-2 text-[13px] font-semibold text-[var(--text)]">
+          <span className="shrink-0 text-[var(--text-muted)]">
+            <Icon size={15} strokeWidth={1.6} />
+          </span>
+          <span className="truncate">{parsed.data.title}</span>
+        </div>
+        {trailing ? <div className="flex shrink-0 items-center gap-0.5">{trailing}</div> : null}
+      </div>
+      <div className="mt-3">
+        <A2UISurface
+          surface={surface}
+          onAskVigil={onAskVigil}
+          onRefreshPanel={onRefreshPanel}
+        />
+      </div>
     </div>
   );
 }

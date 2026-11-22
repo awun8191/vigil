@@ -374,6 +374,40 @@ async def score_units(
     )
 
 
+def score_units_deterministic(
+    units: Sequence[HistoryUnit],
+    tier0: Tier0Selection,
+) -> Tier1Result:
+    """Assign compaction verdicts deterministically without calling Jev.
+
+    Tier 0 locked units and system messages are retained. Unlocked tool results
+    with an artifact reference become stubs; unlocked tool results without an
+    artifact and old unlocked assistant prose turns are dropped so Tier 2 can
+    summarize them when needed.
+    """
+    scores: dict[str, UnitScore] = {}
+    for unit in units:
+        if tier0.is_locked(unit.unit_id) or unit.kind is UnitKind.SYSTEM:
+            verdict = Verdict.RETAIN
+        elif unit.kind is UnitKind.TOOL_RESULT:
+            verdict = Verdict.STUB if unit.artifact_id else Verdict.DROP
+        else:
+            verdict = Verdict.DROP
+        scores[unit.unit_id] = UnitScore(
+            unit_id=unit.unit_id,
+            needed=1.0 if verdict is Verdict.RETAIN else 0.1,
+            user_fact=1.0 if unit.kind is UnitKind.USER else 0.0,
+            bulk=1.0 if verdict is Verdict.STUB else 0.0,
+            verdict=verdict,
+        )
+    return Tier1Result(
+        scores=scores,
+        jev_calls=0,
+        batch_sizes=(),
+        unscored_ids=frozenset(),
+    )
+
+
 def resolve_verdicts(
     units: Sequence[HistoryUnit],
     tier1: Tier1Result,

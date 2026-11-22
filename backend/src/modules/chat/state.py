@@ -50,6 +50,7 @@ class InMemoryChatRepository:
         self,
         user_id: UUID,
         title: str | None = None,
+        kind: str = "thread",
     ) -> ChatSessionDTO:
         session = ChatSessionDTO(
             session_id=uuid4(),
@@ -58,10 +59,23 @@ class InMemoryChatRepository:
             created_at=_now(),
             updated_at=_now(),
             message_count=0,
+            kind=kind,
         )
         self._sessions[session.session_id] = session
         self._messages[session.session_id] = []
         return session
+
+    async def get_or_create_primary_session(self, user_id: UUID) -> ChatSessionDTO:
+        """Return the user's single primary ambient session, creating it if absent."""
+        ambient = [
+            s
+            for s in self._sessions.values()
+            if s.user_id == user_id and s.kind == "ambient"
+        ]
+        if ambient:
+            ambient.sort(key=lambda s: (s.updated_at, s.created_at), reverse=True)
+            return ambient[0]
+        return await self.create_session(user_id, title="Primary Stream", kind="ambient")
 
     async def save_message(self, data: ChatMessageCreateDTO) -> ChatMessageDTO:
         msg = ChatMessageDTO(
@@ -94,6 +108,24 @@ class InMemoryChatRepository:
         ]
         return rows[offset : offset + limit]
 
+    async def get_recent_history(
+        self,
+        session_id: UUID,
+        limit: int = 100,
+        before_id: UUID | None = None,
+    ) -> list[ChatMessageDTO]:
+        """Return up to `limit` newest history turns in chronological order."""
+        rows = [
+            msg
+            for msg in self._messages.get(session_id, [])
+            if msg.role in CHAT_HISTORY_ROLES
+        ]
+        if before_id is not None:
+            idx = next((i for i, m in enumerate(rows) if m.id == before_id), None)
+            if idx is not None:
+                rows = rows[:idx]
+        return rows[-limit:]
+
     async def delete_session(self, session_id: UUID) -> bool:
         if session_id not in self._sessions:
             return False
@@ -123,6 +155,10 @@ class SqlChatRepository:
             created_at=model.created_at,
             updated_at=model.updated_at,
             message_count=message_count,
+            kind=getattr(model, "kind", "ambient") or "ambient",
+            rolling_summary=getattr(model, "rolling_summary", None),
+            compacted_through_message_id=getattr(model, "compacted_through_message_id", None),
+            compacted_through_at=getattr(model, "compacted_through_at", None),
         )
 
     @staticmethod
@@ -171,11 +207,45 @@ class SqlChatRepository:
         self,
         user_id: UUID,
         title: str | None = None,
+        kind: str = "thread",
     ) -> ChatSessionDTO:
-        model = ThreadModel(id=uuid4(), user_id=user_id, title=title or "New Chat")
+        model = ThreadModel(id=uuid4(), user_id=user_id, title=title or "New Chat", kind=kind)
         self.session.add(model)
         await self.session.flush()
         return self._session_dto(model, 0)
+
+    async def get_or_create_primary_session(self, user_id: UUID) -> ChatSessionDTO:
+        """Return the user's single primary ambient session, creating it idempotently."""
+        from sqlalchemy.exc import IntegrityError
+
+        count_sub = (
+            select(func.count(MessageModel.id))
+            .where(*self._history_filter(ThreadModel.id))
+            .correlate(ThreadModel)
+            .scalar_subquery()
+        )
+        stmt = (
+            select(ThreadModel, count_sub.label("message_count"))
+            .where(ThreadModel.user_id == user_id, ThreadModel.kind == "ambient")
+            .order_by(ThreadModel.updated_at.desc(), ThreadModel.created_at.desc())
+            .limit(1)
+        )
+        row = (await self.session.execute(stmt)).first()
+        if row is not None:
+            thread, count = row
+            return self._session_dto(thread, int(count))
+
+        try:
+            async with self.session.begin_nested():
+                return await self.create_session(
+                    user_id, title="Primary Stream", kind="ambient"
+                )
+        except IntegrityError:
+            row = (await self.session.execute(stmt)).first()
+            if row is not None:
+                thread, count = row
+                return self._session_dto(thread, int(count))
+            raise
 
     async def save_message(self, data: ChatMessageCreateDTO) -> ChatMessageDTO:
         thread = await self.session.get(ThreadModel, data.session_id)
@@ -194,7 +264,7 @@ class SqlChatRepository:
         return self._message_dto(msg)
 
     @staticmethod
-    def _history_filter(session_id: UUID) -> tuple[Any, ...]:
+    def _history_filter(session_id: Any) -> tuple[Any, ...]:
         """Return the WHERE terms the chat view applies to one thread.
 
         A user row is always history. An assistant row is history only when it
@@ -238,6 +308,36 @@ class SqlChatRepository:
             .limit(limit)
         )
         return [self._message_dto(m) for m in result.scalars().all()]
+
+    async def get_recent_history(
+        self,
+        session_id: UUID,
+        limit: int = 100,
+        before_id: UUID | None = None,
+    ) -> list[ChatMessageDTO]:
+        """Return up to `limit` newest history turns in chronological order."""
+        filters = list(self._history_filter(session_id))
+        if before_id is not None:
+            anchor = await self.session.get(MessageModel, before_id)
+            if anchor is not None and anchor.session_id == session_id:
+                filters.append(
+                    or_(
+                        MessageModel.created_at < anchor.created_at,
+                        and_(
+                            MessageModel.created_at == anchor.created_at,
+                            MessageModel.id < anchor.id,
+                        ),
+                    )
+                )
+        result = await self.session.execute(
+            select(MessageModel)
+            .where(*filters)
+            .order_by(MessageModel.created_at.desc(), MessageModel.id.desc())
+            .limit(limit)
+        )
+        rows = list(result.scalars().all())
+        rows.reverse()
+        return [self._message_dto(m) for m in rows]
 
     async def delete_session(self, session_id: UUID) -> bool:
         model = await self.session.get(ThreadModel, session_id)

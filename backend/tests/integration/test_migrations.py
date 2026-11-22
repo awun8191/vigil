@@ -92,7 +92,7 @@ def test_alembic_offline_sql_generation(alembic_config: Config, capsys: pytest.C
     assert "UNIQUE (item_id, model_version)" in sql_text
     assert "DROP COLUMN enabled_tools" in sql_text
     assert "CREATE TABLE widgets" in sql_text
-    assert "widget_type in ('metric_card', 'data_table', 'task_list', 'status_feed')" in sql_text
+    assert "widget_type in ('a2ui_surface')" in sql_text
     assert "refresh_interval_minutes in (15, 60, 240, 1440)" in sql_text
     assert "CREATE INDEX ix_widgets_user_id ON widgets (user_id)" in sql_text
     assert "CREATE INDEX ix_widgets_user_refresh ON widgets (user_id, next_refresh_at)" in sql_text

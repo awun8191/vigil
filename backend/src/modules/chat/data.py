@@ -19,6 +19,14 @@ class ChatSessionResponse(BaseModel):
     created_at: datetime = Field(..., description="Creation UTC timestamp.")
     updated_at: datetime = Field(..., description="Last message timestamp.")
     message_count: int = Field(default=0, description="Total turns in session.")
+    kind: str = Field(default="ambient", description="Session kind ('ambient' or 'legacy').")
+    rolling_summary: str | None = Field(default=None, description="Latest rolling compaction summary.")
+    compacted_through_message_id: UUID | None = Field(
+        default=None, description="Last message UUID absorbed into rolling_summary."
+    )
+    compacted_through_at: datetime | None = Field(
+        default=None, description="Timestamp cursor of compacted_through_message_id."
+    )
 
 
 class SendChatMessageRequest(BaseModel):

@@ -144,6 +144,48 @@ class SqlMemoryIndexStore:
             )
         return messages
 
+    async def fetch_recent_indexed(
+        self, session_id: UUID, limit: int = 2
+    ) -> list[IndexableMessage]:
+        """Return up to `limit` latest already-indexed user/assistant turns in chronological order."""
+        if limit <= 0:
+            return []
+        statement = (
+            select(
+                MessageModel.id,
+                MessageModel.session_id,
+                ThreadModel.user_id,
+                MessageModel.role,
+                MessageModel.content,
+            )
+            .join(ThreadModel, ThreadModel.id == MessageModel.session_id)
+            .where(
+                MessageModel.session_id == session_id,
+                MessageModel.indexed_at.is_not(None),
+                MessageModel.role.in_(("user", "assistant")),
+                MessageModel.content.is_not(None),
+            )
+            .order_by(MessageModel.created_at.desc(), MessageModel.id.desc())
+            .limit(limit)
+        )
+        rows = list((await self.session.execute(statement)).all())
+        rows.reverse()
+        messages: list[IndexableMessage] = []
+        for row in rows:
+            content = row[4]
+            if not content or not content.strip():
+                continue
+            messages.append(
+                IndexableMessage(
+                    id=row[0],
+                    session_id=row[1],
+                    user_id=row[2],
+                    role=row[3],
+                    content=content,
+                )
+            )
+        return messages
+
     async def add_chunks(self, chunks: Sequence[MemoryChunkCreateDTO]) -> int:
         if not chunks:
             return 0
@@ -348,12 +390,27 @@ class MemoryService:
             return IndexResult(messages_indexed=0, chunks_created=0, windows=0, skipped=True)
 
         message_ids = [message.id for message in messages]
+        new_id_set = set(message_ids)
         indexed_at = datetime.now(timezone.utc)
+
+        overlap_messages: list[IndexableMessage] = []
+        recent_fn = getattr(index_store, "fetch_recent_indexed", None)
+        if callable(recent_fn):
+            overlap_messages = [
+                m
+                for m in await recent_fn(session_id, 2)
+                if m.id not in new_id_set
+            ]
+
         turns = [
             MemoryTurn(message_id=message.id, role=message.role, content=message.content)
-            for message in messages
+            for message in [*overlap_messages, *messages]
         ]
-        windows = self._chunker_for(model).segment(turns)
+        windows = [
+            window
+            for window in self._chunker_for(model).segment(turns)
+            if any(mid in new_id_set for mid in window.source_message_ids)
+        ]
         if not windows:
             await index_store.mark_indexed(message_ids, indexed_at)
             await index_store.commit()

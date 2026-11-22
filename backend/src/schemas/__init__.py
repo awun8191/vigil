@@ -11,6 +11,7 @@ from src.schemas.connectors import (
 )
 from src.schemas.identity import DeviceModel, UserModel
 from src.schemas.memory import MemoryChunkModel
+from src.schemas.projects import ProjectModel
 from src.schemas.runtime import (
     AgentConfigModel,
     ApprovalModel,
@@ -58,6 +59,8 @@ __all__ = [
     "ArtifactModel",
     # memory.py
     "MemoryChunkModel",
+    # projects.py
+    "ProjectModel",
     # skills.py
     "SkillModel",
     # system.py

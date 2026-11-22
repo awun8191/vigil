@@ -40,6 +40,7 @@ from src.modules.skills.repository import SkillsRepository
 from src.modules.connectors.repository import ConnectorsRepository
 from src.modules.settings.repository import SettingsRepository
 from src.modules.jobs.repository import JobsRepository
+from src.modules.projects.repository import ProjectsRepository
 
 EXPECTED_PROVIDERS = [
     # Core Dependencies (4)
@@ -65,6 +66,7 @@ EXPECTED_PROVIDERS = [
     "get_audit_service",
     "get_jobs_service",
     "get_key_vault_service",
+    "get_projects_service",
     "get_widgets_service",
     # External integrations (5)
     "get_jev_client",
@@ -154,6 +156,7 @@ DOMAIN_SERVICE_SPECS = [
     ("get_connectors_service", ConnectorsRepository),
     ("get_settings_service", SettingsRepository),
     ("get_jobs_service", JobsRepository),
+    ("get_projects_service", ProjectsRepository),
 ]
 
 

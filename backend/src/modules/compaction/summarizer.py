@@ -12,6 +12,7 @@ decision in the input raises an error.
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import Any, Sequence
 
@@ -70,6 +71,26 @@ SUMMARIZER_SYSTEM_PROMPT = (
     "3. Do not add advice or a new plan.\n"
     "4. Write plain text. Do not use markdown.\n"
 )
+
+SUMMARIZER_ROLLING_SYSTEM_PROMPT = (
+    "Role: session rolling compaction summarizer.\n"
+    "Task: fold the previous session summary (if any) and newly rolled-off user/assistant turns into one concise updated summary.\n"
+    "Answer with exactly these three headings, in this order:\n"
+    "What happened:\n"
+    "Decisions:\n"
+    "Open items:\n"
+    "Rules:\n"
+    "1. Write concise factual sentences in each section preserving key context, preferences, goals, and outcomes.\n"
+    "2. Merge still-relevant facts from the previous summary with the new turns; drop stale superseded details.\n"
+    "3. State only facts from the provided summary and turns. Do not invent advice or plans.\n"
+    "4. Write plain text. Do not use markdown.\n"
+)
+
+_THINKING_BLOCK_RE = re.compile(
+    r"<(?:think|thinking)>.*?</(?:think|thinking)>",
+    flags=re.IGNORECASE | re.DOTALL,
+)
+_ROLLING_ALLOWED_KINDS = frozenset({UnitKind.USER, UnitKind.ASSISTANT})
 
 
 class SummarizerError(RuntimeError):
@@ -147,6 +168,14 @@ class SummaryBlock:
     def fits_budget(self) -> bool:
         """True when the block is inside its token budget."""
         return self.tokens <= self.budget_tokens
+
+
+def strip_thinking_blocks(text: str) -> str:
+    """Remove `<think>...</think>` and `<thinking>...</thinking>` traces from prose."""
+    if not text:
+        return ""
+    cleaned = _THINKING_BLOCK_RE.sub("", text)
+    return cleaned.strip()
 
 
 def normalize_text(text: str) -> str:
@@ -330,6 +359,37 @@ def build_prompt(
     return "\n".join(lines)
 
 
+def build_rolling_prompt(
+    previous_summary: str | None,
+    sources: Sequence[SummarySource],
+    limit: int = SOURCE_CHARS_LIMIT,
+    max_chars: int = MAX_PROMPT_CHARS,
+) -> str:
+    """Build the rolling compaction prompt from previous summary + clean user/assistant prose."""
+    parts: list[str] = []
+    if previous_summary and previous_summary.strip():
+        parts.append(f"Previous session summary:\n{previous_summary.strip()}")
+
+    blocks = [
+        f"{source.role}: {bound_source(strip_thinking_blocks(source.content), limit)}"
+        for source in sources
+        if strip_thinking_blocks(source.content)
+    ]
+
+    budget = max(1000, max_chars - sum(len(p) for p in parts))
+    selected = blocks
+    omitted = 0
+    while selected and len("\n".join(selected)) > budget:
+        selected = selected[1:]
+        omitted += 1
+
+    parts.append("Newly rolled-off conversation turns:")
+    if omitted:
+        parts.append(f"[... {omitted} earlier turns omitted ...]")
+    parts.extend(selected)
+    return "\n\n".join(parts)
+
+
 class CompactionSummarizer:
     """Tier 2 summarizer. It calls the Fast LLM tier once per compaction."""
 
@@ -390,6 +450,66 @@ class CompactionSummarizer:
             messages=[
                 {"role": "system", "content": SUMMARIZER_SYSTEM_PROMPT},
                 {"role": "user", "content": build_prompt(items)},
+            ],
+            tools=None,
+            temperature=0.0,
+            tier=SUMMARY_TIER,
+            max_tokens=self.max_tokens,
+        )
+        answer = getattr(response, "content", None)
+        sections, truncated = fit_sections(
+            parse_sections("" if answer is None else str(answer)),
+            self.token_counter,
+            self.max_tokens,
+        )
+        text = render_block(sections)
+
+        return SummaryBlock(
+            text=text,
+            sections=sections,
+            tokens=self.token_counter.count(text),
+            budget_tokens=self.max_tokens,
+            model=self.model,
+            source_unit_ids=tuple(source.unit_id for source in items),
+            source_tokens=sum(source.tokens for source in items),
+            truncated=truncated,
+        )
+
+    async def summarize_rolling(
+        self,
+        previous_summary: str | None,
+        sources: Sequence[SummarySource],
+    ) -> SummaryBlock | None:
+        """Fold `previous_summary` and rolled-off user/assistant prose into one bounded block.
+
+        Tool results, tool calls, approvals, and thinking traces are rejected or stripped.
+        """
+        items = tuple(sources)
+        if not items:
+            return None
+
+        for source in items:
+            if source.kind not in _ROLLING_ALLOWED_KINDS:
+                raise SummaryInputError(
+                    f"Rolling compaction accepts only user/assistant prose, got {source.kind.value}: {source.unit_id}"
+                )
+
+        if self.llm is None:
+            raise SummarizerError(
+                "Rolling compaction needs the Fast LLM client. Configure FAST_LLM_API_KEY and pass fast_llm."
+            )
+        overhead = self.token_counter.count(render_block(parse_sections("")))
+        if self.max_tokens < overhead:
+            raise SummarizerError(
+                f"The summary budget of {self.max_tokens} tokens cannot hold the "
+                f"three headings. The minimum is {overhead} tokens."
+            )
+
+        prompt = build_rolling_prompt(previous_summary, items)
+        response: Any = await self.llm.complete(
+            messages=[
+                {"role": "system", "content": SUMMARIZER_ROLLING_SYSTEM_PROMPT},
+                {"role": "user", "content": prompt},
             ],
             tools=None,
             temperature=0.0,

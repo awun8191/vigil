@@ -88,6 +88,7 @@ class MCPToolRegistryExecutor:
             run_id=getattr(self.inner, "run_id", None),
             user_id=getattr(self.inner, "user_id", None),
             session=getattr(self.inner, "session", None),
+            workspace_dir=getattr(self.inner, "workspace_dir", None),
         )
         res = await tool.invoke(arguments, ctx)
         artifact_id: UUID | None = None
@@ -226,7 +227,14 @@ class RunsService:
                     declared.append(btool.name)
                     seen.add(btool.name)
         if "manage_tasks" in seen or "skill_load" in seen:
-            for core_tool in ("memory", "memory_search", "raise_card"):
+            for core_tool in (
+                "memory",
+                "memory_search",
+                "raise_card",
+                "create_widget",
+                "update_widget",
+                "delete_widget",
+            ):
                 if core_tool in TOOLS and core_tool not in seen:
                     declared.append(core_tool)
                     seen.add(core_tool)
@@ -352,6 +360,11 @@ class RunsService:
                     )
                     self.register_mcp_tool(adapted)
         except Exception as exc:  # noqa: BLE001 - degraded DB must not break built-in tools
+            if self.session is not None and not getattr(self.session, "is_active", True):
+                try:
+                    await self.session.rollback()
+                except Exception:
+                    pass
             get_logger("virgil.runs.service").warning(
                 "Could not hydrate MCP tools for run",
                 error=str(exc),
@@ -754,12 +767,60 @@ class RunsService:
 
     # -- domain orchestration ---------------------------------------------
 
+    @staticmethod
+    def _attachment_tool_hint(name: str, content_type: str) -> str:
+        """Return an actionable tool recommendation for an attached file."""
+        ext = Path(name).suffix.lower()
+        ctype = (content_type or "").lower()
+        wpath = f"/workspace/{name}"
+        if ext in (".png", ".jpg", ".jpeg", ".webp", ".gif") or ctype.startswith("image/"):
+            return f'Use `view_image(path="{wpath}")` to inspect the image content.'
+        if ext in (".pdf", ".docx", ".xlsx", ".xlsm", ".pptx", ".csv", ".tsv", ".json", ".zip", ".tar", ".tgz", ".gz"):
+            return f'Use `read_document(path="{wpath}")` to extract the full structured content.'
+        return f'Use `read(path="{wpath}")` or `read_document(path="{wpath}")` to read the file.'
+
+    @classmethod
+    def _format_prompt_with_attachments(
+        cls,
+        initial_prompt: str | None,
+        attachments: Sequence[Any] | None,
+    ) -> str | None:
+        """Combine the user's message with a structured /workspace attachment manifest."""
+        items = list(attachments or ())
+        if not items:
+            return initial_prompt
+        base = (initial_prompt or "").strip() or "Please inspect the attached file(s) and help me with them."
+        if "[Attached Files in /workspace]" in base:
+            return base
+        lines = [base, "", "[Attached Files in /workspace]"]
+        for raw in items:
+            if isinstance(raw, Mapping):
+                name = str(raw.get("name") or "attachment")
+                wpath = str(raw.get("workspace_path") or f"/workspace/{name}")
+                ctype = str(raw.get("content_type") or "application/octet-stream")
+                size = int(raw.get("size_bytes") or 0)
+                preview = str(raw.get("preview") or "").strip()
+            else:
+                name = str(getattr(raw, "name", "attachment"))
+                wpath = str(getattr(raw, "workspace_path", f"/workspace/{name}"))
+                ctype = str(getattr(raw, "content_type", "application/octet-stream"))
+                size = int(getattr(raw, "size_bytes", 0) or 0)
+                preview = str(getattr(raw, "preview", "") or "").strip()
+            hint = cls._attachment_tool_hint(name, ctype)
+            lines.append(f"- `{name}` (path: `{wpath}`, type: `{ctype}`, size: {size} B) — {hint}")
+            if preview:
+                compact_preview = " ".join(preview.splitlines())[:280]
+                lines.append(f"  Preview: {compact_preview}")
+        return "\n".join(lines)
+
     async def start_run(
         self,
         config_id: UUID,
         card_id: UUID | None = None,
         initial_prompt: str | None = None,
         session_id: UUID | None = None,
+        project_id: UUID | None = None,
+        attachments: Sequence[Any] | None = None,
     ) -> RunDTO:
         """
         Create a run, store the opening prompt, and queue its execution.
@@ -773,6 +834,8 @@ class RunsService:
             initial_prompt: Optional opening user message.
             session_id: Optional chat session that owns the run. The session
                 receives an index job when the run completes.
+            project_id: Optional scoped project workspace attached to the run.
+            attachments: Optional uploaded file descriptors staged in /workspace.
 
         Returns:
             The queued run.
@@ -784,15 +847,109 @@ class RunsService:
         if config is None:
             raise NotFoundError(f"Agent config {config_id} not found")
         run = await self.journal.create_run(
-            RunCreateDTO(config_id=config_id, card_id=card_id, status="queued")
+            RunCreateDTO(
+                config_id=config_id,
+                card_id=card_id,
+                status="queued",
+                project_id=project_id,
+            )
         )
-        if initial_prompt:
+        workspace_dir: Path | None = None
+        if project_id is not None and self.session is not None:
+            try:
+                from src.modules.projects.service import ProjectsService
+
+                project = await ProjectsService(
+                    session=self.session, settings=self.settings
+                ).get_project(project_id)
+                if project is not None:
+                    workspace_dir = Path(project.workspace_path)
+                    await self.journal.set_workspace_ref(run.id, project.workspace_path)
+            except Exception:
+                if not getattr(self.session, "is_active", True):
+                    try:
+                        await self.session.rollback()
+                    except Exception:
+                        pass
+
+        attachment_list = list(attachments or ())
+        if attachment_list:
+            from src.modules.artifacts.repository import ArtifactCreateDTO
+            from src.modules.artifacts.service import ArtifactsService
+            from src.modules.projects.state import (
+                resolve_session_workspace_dir,
+                sanitize_workspace_filename,
+            )
+
+            if workspace_dir is None:
+                workspace_dir = resolve_session_workspace_dir(
+                    self.settings, session_id or run.id
+                )
+                await self.journal.set_workspace_ref(run.id, str(workspace_dir))
+            workspace_dir.mkdir(parents=True, exist_ok=True)
+            artifacts_svc = ArtifactsService(session=self.session, settings=self.settings)
+
+            for raw in attachment_list:
+                raw_name = (
+                    raw.get("name")
+                    if isinstance(raw, Mapping)
+                    else getattr(raw, "name", "attachment")
+                )
+                safe_name = sanitize_workspace_filename(str(raw_name or "attachment"))
+                raw_host_path = (
+                    raw.get("host_path")
+                    if isinstance(raw, Mapping)
+                    else getattr(raw, "host_path", None)
+                )
+                raw_size = int(
+                    (
+                        raw.get("size_bytes")
+                        if isinstance(raw, Mapping)
+                        else getattr(raw, "size_bytes", 0)
+                    )
+                    or 0
+                )
+                raw_preview = (
+                    raw.get("preview")
+                    if isinstance(raw, Mapping)
+                    else getattr(raw, "preview", None)
+                )
+                dest_path = (workspace_dir.resolve() / safe_name).resolve()
+                if raw_host_path:
+                    src_path = Path(str(raw_host_path))
+                    if src_path.is_file() and src_path.resolve() != dest_path:
+                        try:
+                            dest_path.write_bytes(src_path.read_bytes())
+                        except OSError:
+                            dest_path = src_path.resolve()
+                    elif src_path.is_file():
+                        dest_path = src_path.resolve()
+                actual_size = (
+                    dest_path.stat().st_size if dest_path.is_file() else raw_size
+                )
+                try:
+                    await artifacts_svc.save_artifact(
+                        ArtifactCreateDTO(
+                            run_id=run.id,
+                            kind="attachment",
+                            path=str(dest_path),
+                            size_bytes=actual_size,
+                            preview=str(raw_preview)[:500] if raw_preview else None,
+                        )
+                    )
+                except Exception:  # noqa: BLE001
+                    pass
+
+        effective_prompt = self._format_prompt_with_attachments(
+            initial_prompt, attachment_list
+        )
+        if effective_prompt:
             await self.journal.append_message(
                 MessageCreateDTO(
                     run_id=run.id,
                     session_id=session_id,
                     role="user",
-                    content=initial_prompt,
+                    content=effective_prompt,
                 )
             )
         await self.journal.enqueue_job(
@@ -919,11 +1076,31 @@ class RunsService:
             if required_skill not in merged_skills:
                 merged_skills.append(required_skill)
 
+        project_context: dict[str, Any] | None = None
+        if run.project_id is not None and self.session is not None:
+            try:
+                from src.modules.projects.service import ProjectsService
+
+                project = await ProjectsService(
+                    session=self.session, settings=self.settings
+                ).get_project(run.project_id)
+                if project is not None:
+                    project_context = {
+                        "name": project.name,
+                        "slug": project.slug,
+                        "workspace_path": project.workspace_path,
+                        "description": project.description,
+                        "instructions": project.instructions,
+                    }
+            except Exception:
+                project_context = None
+
         return compose_run_system_prompt(
             config.system_prompt,
             store=store,
             recalled_chunks=recalled_chunks,
             skills=merged_skills,
+            project_context=project_context,
         )
 
     async def _sync_card_status(self, card_id: UUID | None, status: str) -> None:

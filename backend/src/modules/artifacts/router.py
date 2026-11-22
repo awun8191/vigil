@@ -68,10 +68,9 @@ def build_artifacts_router(settings: Settings) -> APIRouter:
         service: ArtifactsRepository = Depends(get_artifacts_service),
         _device: DeviceDTO = Depends(get_current_device),
     ) -> StreamingResponse:
-        stream, filename, media_type, size = await service.get_artifact_stream(artifact_id)  # type: ignore[attr-defined]
+        stream, filename, media_type, _size = await service.get_artifact_stream(artifact_id)  # type: ignore[attr-defined]
         headers = {
             "Content-Disposition": f'attachment; filename="{filename}"',
-            "Content-Length": str(size),
         }
         return StreamingResponse(stream, media_type=media_type, headers=headers)
 
@@ -84,10 +83,9 @@ def build_artifacts_router(settings: Settings) -> APIRouter:
         service: ArtifactsRepository = Depends(get_artifacts_service),
         _device: DeviceDTO = Depends(get_current_device),
     ) -> StreamingResponse:
-        stream, filename, media_type, size = await service.get_artifact_stream(artifact_id)  # type: ignore[attr-defined]
+        stream, filename, media_type, _size = await service.get_artifact_stream(artifact_id)  # type: ignore[attr-defined]
         headers = {
             "Content-Disposition": f'inline; filename="{filename}"',
-            "Content-Length": str(size),
         }
         return StreamingResponse(stream, media_type=media_type, headers=headers)
 

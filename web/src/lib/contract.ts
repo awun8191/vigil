@@ -16,6 +16,11 @@ import type {
   MCPServerResponse,
   MCPToolResponse,
   PairingResponse,
+  Project,
+  ProjectCreateRequest,
+  ProjectDetail,
+  ProjectFile,
+  ProjectUpdateRequest,
   RegisterMCPServerRequest,
   UpdateMCPToolLevelRequest,
   Run,
@@ -23,6 +28,7 @@ import type {
   RunCreateRequest,
   RunMessageResponse,
   RunStep,
+  RunUploadResponse,
   SseEvent,
   SkillInstallRequest,
   SkillResponse,
@@ -80,6 +86,10 @@ export interface VigilApi {
    * before dispatching.
    */
   createRun(body: RunCreateRequest, scope: string): Promise<Run>;
+  uploadRunFiles(
+    files: File[],
+    opts?: { sessionId?: string | null; projectId?: string | null },
+  ): Promise<RunUploadResponse>;
   getRun(runId: string): Promise<Run>;
   /** Newest run whose messages carry the session, for re-subscription after a reload. */
   getLatestRun(sessionId: string): Promise<Run | null>;
@@ -110,9 +120,13 @@ export interface VigilApi {
     scope: string,
   ): Promise<ApprovalDecisionResponse>;
 
+  getPrimarySession(): Promise<ChatSession>;
   listSessions(): Promise<ChatSession[]>;
   createSession(title: string | undefined, scope: string): Promise<ChatSession>;
-  listMessages(sessionId: string): Promise<ChatMessage[]>;
+  listMessages(
+    sessionId: string,
+    opts?: { limit?: number; beforeId?: string },
+  ): Promise<ChatMessage[]>;
   sendMessage(sessionId: string, content: string, scope: string): Promise<ChatMessage>;
 
   health(): Promise<HealthStatus>;
@@ -174,5 +188,17 @@ export interface VigilApi {
     scope: string,
   ): Promise<{ excluded: boolean }>;
   deleteMemoryChunk(chunkId: string, scope: string): Promise<void>;
+
+  /* Scoped Project Workspaces */
+  listProjects(): Promise<Project[]>;
+  createProject(body: ProjectCreateRequest, scope: string): Promise<Project>;
+  getProject(projectId: string): Promise<ProjectDetail>;
+  updateProject(
+    projectId: string,
+    body: ProjectUpdateRequest,
+    scope: string,
+  ): Promise<Project>;
+  uploadProjectFiles(projectId: string, files: File[]): Promise<ProjectFile[]>;
+  deleteProject(projectId: string, scope: string): Promise<void>;
 }
 

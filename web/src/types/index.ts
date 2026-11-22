@@ -91,6 +91,10 @@ export interface ChatSession {
   created_at: string;
   updated_at: string;
   message_count: number;
+  kind?: string;
+  rolling_summary?: string | null;
+  compacted_through_message_id?: string | null;
+  compacted_through_at?: string | null;
 }
 
 export interface ChatMessage {
@@ -102,6 +106,20 @@ export interface ChatMessage {
   run_id?: string | null;
 }
 
+export interface RunAttachmentItem {
+  name: string;
+  workspace_path: string;
+  host_path?: string | null;
+  content_type: string;
+  size_bytes: number;
+  sha256?: string | null;
+  preview?: string | null;
+}
+
+export interface RunUploadResponse {
+  files: RunAttachmentItem[];
+}
+
 /** A message rendered in the stream, including optimistic and streaming-local entries.
  *  The local states are produced by `queries/chat.ts` and rendered by `MessageItem`. */
 export interface StreamMessage extends ChatMessage {
@@ -109,6 +127,7 @@ export interface StreamMessage extends ChatMessage {
   failure_reason?: string;
   failure_class?: FailureClass;
   idempotency_scope?: string;
+  attachments?: RunAttachmentItem[];
 }
 
 export type FailureClass = 'network' | 'rejected' | 'replayed';
@@ -128,6 +147,44 @@ export interface RunCreateRequest {
   initial_prompt?: string | null;
   /** Chat session that owns the run; the session receives a memory index job on completion. */
   session_id?: string | null;
+  /** Optional scoped project workspace attached to this run. */
+  project_id?: string | null;
+  /** Optional uploaded file attachments staged in /workspace for this run. */
+  attachments?: RunAttachmentItem[];
+}
+
+export interface Project {
+  id: string;
+  user_id: string;
+  name: string;
+  slug: string;
+  description: string | null;
+  workspace_path: string;
+  instructions: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ProjectCreateRequest {
+  name: string;
+  description?: string | null;
+  instructions?: string | null;
+}
+
+export interface ProjectUpdateRequest {
+  name?: string | null;
+  description?: string | null;
+  instructions?: string | null;
+}
+
+export interface ProjectFile {
+  path: string;
+  size_bytes: number;
+  updated_at: string;
+}
+
+export interface ProjectDetail extends Project {
+  files: ProjectFile[];
 }
 
 /** Response of GET /runs/configs/default, the server-side default agent configuration,
@@ -155,6 +212,7 @@ export interface Run {
   id: string;
   config_id: string;
   card_id: string | null;
+  project_id?: string | null;
   parent_run_id: string | null;
   depth: number;
   status: RunStatus;
@@ -471,7 +529,7 @@ export type StreamState = 'idle' | 'connecting' | 'open' | 'reconnecting' | 'clo
    Dashboard widgets. Shapes mirror backend/src/modules/widgets/data.py caps.
    ------------------------------------------------------------------------------------------- */
 
-export type WidgetType = 'metric_card' | 'data_table' | 'task_list' | 'status_feed';
+export type WidgetType = 'a2ui_surface';
 
 export interface Widget {
   id: string;

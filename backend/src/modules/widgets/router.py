@@ -14,6 +14,7 @@ from src.modules.widgets.data import (
     WidgetCreateRequest,
     WidgetResponse,
     WidgetUpdateRequest,
+    merge_a2ui_payload_update,
     validate_widget_payload,
 )
 from src.modules.widgets.repository import WidgetCreateDTO, WidgetUpdateDTO
@@ -136,7 +137,7 @@ def build_widgets_router(settings: Settings) -> APIRouter:
         if existing is None:
             raise NotFoundError(f"Widget {widget_id} not found")
         try:
-            parsed = validate_widget_payload(existing.widget_type, payload.data_payload)
+            parsed = merge_a2ui_payload_update(existing.data_payload, payload.data_payload)
         except (ValueError, PydanticValidationError) as exc:
             raise ValidationError(
                 f"payload does not match {existing.widget_type}: {exc}"

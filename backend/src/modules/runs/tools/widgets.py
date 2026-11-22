@@ -16,6 +16,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from src.modules.runs.tools import Tool, ToolContext, ToolResult
 from src.modules.widgets.data import (
     WidgetType,
+    merge_a2ui_payload_update,
     validate_widget_payload,
 )
 
@@ -25,11 +26,46 @@ class CreateWidgetArgs(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    title: str = Field(..., min_length=1, max_length=120)
-    widget_type: WidgetType = Field(...)
-    data_payload: dict[str, Any] = Field(...)
-    refresh: dict[str, Any] | None = Field(default=None)
-    refresh_interval_minutes: int | None = Field(default=None)
+    title: str = Field(
+        ...,
+        min_length=1,
+        max_length=120,
+        description="Short panel title shown in the dashboard rail header.",
+    )
+    widget_type: WidgetType = Field(
+        default="a2ui_surface",
+        description="Must be 'a2ui_surface'.",
+    )
+    data_payload: dict[str, Any] = Field(
+        ...,
+        description=(
+            "A2UI v0.9 surface specification object with keys: "
+            "'root' (str root component id), "
+            "'size' ('sm'|'md'|'lg', optional), "
+            "'icon' (optional: 'activity'|'calendar'|'check-square'|'clock'|'credit-card'|'flame'|'git-branch'|'globe'|'heart-pulse'|'inbox'|'layers'|'mail'|'music'|'package'|'sparkles'|'train-front'|'trending-up'|'zap'), "
+            "'components' (flat list of {id, component, props, children} where component is one of "
+            "'Column', 'Row', 'Divider', 'Metric', 'Sparkline', 'ProgressBar', 'Badge', 'KeyValueList', 'DataTable', 'Text', 'CheckList', 'Button'), "
+            "and 'data_model' (JSON object referenced by props via RFC 6901 JSON Pointers like {'path': '/summary/value'}). "
+            "CRITICAL: NEVER populate 'data_model' with invented or sample numbers, fake gigs, or placeholder tasks. "
+            "Use only real values retrieved from memory_search / connector tools, values explicitly provided by the user via ask_user, "
+            "or truthful zero/empty defaults ('0', '—', []). "
+            "Schema structure example: {'icon': 'clock', 'root': 'col_1', 'components': [{'id': 'col_1', 'component': 'Column', 'children': ['m_1', 'kv_1']}, "
+            "{'id': 'm_1', 'component': 'Metric', 'props': {'label': 'Tracked Total', 'value': {'path': '/total'}, 'tone': 'neutral'}}, "
+            "{'id': 'kv_1', 'component': 'KeyValueList', 'props': {'items': {'path': '/items'}}}], "
+            "'data_model': {'total': '0', 'items': []}}"
+        ),
+    )
+    refresh: dict[str, Any] | None = Field(
+        default=None,
+        description=(
+            "Optional refresh source: {'kind': 'connector_query', 'connector_id': 'gmail', 'query': 'is:unread'} "
+            "or {'kind': 'static'}."
+        ),
+    )
+    refresh_interval_minutes: int | None = Field(
+        default=None,
+        description="Optional refresh cadence in minutes. Must be one of: 15, 60, 240, 1440.",
+    )
 
 
 class UpdateWidgetArgs(BaseModel):
@@ -110,7 +146,13 @@ async def create_widget(args: CreateWidgetArgs, context: ToolContext) -> ToolRes
     try:
         parsed_payload = validate_widget_payload(args.widget_type, args.data_payload)
     except (ValueError, ValidationError) as exc:
-        return ToolResult.failure(f"payload does not match {args.widget_type}: {exc}")
+        return ToolResult.failure(
+            f"payload does not match {args.widget_type}: {exc}\n"
+            'Expected a2ui_surface shape: {"root": "main", "components": ['
+            '{"id": "main", "component": {"Column": {"children": {"explicitList": ["title_txt"]}}}}, '
+            '{"id": "title_txt", "component": {"Text": {"text": {"path": "/label"}, "variant": "h2"}}}], '
+            '"data_model": {"label": "Value"}, "catalog_id": "urn:vigil:a2ui:catalog:panels:v1"}'
+        )
     refresh_config, refresh_error = _parse_refresh(args.refresh)
     if refresh_error is not None:
         return ToolResult.failure(refresh_error)
@@ -162,7 +204,9 @@ async def update_widget(args: UpdateWidgetArgs, context: ToolContext) -> ToolRes
     if existing is None:
         return ToolResult.failure(f"widget {args.widget_id} not found")
     try:
-        parsed_payload = validate_widget_payload(existing.widget_type, args.data_payload)
+        parsed_payload = merge_a2ui_payload_update(
+            existing.data_payload, args.data_payload
+        )
     except (ValueError, ValidationError) as exc:
         return ToolResult.failure(
             f"payload does not match {existing.widget_type}: {exc}"
@@ -194,8 +238,8 @@ WIDGET_TOOLS: tuple[Tool, ...] = (
     Tool.define(
         name="create_widget",
         description=(
-            "Create a dashboard widget for the user: a metric card, data table, "
-            "task list, or status feed."
+            "Create a persistent A2UI (v0.9) dashboard panel for the user using catalog "
+            "'urn:vigil:a2ui:catalog:panels:v1' (flat components list + JSON Pointer data_model)."
         ),
         level="local",
         args_model=CreateWidgetArgs,
@@ -203,7 +247,10 @@ WIDGET_TOOLS: tuple[Tool, ...] = (
     ),
     Tool.define(
         name="update_widget",
-        description="Replace the data payload of one dashboard widget the user owns.",
+        description=(
+            "Update an owned A2UI dashboard widget's data_model (via {'data_model': ...} or "
+            "{'updateDataModel': ...}) or replace its full A2UI surface layout and data."
+        ),
         level="local",
         args_model=UpdateWidgetArgs,
         handler=update_widget,

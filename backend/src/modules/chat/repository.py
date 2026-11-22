@@ -16,6 +16,10 @@ class ChatSessionDTO:
     created_at: datetime
     updated_at: datetime
     message_count: int = 0
+    kind: str = "ambient"
+    rolling_summary: str | None = None
+    compacted_through_message_id: UUID | None = None
+    compacted_through_at: datetime | None = None
 
 
 @dataclass(frozen=True)

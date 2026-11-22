@@ -1,10 +1,4 @@
-"""Unit tests for the create_widget and update_widget tools.
-
-Identity always comes from the ToolContext, never from tool args. The
-context carries a stub session that shares one in-memory widget store per
-test, so tool writes use the same memory semantics as the service tests
-without touching a database.
-"""
+"""Unit tests for the create_widget, update_widget, and delete_widget A2UI tools."""
 from __future__ import annotations
 
 from dataclasses import replace
@@ -22,6 +16,29 @@ from src.modules.widgets.service import WidgetsService
 
 _WIDGETS_MEMORY: dict[UUID, Any] = {}
 """In-memory widget rows shared by every service in one test."""
+
+
+def _a2ui_payload(value: str = "1") -> dict[str, Any]:
+    """Return a valid A2UI v0.9 surface payload."""
+    return {
+        "root": "col_root",
+        "components": [
+            {
+                "id": "col_root",
+                "component": "Column",
+                "children": ["kpi_1"],
+            },
+            {
+                "id": "kpi_1",
+                "component": "Metric",
+                "props": {
+                    "label": "Score",
+                    "value": {"path": "/value"},
+                },
+            },
+        ],
+        "data_model": {"value": value},
+    }
 
 
 def _test_session() -> Any:
@@ -64,34 +81,39 @@ def test_widget_tools_are_local() -> None:
 
 
 async def test_create_widget_success(tmp_path: Path) -> None:
-    """A valid call creates a row scoped to the context user."""
+    """A valid A2UI call creates a row scoped to the context user."""
     owner = uuid4()
-    result = await invoke_tool(
-        "create_widget",
-        {"title": "Panel", "widget_type": "metric_card", "data_payload": {"value": "1"}},
-        _context(owner, tmp_path),
-    )
-    assert result.ok, result.error
-    assert result.content["version"] == 1
-    assert result.content["widget_type"] == "metric_card"
-    service = _service()
-    stored = await service.get_widget(UUID(result.content["widget_id"]), owner)
-    assert stored is not None
-
-
-async def test_create_widget_rejects_mismatch(tmp_path: Path) -> None:
-    """A table payload for a metric card fails instead of raising."""
     result = await invoke_tool(
         "create_widget",
         {
             "title": "Panel",
-            "widget_type": "metric_card",
+            "widget_type": "a2ui_surface",
+            "data_payload": _a2ui_payload("1"),
+        },
+        _context(owner, tmp_path),
+    )
+    assert result.ok, result.error
+    assert result.content["version"] == 1
+    assert result.content["widget_type"] == "a2ui_surface"
+    service = _service()
+    stored = await service.get_widget(UUID(result.content["widget_id"]), owner)
+    assert stored is not None
+    assert stored.data_payload["data_model"]["value"] == "1"
+
+
+async def test_create_widget_rejects_mismatch(tmp_path: Path) -> None:
+    """A malformed non-A2UI payload fails instead of raising."""
+    result = await invoke_tool(
+        "create_widget",
+        {
+            "title": "Panel",
+            "widget_type": "a2ui_surface",
             "data_payload": {"columns": ["a"], "rows": []},
         },
         _context(uuid4(), tmp_path),
     )
     assert not result.ok
-    assert "metric_card" in (result.error or "")
+    assert "a2ui_surface" in (result.error or "")
 
 
 async def test_create_widget_rejects_none_identity(tmp_path: Path) -> None:
@@ -101,7 +123,11 @@ async def test_create_widget_rejects_none_identity(tmp_path: Path) -> None:
     )
     result = await invoke_tool(
         "create_widget",
-        {"title": "Panel", "widget_type": "metric_card", "data_payload": {"value": "1"}},
+        {
+            "title": "Panel",
+            "widget_type": "a2ui_surface",
+            "data_payload": _a2ui_payload("1"),
+        },
         context,
     )
     assert not result.ok
@@ -113,8 +139,8 @@ async def test_create_widget_rejects_user_id_arg(tmp_path: Path) -> None:
         "create_widget",
         {
             "title": "Panel",
-            "widget_type": "metric_card",
-            "data_payload": {"value": "1"},
+            "widget_type": "a2ui_surface",
+            "data_payload": _a2ui_payload("1"),
             "user_id": str(uuid4()),
         },
         _context(uuid4(), tmp_path),
@@ -129,8 +155,8 @@ async def test_create_widget_rejects_bad_interval(tmp_path: Path) -> None:
         "create_widget",
         {
             "title": "Panel",
-            "widget_type": "metric_card",
-            "data_payload": {"value": "1"},
+            "widget_type": "a2ui_surface",
+            "data_payload": _a2ui_payload("1"),
             "refresh_interval_minutes": 5,
         },
         _context(uuid4(), tmp_path),
@@ -145,8 +171,8 @@ async def test_create_widget_enqueues_connector_refresh(tmp_path: Path) -> None:
         "create_widget",
         {
             "title": "Panel",
-            "widget_type": "status_feed",
-            "data_payload": {"entries": []},
+            "widget_type": "a2ui_surface",
+            "data_payload": _a2ui_payload("1"),
             "refresh": {"kind": "connector_query", "connector_id": "gmail", "query": "is:unread"},
             "refresh_interval_minutes": 60,
         },
@@ -164,21 +190,33 @@ async def test_create_widget_enqueues_connector_refresh(tmp_path: Path) -> None:
 
 
 async def test_update_widget_success(tmp_path: Path) -> None:
-    """A matching payload update bumps the version."""
+    """A data_model update bumps the version while keeping A2UI components frozen."""
     owner = uuid4()
     created = await invoke_tool(
         "create_widget",
-        {"title": "Panel", "widget_type": "metric_card", "data_payload": {"value": "1"}},
+        {
+            "title": "Panel",
+            "widget_type": "a2ui_surface",
+            "data_payload": _a2ui_payload("1"),
+        },
         _context(owner, tmp_path),
     )
     assert created.ok
     updated = await invoke_tool(
         "update_widget",
-        {"widget_id": created.content["widget_id"], "data_payload": {"value": "2"}},
+        {
+            "widget_id": created.content["widget_id"],
+            "data_payload": {"data_model": {"value": "2"}},
+        },
         _context(owner, tmp_path),
     )
     assert updated.ok, updated.error
     assert updated.content["version"] == 2
+    service = _service()
+    stored = await service.get_widget(UUID(created.content["widget_id"]), owner)
+    assert stored is not None
+    assert stored.data_payload["data_model"]["value"] == "2"
+    assert stored.data_payload["root"] == "col_root"
 
 
 async def test_create_widget_rejects_missing_session(tmp_path: Path) -> None:
@@ -186,7 +224,11 @@ async def test_create_widget_rejects_missing_session(tmp_path: Path) -> None:
     context = replace(_context(uuid4(), tmp_path), session=None)
     result = await invoke_tool(
         "create_widget",
-        {"title": "Panel", "widget_type": "metric_card", "data_payload": {"value": "1"}},
+        {
+            "title": "Panel",
+            "widget_type": "a2ui_surface",
+            "data_payload": _a2ui_payload("1"),
+        },
         context,
     )
     assert not result.ok
@@ -199,7 +241,7 @@ async def test_update_widget_rejects_missing_session(tmp_path: Path) -> None:
     context = replace(_context(uuid4(), tmp_path), session=None)
     result = await invoke_tool(
         "update_widget",
-        {"widget_id": str(uuid4()), "data_payload": {"value": "2"}},
+        {"widget_id": str(uuid4()), "data_payload": {"data_model": {"value": "2"}}},
         context,
     )
     assert not result.ok
@@ -211,13 +253,20 @@ async def test_update_widget_rejects_cross_user(tmp_path: Path) -> None:
     owner = uuid4()
     created = await invoke_tool(
         "create_widget",
-        {"title": "Panel", "widget_type": "metric_card", "data_payload": {"value": "1"}},
+        {
+            "title": "Panel",
+            "widget_type": "a2ui_surface",
+            "data_payload": _a2ui_payload("1"),
+        },
         _context(owner, tmp_path),
     )
     assert created.ok
     denied = await invoke_tool(
         "update_widget",
-        {"widget_id": created.content["widget_id"], "data_payload": {"value": "2"}},
+        {
+            "widget_id": created.content["widget_id"],
+            "data_payload": {"data_model": {"value": "2"}},
+        },
         _context(uuid4(), tmp_path),
     )
     assert not denied.ok
@@ -233,7 +282,11 @@ async def test_update_widget_rejects_mismatch(tmp_path: Path) -> None:
     owner = uuid4()
     created = await invoke_tool(
         "create_widget",
-        {"title": "Panel", "widget_type": "metric_card", "data_payload": {"value": "1"}},
+        {
+            "title": "Panel",
+            "widget_type": "a2ui_surface",
+            "data_payload": _a2ui_payload("1"),
+        },
         _context(owner, tmp_path),
     )
     assert created.ok
@@ -259,7 +312,7 @@ async def test_update_widget_rejects_none_identity(tmp_path: Path) -> None:
     )
     result = await invoke_tool(
         "update_widget",
-        {"widget_id": str(uuid4()), "data_payload": {"value": "1"}},
+        {"widget_id": str(uuid4()), "data_payload": {"data_model": {"value": "1"}}},
         context,
     )
     assert not result.ok
@@ -269,7 +322,7 @@ async def test_update_widget_bad_args_do_not_raise(tmp_path: Path) -> None:
     """A missing widget_id returns a failed result instead of raising."""
     result = await invoke_tool(
         "update_widget",
-        {"data_payload": {"value": "1"}},
+        {"data_payload": {"data_model": {"value": "1"}}},
         _context(uuid4(), tmp_path),
     )
     assert not result.ok
@@ -285,8 +338,8 @@ def test_widget_arg_models_forbid_extra() -> None:
         CreateWidgetArgs.model_validate(
             {
                 "title": "t",
-                "widget_type": "metric_card",
-                "data_payload": {"value": "1"},
+                "widget_type": "a2ui_surface",
+                "data_payload": _a2ui_payload("1"),
                 "user_id": str(uuid4()),
             }
         )
@@ -294,7 +347,7 @@ def test_widget_arg_models_forbid_extra() -> None:
         UpdateWidgetArgs.model_validate(
             {
                 "widget_id": str(uuid4()),
-                "data_payload": {"value": "1"},
+                "data_payload": {"data_model": {"value": "1"}},
                 "user_id": str(uuid4()),
             }
         )
@@ -309,7 +362,11 @@ async def test_two_contexts_share_one_user_widget(tmp_path: Path) -> None:
     owner = uuid4()
     created = await invoke_tool(
         "create_widget",
-        {"title": "Shared", "widget_type": "metric_card", "data_payload": {"value": "1"}},
+        {
+            "title": "Shared",
+            "widget_type": "a2ui_surface",
+            "data_payload": _a2ui_payload("1"),
+        },
         _context(owner, tmp_path),
     )
     assert created.ok, created.error
@@ -323,14 +380,14 @@ async def test_two_contexts_share_one_user_widget(tmp_path: Path) -> None:
 
     updated = await invoke_tool(
         "update_widget",
-        {"widget_id": widget_id, "data_payload": {"value": "2"}},
+        {"widget_id": widget_id, "data_payload": {"data_model": {"value": "2"}}},
         second_session_context,
     )
     assert updated.ok, updated.error
     assert updated.content["version"] == 2
     reread = await service.get_widget(UUID(widget_id), owner)
     assert reread is not None
-    assert reread.data_payload["value"] == "2"
+    assert reread.data_payload["data_model"]["value"] == "2"
 
 
 async def test_delete_widget_success(tmp_path: Path) -> None:
@@ -338,7 +395,11 @@ async def test_delete_widget_success(tmp_path: Path) -> None:
     owner = uuid4()
     created = await invoke_tool(
         "create_widget",
-        {"title": "Panel", "widget_type": "metric_card", "data_payload": {"value": "1"}},
+        {
+            "title": "Panel",
+            "widget_type": "a2ui_surface",
+            "data_payload": _a2ui_payload("1"),
+        },
         _context(owner, tmp_path),
     )
     assert created.ok
@@ -358,7 +419,11 @@ async def test_delete_widget_rejects_cross_user(tmp_path: Path) -> None:
     owner = uuid4()
     created = await invoke_tool(
         "create_widget",
-        {"title": "Panel", "widget_type": "metric_card", "data_payload": {"value": "1"}},
+        {
+            "title": "Panel",
+            "widget_type": "a2ui_surface",
+            "data_payload": _a2ui_payload("1"),
+        },
         _context(owner, tmp_path),
     )
     assert created.ok

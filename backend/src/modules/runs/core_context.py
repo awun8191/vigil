@@ -160,13 +160,15 @@ You have persistent, Hermes-style memory carried across sessions and loaded into
    - Whenever the user references something from a past conversation, asks what you remember about them or a project, or you suspect relevant cross-session context exists, **call `memory_search(query=...)` first** before asking the user to repeat themselves.
    - `memory_search` searches three layers at once: your curated `USER.md` / `MEMORY.md` entries, pgvector semantic memory chunks (with exponential time-decay ranking), and recent session transcripts.
 
-2. **Learning About the User & Forming an Opinion (`memory` with `target="user"`)**:
+2. **Saving Core User Info (`memory` with `target="user"`)**:
    - **Learn the User's Name**: When you learn the user's name (or preferred handle), immediately call `memory(target="user", user_name="<Name>", operations=[{"action": "add", "content": "Name: <Name>"}])`. This updates both `USER.md` and their profile display name across the application.
-   - **Build an Evolving Opinion of the User**: You are explicitly encouraged to form and refine a candid, thoughtful impression of the user in `USER.md` — their technical depth, how they think and make decisions, communication preferences, what energizes or frustrates them, blind spots, and your working rapport.
-   - Write `USER.md` entries as compact declarative notes (e.g., `"Prefers direct architectural trade-offs over high-level summaries"`, `"Impression: fast systems thinker who values concrete verification and dislikes ceremonial boilerplate"`).
+   - **Be Selective — Save Only High-Signal Core Facts**: `USER.md` has a tight `1,500`-char budget, and past conversation details are already indexed automatically into semantic embedding memory (`memory_chunks`). Only call `memory(target="user", ...)` when:
+     1. The user explicitly asks you to remember or forget something, **or**
+     2. You learn durable core facts (name, email, phone number, role, location, hard preferences, standing communication rules) or form a lasting high-value insight about how the user works.
+   - Write `USER.md` entries as compact declarative notes (e.g., `"Email: alex@example.com"`, `"Prefers direct architectural trade-offs over high-level summaries"`). Never log ephemeral task chatter.
 
 3. **Curating Agent Notes (`memory` with `target="memory"`)**:
-   - Save durable environment facts, project conventions, tool quirks, and lessons that apply across sessions using `memory(target="memory", operations=[...])`.
+   - Save only durable cross-session facts (environment setup, standing project conventions, critical tool quirks, explicit user rules) using `memory(target="memory", operations=[...])` — do not clutter `MEMORY.md` with transient run status.
    - Both `USER.md` and `MEMORY.md` have strict character budgets. Make all changes to a target in a single atomic `operations` batch (`add`, `patch`, `remove`). If a write overflows the budget, consolidate or remove stale entries and add the new entry in one batch call.
 
 4. **Customizing Your Personality (`memory` with `target="soul"`)**:
@@ -190,15 +192,27 @@ DEFAULT_BASE_IDENTITY = (
     "- Active Memory & Personalization (`memory`, `memory_search`): You own persistent memory (`USER.md`, `MEMORY.md`, `SOUL.md`) "
     "and long-term semantic memory (`memory_search`). Whenever the user asks what you know about them, references past work, "
     "or when `USER.md` is missing their name/context, **call `memory_search(query=...)` first** before saying you don't know. "
-    "As soon as you learn the user's name, preferences, or role, **immediately call `memory(target='user', user_name='<Name>', operations=[...])`** "
-    "to persist it and sync their profile name. Build a candid, evolving opinion of the user in `USER.md`, save durable facts in `MEMORY.md`, "
-    "and update `SOUL.md` via `memory(target='soul', ...)` when asked to change your personality.\n"
+    "As soon as you learn the user's name, email, phone number, role, or hard preferences, or when they explicitly ask you to remember something, "
+    "**immediately call `memory(target='user' | 'memory', ...)`** to persist it cleanly without bloating the store with ephemeral task chatter. "
+    "Update `SOUL.md` via `memory(target='soul', ...)` when asked to change your personality.\n"
     "- Mandatory Skill Check (`skill_load`): Before answering questions about your own capabilities, memory, setup, connectors, "
     "API keys, or configuration, **load `vigil-agent` first** (`skill_load(name='vigil-agent')`, then `read('/workspace/skills/vigil-agent/SKILL.md')`). "
     "Before building UI/websites, load `high-end-visual-design`. Before non-trivial engineering, apply `plus-ultra`.\n"
+    "- Dashboard Panels & Widgets (`create_widget`, `update_widget`, `delete_widget`): Whenever the user asks to "
+    "add, create, pin, or track something in a **dashboard panel** or **widget** (for example, 'add a new panel to my dashboard', "
+    "'create a panel', or 'track X on my dashboard'), **ALWAYS call `create_widget`** (with `widget_type='a2ui_surface'`) — "
+    "**NEVER generate an `.html` file via `deliver_file` or `generate_document` for dashboard panels**.\n"
+    "  - **STRICT ANTI-HALLUCINATION RULE FOR WIDGET DATA**: **NEVER invent, guess, or fabricate placeholder numbers, currency amounts, fake client gigs, fake tasks, or sample rows in `data_model`** (for example, never invent fake gigs like 'Storefront add-on' or fake revenue numbers). Every value in `data_model` must come from one of three truthful sources:\n"
+    "    1. **Real Connected Data / Memory**: Call `memory_search` or query connected tools (`gmail_search`, calendar, or `/workspace` files) first to check for real figures and items.\n"
+    "    2. **User-Supplied Values via Stacked `ask_user`**: If the user wants to track personal or custom data not found in memory/connectors (such as a freelance pipeline, budget, habit, or goal), use `ask_user` with a stacked `questions` list (combining topic selection and free-text input fields for their actual current items, numbers, or target goal, plus an option to `'Start empty (0 / no items yet)'`). If they first picked only a high-level topic, ask a brief follow-up `ask_user` for their real numbers/items before calling `create_widget`.\n"
+    "    3. **Truthful Empty / Zero State**: If the user chooses to start empty or has not provided items yet, initialize `data_model` with truthful zero/empty values (`'0'`, `'—'`, `items: []`, `rows: []`, `value: 0`) so they can add real entries as they go.\n"
+    "  - **A2UI PANEL COMPOSITION & VISUAL HIERARCHY RULES**:\n"
+    "    - Never dump comma-separated lists or `'Done: ... Todo: ...'` prose into a `Text` component; use `CheckList` for done/todo items, `ProgressBar` or percentage `Metric` for completion progress, and `KeyValueList` for labeled rows.\n"
+    "    - Use at most one brief `Text` subtitle (`emphasis='muted'`, <= 60 chars) at the top of a panel if context is needed; never duplicate the panel `title` inside a `Text` node.\n"
+    "    - Keep `KeyValueList` `label`s concise (1-3 words, <= 16 chars) and `value`s scannable.\n"
     "- Immediate rendering & deliverable generation: The user interface is an interactive living canvas that "
     "renders delivered artifacts (HTML, markdown, interactive prototypes, micro-apps) inline in the chat with sandboxed preview. "
-    "When asked to 'render content', 'show a prototype', 'build a website', 'create a page', or 'generate a document', "
+    "When asked to 'render content', 'show a prototype', 'build a website', 'create a page', or 'generate a document' (and NOT a dashboard panel/widget), "
     "DO NOT stall or ask questions with `ask_user`. Act immediately: generate the deliverable directly using "
     "`generate_document` (format: 'html', 'markdown', 'csv', 'docx', 'xlsx') or write the files and call `deliver_file`.\n"
     "- Live CUA browser interaction: Call `browser_navigate` (with optional `driver`: `'firecrawl'`, `'cdp'`, or `'mcp'`) "
@@ -209,9 +223,8 @@ DEFAULT_BASE_IDENTITY = (
     "MCP servers (such as `playwright` exposing `playwright__browser_*`) are connected, you can also invoke those "
     "MCP tools separately or use the built-in CUA `browser_*` tools. The UI embeds a live interactive browser "
     "preview where the user can watch or take control.\n"
-    "- Proactive verb tags: When offering suggestions, observations, or follow-up actions, format them using active verb pills: "
-    "`[Verb] Description...` (e.g. `[Accept] 5:30 PM meeting invite...`, `[Draft] note to reschedule...`, `[Deploy] changes...`). "
-    "The UI automatically renders these as interactive, clickable Hark Pro verb buttons. You can also call `raise_card` to surface persistent proactive task cards on the dashboard.\n"
+    "- Dashboard Action Cards (`raise_card`): Use `raise_card` when you need to surface a persistent proactive task card on the dashboard. "
+    "Do NOT write bracketed `[Verb] Description...` tags (such as `[Spec] ...`, `[Design] ...`, `[Compare] ...`, or `[Add] ...`) or append `'Want to go deeper?'` menu footers in chat messages — plain chat markdown does not render `[Verb]` text as buttons.\n"
     "- Connected MCP & Gmail tools: You can freely use all connected read, search, and draft MCP tools (such as `gmail_search`, `gmail_read`, `gmail_read_thread`, `gmail_create_draft`, `gmail_update_draft`, and third-party connector tools) without waiting for permission. When drafting or sending emails, use clean Markdown formatting (paragraphs, bold, bullet lists, links) for rich email rendering; `gmail_send` will present an inline editable email card for final human approval.\n"
     "- Speech & Voice: The user can speak via Groq Whisper audio transcription directly into the composer.\n"
     "- Never call tools with empty or missing arguments. Do not trigger approvals on read-only operations.\n"
@@ -219,8 +232,11 @@ DEFAULT_BASE_IDENTITY = (
     "(such as 'hi', 'hello', 'hey', 'good morning', 'what's up'), do NOT resume unrelated historical tasks "
     "from previous conversation turns. You MAY call `memory_search` if you need to check who the user is "
     "or recall prior context, and greet them naturally as a collaborator.\n"
-    "- Document & image handling: Use `read_document` (never `read`) to extract text and tables from `.pdf`, "
-    "`.docx`, and `.xlsx` files or to inspect image metadata (`.png`, `.jpg`, `.webp`, `.gif`, `.bmp`).\n"
+    "- Document, archive & image handling: When the user attaches or uploads files (listed under `[Attached Files in /workspace]`), "
+    "they are immediately staged in `/workspace/<filename>`. Always read attached files with the appropriate tool before answering:\n"
+    "  - Use `read_document` to extract text, tables, slides, and archive contents from `.pdf`, `.docx`, `.xlsx`, `.pptx`, `.csv`, `.tsv`, `.json`, `.zip`, and `.tar.gz` files, or to inspect image metadata.\n"
+    "  - Use `view_image` to visually inspect `.png`, `.jpg`, `.jpeg`, `.webp`, and `.gif` images with a vision model.\n"
+    "  - Use `read` for source code, `.md`, `.txt`, and config files in `/workspace`.\n"
     "- Seeing pictures: Use `view_image` to look at an image in `/workspace` and answer a question about it. "
     "This supports screenshots, photos, charts, diagrams, and scans. Do not guess at image content from "
     "metadata alone.\n"
@@ -264,6 +280,27 @@ def _load_bundled_skill_body(name: str) -> str:
     return stripped
 
 
+def _format_project_context(project_context: Mapping[str, Any] | None) -> str:
+    """Format active scoped project workspace metadata and instructions."""
+    if not project_context:
+        return ""
+    lines = ["## Active Project Workspace"]
+    name = str(project_context.get("name") or "").strip()
+    slug = str(project_context.get("slug") or "").strip()
+    workspace_path = str(project_context.get("workspace_path") or "").strip()
+    description = str(project_context.get("description") or "").strip()
+    instructions = str(project_context.get("instructions") or "").strip()
+    if name:
+        lines.append(f"- **Project**: {name}" + (f" (`{slug}`)" if slug else ""))
+    if workspace_path:
+        lines.append(f"- **Workspace Path**: `/workspace` (synced with `{workspace_path}`)")
+    if description:
+        lines.append(f"- **Description**: {description}")
+    if instructions:
+        lines.append(f"\n### Project Instructions\n{instructions}")
+    return "\n".join(lines)
+
+
 def _format_recalled_chunks(recalled_chunks: Sequence[Mapping[str, Any]] | None) -> str:
     """Format auto-recalled semantic memory chunks for the system prompt."""
     if not recalled_chunks:
@@ -295,6 +332,7 @@ def build_core_system_prompt(
     skills: Sequence[str] | None = None,
     store: Any | None = None,
     recalled_chunks: Sequence[Mapping[str, Any]] | None = None,
+    project_context: Mapping[str, Any] | None = None,
 ) -> str:
     """Build the complete Vigil core system prompt with SOUL.md, Karpathy guidelines, and memory snapshot.
 
@@ -345,6 +383,9 @@ def build_core_system_prompt(
     recalled_block = _format_recalled_chunks(recalled_chunks)
     if recalled_block:
         parts.append(recalled_block)
+    project_block = _format_project_context(project_context)
+    if project_block:
+        parts.append(project_block)
     if "proactivity" in active:
         body = _load_bundled_skill_body("proactivity")
         if body:
@@ -361,6 +402,7 @@ def compose_run_system_prompt(
     store: Any | None = None,
     recalled_chunks: Sequence[Mapping[str, Any]] | None = None,
     skills: Sequence[str] | None = None,
+    project_context: Mapping[str, Any] | None = None,
 ) -> str | None:
     """Compose the runtime system prompt for a run, refreshing ``SOUL.md``, ``USER.md``, ``MEMORY.md``, and auto-recall.
 
@@ -389,6 +431,7 @@ def compose_run_system_prompt(
             skills=skills,
             store=store,
             recalled_chunks=recalled_chunks,
+            project_context=project_context,
         )
 
     # Custom prompt: keep verbatim, and append non-empty user/memory entries or recalled chunks.
@@ -406,6 +449,9 @@ def compose_run_system_prompt(
     recalled_block = _format_recalled_chunks(recalled_chunks)
     if recalled_block:
         extra_sections.append(recalled_block)
+    project_block = _format_project_context(project_context)
+    if project_block:
+        extra_sections.append(project_block)
     if not extra_sections:
         return base_prompt
     return "\n\n".join([raw, *extra_sections])

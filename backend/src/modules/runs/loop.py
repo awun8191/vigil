@@ -24,6 +24,7 @@ import json
 import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Any, Literal, Protocol, runtime_checkable
 from uuid import UUID
 
@@ -357,7 +358,7 @@ class RunLoop:
         tool_schemas: Sequence[Mapping[str, Any]] | None = None,
         cost: Any | None = None,
         max_iterations: int = 40,
-        context_token_limit: int = 8_000,
+        context_token_limit: int = 64_000,
         compact_ratio: float = 0.7,
         system_prompt_override: str | None = None,
     ) -> None:
@@ -378,6 +379,7 @@ class RunLoop:
         # The chat session of the run under work. Every row that the loop
         # writes carries it, so the memory indexer sees the whole session.
         self._session_id: UUID | None = None
+        self._last_noop_compact_len: int | None = None
 
     # -- public API -------------------------------------------------------
 
@@ -432,15 +434,52 @@ class RunLoop:
         self._session_id = next(
             (row.session_id for row in messages if row.session_id is not None), None
         )
+        rolling_summary: str | None = None
         prior_history: list[MessageDTO] = []
-        list_session_fn = getattr(self.journal, "list_session_history", None)
-        if self._session_id is not None and callable(list_session_fn):
-            prior_history = await list_session_fn(
-                self._session_id, exclude_run_id=run_id
-            )
+        if self._session_id is not None:
+            get_state_fn = getattr(self.journal, "get_session_compaction_state", None)
+            if callable(get_state_fn):
+                session_state = await get_state_fn(self._session_id)
+                if session_state is not None:
+                    rolling_summary = getattr(session_state, "rolling_summary", None)
+            list_session_fn = getattr(self.journal, "list_session_history", None)
+            if callable(list_session_fn):
+                prior_history = await list_session_fn(
+                    self._session_id, exclude_run_id=run_id
+                )
+            compact_session_fn = getattr(self.compactor, "compact_session_history", None)
+            if callable(compact_session_fn) and prior_history:
+                try:
+                    outcome = await compact_session_fn(
+                        self._session_id,
+                        rolling_summary=rolling_summary,
+                        uncompacted_messages=prior_history,
+                        max_tokens=self.context_token_limit,
+                        trigger_ratio=self.compact_ratio,
+                    )
+                except Exception:
+                    outcome = None
+                if outcome is not None:
+                    rolling_summary = outcome.rolling_summary
+                    prior_history = list(outcome.kept_messages)
+                    save_state_fn = getattr(
+                        self.journal, "save_session_compaction_state", None
+                    )
+                    if callable(save_state_fn):
+                        await save_state_fn(
+                            self._session_id,
+                            rolling_summary=outcome.rolling_summary,
+                            compacted_through_message_id=outcome.compacted_through_message_id,
+                            compacted_through_at=outcome.compacted_through_at,
+                        )
 
         # Stage 1: assemble.
-        assembled = self._assemble(config, messages, prior_history=prior_history)
+        assembled = self._assemble(
+            config,
+            messages,
+            prior_history=prior_history,
+            rolling_summary=rolling_summary,
+        )
         stages.append("assemble")
         await self.observer.on_stage(run_id, "assemble")
 
@@ -448,7 +487,12 @@ class RunLoop:
         compacted_messages = await self._compact_check(run, assembled, messages)
         if list(compacted_messages) != list(messages):
             messages = compacted_messages
-            assembled = self._assemble(config, messages, prior_history=prior_history)
+            assembled = self._assemble(
+                config,
+                messages,
+                prior_history=prior_history,
+                rolling_summary=rolling_summary,
+            )
         stages.append("compact_check")
         await self.observer.on_stage(run_id, "compact_check")
 
@@ -565,6 +609,7 @@ class RunLoop:
         messages: Sequence[MessageDTO],
         *,
         prior_history: Sequence[MessageDTO] = (),
+        rolling_summary: str | None = None,
     ) -> AssembledContext:
         """Stage one: build the context and locate the last assistant turn."""
         assistant: MessageDTO | None = None
@@ -577,7 +622,24 @@ class RunLoop:
             tool_rows = [
                 row for row in messages if row.role == "tool" and row.tool_call_id
             ]
-        combined = [*prior_history, *messages]
+        summary_rows: list[MessageDTO] = []
+        if rolling_summary and rolling_summary.strip():
+            summary_rows.append(
+                MessageDTO(
+                    id=UUID(int=0),
+                    run_id=None,
+                    session_id=self._session_id,
+                    role="system",
+                    content=f"== Session Context Summary ==\n{rolling_summary.strip()}",
+                    tool_calls=None,
+                    tool_call_id=None,
+                    tool_name=None,
+                    tool_arguments=None,
+                    tool_result_reference=None,
+                    created_at=datetime.min.replace(tzinfo=timezone.utc),
+                )
+            )
+        combined = [*summary_rows, *prior_history, *messages]
         effective_prompt = (
             self.system_prompt_override
             if self.system_prompt_override is not None
@@ -601,9 +663,16 @@ class RunLoop:
     ) -> list[MessageDTO]:
         """Stage two: record a compaction request when the context is too large."""
         limit = int(self.context_token_limit * self.compact_ratio)
-        if assembled.tokens <= limit and len(messages) <= 10:
+        if assembled.tokens <= limit:
             return list(messages)
         if self.compactor is not None:
+            if self._last_noop_compact_len == len(messages):
+                return list(messages)
+            # Only invoke intra-run compaction when the current run itself has
+            # grown beyond recent turns or owns the token overflow.
+            run_tokens = estimate_tokens(messages)
+            if len(messages) <= 6 and run_tokens <= limit:
+                return list(messages)
             class _HybridMessage(dict[str, Any]):
                 """Mapping + attribute wrapper so both CompactionService and MessageDTO consumers work."""
 
@@ -631,6 +700,13 @@ class RunLoop:
             hybrid_messages = [_HybridMessage(m) for m in messages]
             result: Any = await self.compactor.compact(run.id, hybrid_messages)  # type: ignore[arg-type]
             if hasattr(result, "messages") and isinstance(result.messages, Sequence):
+                units_changed = getattr(result, "units_dropped", 1) + getattr(
+                    result, "units_stubbed", 0
+                )
+                if units_changed == 0:
+                    self._last_noop_compact_len = len(messages)
+                    return list(messages)
+                self._last_noop_compact_len = None
                 from datetime import datetime, timezone
                 from uuid import uuid4
 
@@ -1057,10 +1133,20 @@ class RunLoop:
         response: LLMResponseDTO | None = None,
     ) -> RunDTO:
         """Stage six: write the steps, the usage and the next run status."""
-        for approval_id in outcome.approvals:
-            await self._record_step(
-                run.id, "approval_required", {"approval_id": str(approval_id)}
-            )
+        if outcome.approvals:
+            approval_rows = {
+                row.id: row for row in await self.journal.list_approvals(run.id)
+            }
+            for approval_id in outcome.approvals:
+                row = approval_rows.get(approval_id)
+                step_payload: dict[str, Any] = {"approval_id": str(approval_id)}
+                if row is not None:
+                    step_payload["tool_name"] = row.tool_name
+                    step_payload["tool_call_id"] = row.tool_call_id
+                    step_payload["arguments"] = dict(row.arguments or {})
+                await self._record_step(
+                    run.id, "approval_required", step_payload
+                )
 
         status = await self._next_status(run, outcome)
         token_usage = None

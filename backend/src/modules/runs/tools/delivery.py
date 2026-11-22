@@ -314,8 +314,10 @@ def _render_bytes(args: GenerateDocumentArgs) -> bytes:
 
 async def deliver_file(args: DeliverFileArgs, context: ToolContext) -> ToolResult:
     """Copy one workspace file to the delivery directory."""
+    from src.modules.runs.tools.files import read_workspace_bytes
+
     try:
-        payload = await context.runner.read_file(context.container_id, args.path)
+        payload = await read_workspace_bytes(args.path, context)
     except FileNotFoundError as exc:
         return ToolResult.failure(f"file not found: {args.path}: {exc}")
     data = payload if isinstance(payload, bytes) else payload.encode("utf-8")

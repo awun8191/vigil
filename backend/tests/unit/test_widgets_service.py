@@ -1,14 +1,8 @@
-"""Unit tests for the widgets service over the sessionless store.
-
-No database is needed: the service falls back to its in-memory dict when the
-session is None, with the same user scoping and version semantics.
-"""
+"""Unit tests for the widgets service over the sessionless store."""
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
-
-import pytest
 
 from src.config.settings import Settings
 from src.modules.widgets.repository import WidgetCreateDTO, WidgetUpdateDTO
@@ -22,13 +16,32 @@ def _service() -> WidgetsService:
     return service
 
 
+def _a2ui_payload(value: str = "1") -> dict:
+    """Build a valid A2UI surface payload."""
+    return {
+        "version": "v0.9",
+        "catalog_id": "urn:vigil:a2ui:catalog:panels:v1",
+        "size": "md",
+        "root": "col_1",
+        "components": [
+            {"id": "col_1", "component": "Column", "children": ["m_1"]},
+            {
+                "id": "m_1",
+                "component": "Metric",
+                "props": {"label": "Count", "value": {"path": "/value"}},
+            },
+        ],
+        "data_model": {"value": value},
+    }
+
+
 def _dto(user_id, **overrides):
-    """Build a metric_card creation DTO for one user."""
+    """Build an a2ui_surface creation DTO for one user."""
     values = {
         "user_id": user_id,
         "title": "Panel",
-        "widget_type": "metric_card",
-        "data_payload": {"value": "1", "delta": None, "caption": None},
+        "widget_type": "a2ui_surface",
+        "data_payload": _a2ui_payload("1"),
     }
     values.update(overrides)
     return WidgetCreateDTO(**values)
@@ -40,6 +53,7 @@ async def test_create_assigns_version_one() -> None:
     created = await service.create_widget(_dto(uuid4()))
     assert created.version == 1
     assert created.title == "Panel"
+    assert created.widget_type == "a2ui_surface"
 
 
 async def test_create_computes_no_refresh_by_default() -> None:
@@ -76,11 +90,11 @@ async def test_update_bumps_version() -> None:
     updated = await service.update_widget_payload(
         created.id,
         owner,
-        WidgetUpdateDTO(data_payload={"value": "2", "delta": None, "caption": None}),
+        WidgetUpdateDTO(data_payload=_a2ui_payload("2")),
     )
     assert updated is not None
     assert updated.version == 2
-    assert updated.data_payload["value"] == "2"
+    assert updated.data_payload["data_model"]["value"] == "2"
     assert updated.updated_at >= created.updated_at
 
 
@@ -91,7 +105,7 @@ async def test_update_rejects_other_user() -> None:
     result = await service.update_widget_payload(
         created.id,
         uuid4(),
-        WidgetUpdateDTO(data_payload={"value": "2", "delta": None, "caption": None}),
+        WidgetUpdateDTO(data_payload=_a2ui_payload("2")),
     )
     assert result is None
     stored = await service.get_widget(created.id, created.user_id)
@@ -124,12 +138,12 @@ async def test_apply_refresh_bumps_version_and_reschedules() -> None:
     applied = await service.apply_refresh(
         created.id,
         owner,
-        {"value": "9", "delta": None, "caption": None},
+        _a2ui_payload("9"),
         moment,
     )
     assert applied is not None
     assert applied.version == 2
-    assert applied.data_payload["value"] == "9"
+    assert applied.data_payload["data_model"]["value"] == "9"
     assert applied.next_refresh_at == moment
 
 
@@ -151,10 +165,16 @@ async def test_created_widget_visible_to_fresh_service_instance() -> None:
     from types import SimpleNamespace
 
     shared: dict = {}
-    first = WidgetsService(session=SimpleNamespace(_widgets_memory=shared), settings=Settings(APP_ENV="test"))  # type: ignore[arg-type]
+    first = WidgetsService(
+        session=SimpleNamespace(_widgets_memory=shared),
+        settings=Settings(APP_ENV="test"),
+    )  # type: ignore[arg-type]
     owner = uuid4()
     created = await first.create_widget(_dto(owner, title="Persisted"))
-    fresh = WidgetsService(session=SimpleNamespace(_widgets_memory=shared), settings=Settings(APP_ENV="test"))  # type: ignore[arg-type]
+    fresh = WidgetsService(
+        session=SimpleNamespace(_widgets_memory=shared),
+        settings=Settings(APP_ENV="test"),
+    )  # type: ignore[arg-type]
     rows = await fresh.list_widgets(owner)
     assert [r.id for r in rows] == [created.id]
     assert rows[0].title == "Persisted"

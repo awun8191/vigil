@@ -5,6 +5,37 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field
 
 
+class RunAttachmentItem(BaseModel):
+    """Metadata for a file attached to a user message and staged inside /workspace."""
+
+    name: str = Field(..., min_length=1, max_length=255, description="Safe file name.")
+    workspace_path: str = Field(
+        ...,
+        min_length=1,
+        description="Container path inside /workspace (for example /workspace/report.pdf).",
+    )
+    host_path: str | None = Field(
+        default=None,
+        description="Host workspace file path where the uploaded bytes are stored.",
+    )
+    content_type: str = Field(
+        default="application/octet-stream",
+        description="MIME type of the attachment.",
+    )
+    size_bytes: int = Field(default=0, ge=0, description="File size in bytes.")
+    sha256: str | None = Field(default=None, description="SHA-256 hex digest.")
+    preview: str | None = Field(
+        default=None,
+        description="Optional short text preview or extracted metadata.",
+    )
+
+
+class RunUploadResponse(BaseModel):
+    """Response from POST /api/v1/runs/uploads containing staged attachment descriptors."""
+
+    files: list[RunAttachmentItem] = Field(default_factory=list)
+
+
 class RunCreateRequest(BaseModel):
     """Inbound request to trigger a new agent execution run."""
     config_id: UUID = Field(..., description="Target AgentConfig UUID.")
@@ -16,6 +47,14 @@ class RunCreateRequest(BaseModel):
             "Optional chat session that owns the run. That session receives a memory index "
             "job when the run completes."
         ),
+    )
+    project_id: UUID | None = Field(
+        default=None,
+        description="Optional scoped project workspace UUID attached to this run.",
+    )
+    attachments: list[RunAttachmentItem] = Field(
+        default_factory=list,
+        description="Optional uploaded file attachments staged in /workspace for this run.",
     )
 
 
@@ -77,6 +116,7 @@ class RunResponse(BaseModel):
     id: UUID = Field(..., description="Unique run UUID.")
     config_id: UUID = Field(..., description="Associated AgentConfig UUID.")
     card_id: UUID | None = Field(default=None, description="Triggering Card UUID.")
+    project_id: UUID | None = Field(default=None, description="Optional scoped Project UUID.")
     parent_run_id: UUID | None = Field(default=None, description="Parent run if sub-agent run.")
     depth: int = Field(default=0, description="Nesting depth of the run.")
     status: Literal[

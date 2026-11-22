@@ -206,8 +206,8 @@ async def test_approval_survives_compaction() -> None:
 
     compaction = get_compaction_service(session=None, settings=settings)
 
-    # The composition root must supply every tier client and the step recorder.
-    assert compaction.jev_client is not None
+    # The composition root must supply the Fast LLM and the step recorder (without Jev).
+    assert not hasattr(compaction, "jev_client")
     assert compaction.fast_llm is not None
     assert compaction.run_steps is not None
 
@@ -217,7 +217,6 @@ async def test_approval_survives_compaction() -> None:
 
     scripted = ScriptedFastLLM()
     compaction.fast_llm = scripted
-    compaction.jev_client = ScriptedJev()
 
     context = await compaction.compact(run.id, history)
 

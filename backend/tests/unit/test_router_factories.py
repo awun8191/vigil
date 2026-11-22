@@ -33,6 +33,7 @@ EXPECTED_MODULES = [
     "settings",
     "jobs",
     "voice",
+    "projects",
 ]
 
 

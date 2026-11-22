@@ -131,7 +131,7 @@ async def _create_widget(
     harness: RefreshHarness,
     title: str,
     next_refresh_at: datetime | None,
-    widget_type: str = "metric_card",
+    widget_type: str = "a2ui_surface",
 ) -> Any:
     """Insert one widget row on the harness backend."""
     owner = harness.owner_id if harness.owner_id is not None else uuid4()
@@ -140,7 +140,21 @@ async def _create_widget(
             user_id=owner,
             title=title,
             widget_type=widget_type,
-            data_payload={"value": "1"},
+            data_payload={
+                "version": "v0.9",
+                "catalog_id": "urn:vigil:a2ui:catalog:panels:v1",
+                "size": "md",
+                "root": "col_1",
+                "components": [
+                    {"id": "col_1", "component": "Column", "children": ["m_1"]},
+                    {
+                        "id": "m_1",
+                        "component": "Metric",
+                        "props": {"label": "Count", "value": {"path": "/value"}},
+                    },
+                ],
+                "data_model": {"value": "1"},
+            },
             refresh_config={"kind": "static"},
             refresh_interval_minutes=60,
             next_refresh_at=next_refresh_at,

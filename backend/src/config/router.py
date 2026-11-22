@@ -39,6 +39,7 @@ MODULE_FACTORIES: list[tuple[str, str]] = [
     ("audit", "build_audit_router"),
     ("jobs", "build_jobs_router"),
     ("voice", "build_voice_router"),
+    ("projects", "build_projects_router"),
     ("widgets", "build_widgets_router"),
 ]
 

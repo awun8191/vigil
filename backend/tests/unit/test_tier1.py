@@ -1,13 +1,10 @@
-"""Tests for the Tier 1 Jev gate, the artifact stub, and the batch cap."""
+"""Tests for JEV-free deterministic compaction, artifact stubs, and tokenizer counts."""
 from __future__ import annotations
-
-from typing import Any
 
 import pytest
 import tiktoken
 
 from src.config.settings import Settings
-from src.integrations.repositories import JevEvaluationResultDTO
 from src.modules.compaction.service import CompactionService
 from src.modules.compaction.stub import (
     PREVIEW_CHARS,
@@ -17,9 +14,6 @@ from src.modules.compaction.stub import (
     format_size,
 )
 from src.modules.compaction.tiers import (
-    DROP_BELOW_THRESHOLD,
-    JEV_BATCH_SIZE,
-    MAX_JEV_CALLS,
     HistoryUnit,
     TokenCounter,
     UnitKind,
@@ -46,37 +40,8 @@ FIXTURE_TEXT = (
 PROVIDER_REFERENCE_TOKENS = 96
 
 
-class ScriptedJev:
-    """Tier 1 test double that returns one fixed probability set for all units."""
-
-    def __init__(self, probabilities: dict[str, float]) -> None:
-        self.probabilities = probabilities
-        self.batch_sizes: list[int] = []
-
-    async def evaluate(self, state: dict[str, Any], questions: dict[str, str], model: str | None = None):
-        raise AssertionError("Tier 1 must score units with evaluate_batch, not one call per unit.")
-
-    async def evaluate_batch(
-        self,
-        states: list[dict[str, Any]],
-        questions: dict[str, str],
-        model: str | None = None,
-    ) -> list[JevEvaluationResultDTO]:
-        self.batch_sizes.append(len(states))
-        return [
-            JevEvaluationResultDTO(
-                answers={key: "no" for key in questions},
-                probabilities=dict(self.probabilities),
-            )
-            for _ in states
-        ]
-
-    async def is_healthy(self) -> bool:
-        return True
-
-
-def bulk_unit(unit_id: str = "tool-bulk") -> HistoryUnit:
-    """Return one large tool log unit with a full stub provenance set."""
+def bulk_unit(unit_id: str = "tool-bulk", artifact_id: str | None = "art-e4b2a1") -> HistoryUnit:
+    """Return one large tool log unit with optional stub provenance."""
     return HistoryUnit(
         unit_id=unit_id,
         role="tool",
@@ -85,17 +50,13 @@ def bulk_unit(unit_id: str = "tool-bulk") -> HistoryUnit:
         tool_name="bash",
         command="pytest tests/ -q",
         exit_code=0,
-        artifact_id="art-e4b2a1",
+        artifact_id=artifact_id,
         size_bytes=45000,
     )
 
 
 def history_with(target: HistoryUnit, trailing_turns: int = 6) -> list[HistoryUnit]:
-    """Put one unit in the oldest turn and add six later turns after it.
-
-    The target sits before the chain-closing tool result and before the last
-    six turns, so Tier 0 leaves it to Tier 1.
-    """
+    """Put one unit in the oldest turn and add six later turns after it."""
     units: list[HistoryUnit] = [
         HistoryUnit(
             unit_id="t1-user",
@@ -136,27 +97,14 @@ def history_with(target: HistoryUnit, trailing_turns: int = 6) -> list[HistoryUn
     return units
 
 
-def service_with(probabilities: dict[str, float] | None) -> tuple[CompactionService, ScriptedJev | None]:
-    """Build a service with a scripted classifier, or with no classifier."""
-    if probabilities is None:
-        return CompactionService(session=None, settings=Settings(), token_model="gpt-4o-mini"), None
-    jev = ScriptedJev(probabilities)
-    service = CompactionService(
-        session=None,
-        settings=Settings(),
-        jev_client=jev,
-        token_model="gpt-4o-mini",
-    )
-    return service, jev
-
-
 @pytest.mark.asyncio
-async def test_bulk_becomes_stub() -> None:
-    """A unit with p(bulk) 0.9 becomes a stub that carries the artifact id."""
-    service, _ = service_with({"needed": 0.1, "user_fact": 0.05, "bulk": 0.9})
+async def test_bulk_becomes_stub_without_jev() -> None:
+    """An unlocked tool result with an artifact id becomes a stub with zero Jev calls."""
+    service = CompactionService(session=None, settings=Settings(), token_model="gpt-4o-mini")
 
     plan = await service.plan_compaction(history_with(bulk_unit()))
 
+    assert plan.tier1.jev_calls == 0
     assert [item.unit.unit_id for item in plan.stubbed] == ["tool-bulk"]
     assert plan.stubbed[0].verdict is Verdict.STUB
 
@@ -178,42 +126,18 @@ async def test_bulk_becomes_stub() -> None:
 
 
 @pytest.mark.asyncio
-async def test_low_value_dropped() -> None:
-    """A unit with p(needed) 0.1 leaves the active context."""
-    service, _ = service_with({"needed": 0.1, "user_fact": 0.1, "bulk": 0.1})
+async def test_unlocked_tool_without_artifact_is_dropped() -> None:
+    """An unlocked non-final tool unit without an artifact id is dropped deterministically."""
+    service = CompactionService(session=None, settings=Settings(), token_model="gpt-4o-mini")
 
-    plan = await service.plan_compaction(history_with(bulk_unit()))
+    plan = await service.plan_compaction(history_with(bulk_unit(artifact_id=None)))
 
+    assert plan.tier1.jev_calls == 0
     assert [item.unit.unit_id for item in plan.dropped] == ["tool-bulk"]
     assert plan.dropped[0].verdict is Verdict.DROP
     assert plan.dropped[0].content == ""
     assert all(item.unit.unit_id != "tool-bulk" for item in plan.kept)
     assert all(item.unit.unit_id != "tool-bulk" for item in plan.stubbed)
-
-
-@pytest.mark.asyncio
-async def test_batch_cap() -> None:
-    """200 units produce at most three Jev calls of at most 50 units."""
-    units = [
-        HistoryUnit(
-            unit_id=f"u{index:03d}",
-            role="assistant",
-            content=f"Intermediate draft {index}.",
-            kind=UnitKind.ASSISTANT,
-        )
-        for index in range(200)
-    ]
-    service, jev = service_with({"needed": 0.9, "user_fact": 0.0, "bulk": 0.0})
-    assert jev is not None
-
-    plan = await service.plan_compaction(units)
-
-    assert plan.tier1.jev_calls <= MAX_JEV_CALLS == 3
-    assert len(jev.batch_sizes) == 3
-    assert max(jev.batch_sizes) <= JEV_BATCH_SIZE == 50
-    assert sum(jev.batch_sizes) == 150
-    assert len(plan.tier1.unscored_ids) == 50
-    assert len(plan.kept) == 200
 
 
 def test_token_count() -> None:
@@ -239,7 +163,7 @@ def test_token_count() -> None:
 @pytest.mark.asyncio
 async def test_plan_tokens_match_tokenizer() -> None:
     """Plan token totals come from the tokenizer, not from a character estimate."""
-    service, _ = service_with({"needed": 0.1, "user_fact": 0.05, "bulk": 0.9})
+    service = CompactionService(session=None, settings=Settings(), token_model="gpt-4o-mini")
 
     plan = await service.plan_compaction(history_with(bulk_unit()))
 
@@ -249,70 +173,6 @@ async def test_plan_tokens_match_tokenizer() -> None:
     assert plan.compacted_tokens == plan.original_tokens - counter.count(BULK_LOG) + counter.count(
         plan.stubbed[0].content
     )
-
-
-@pytest.mark.asyncio
-async def test_retain_at_needed_threshold() -> None:
-    """p(needed) at the 0.7 threshold keeps the unit in full."""
-    service, _ = service_with({"needed": 0.7, "user_fact": 0.0, "bulk": 0.9})
-
-    plan = await service.plan_compaction(history_with(bulk_unit()))
-
-    kept = {item.unit.unit_id: item for item in plan.kept}
-    assert kept["tool-bulk"].verdict is Verdict.RETAIN
-    assert kept["tool-bulk"].content == BULK_LOG
-    assert plan.units_stubbed == 0
-
-
-@pytest.mark.asyncio
-async def test_retain_on_user_fact() -> None:
-    """p(user_fact) at 0.7 keeps the unit even when p(needed) is low."""
-    service, _ = service_with({"needed": 0.2, "user_fact": 0.7, "bulk": 0.7})
-
-    plan = await service.plan_compaction(history_with(bulk_unit()))
-
-    kept = {item.unit.unit_id: item for item in plan.kept}
-    assert kept["tool-bulk"].verdict is Verdict.RETAIN
-    assert plan.units_stubbed == 0
-
-
-@pytest.mark.asyncio
-async def test_mid_probability_retained() -> None:
-    """A unit between the drop and retain bands stays."""
-    service, _ = service_with({"needed": 0.4, "user_fact": 0.1, "bulk": 0.1})
-
-    plan = await service.plan_compaction(history_with(bulk_unit()))
-
-    kept = {item.unit.unit_id: item for item in plan.kept}
-    assert kept["tool-bulk"].verdict is Verdict.RETAIN
-    assert DROP_BELOW_THRESHOLD == 0.3
-
-
-@pytest.mark.asyncio
-async def test_unscored_units_retained_without_jev() -> None:
-    """With no Jev client Tier 1 cannot act, so every unit stays."""
-    units = history_with(bulk_unit())
-    service, _ = service_with(None)
-
-    plan = await service.plan_compaction(units)
-
-    assert plan.tier1.jev_calls == 0
-    assert len(plan.tier1.unscored_ids) == len(units)
-    assert len(plan.kept) == len(units)
-    assert plan.compacted_tokens == plan.original_tokens
-    assert plan.summary_block == ""
-
-
-@pytest.mark.asyncio
-async def test_missing_needed_probability_retains() -> None:
-    """A classifier answer without p(needed) keeps the unit."""
-    service, _ = service_with({"bulk": 0.99})
-
-    plan = await service.plan_compaction(history_with(bulk_unit()))
-
-    kept = {item.unit.unit_id: item for item in plan.kept}
-    assert kept["tool-bulk"].verdict is Verdict.RETAIN
-    assert plan.units_stubbed == 0
 
 
 def test_stub_requires_artifact_id() -> None:

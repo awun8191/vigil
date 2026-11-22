@@ -94,9 +94,24 @@ async def get_db_session(
             try:
                 has_yielded = True
                 yield session
-                await session.commit()
+                in_tx = getattr(session, "in_transaction", None)
+                if not callable(in_tx) or in_tx():
+                    if getattr(session, "is_active", True):
+                        try:
+                            await session.commit()
+                        except Exception:
+                            await session.rollback()
+                    else:
+                        await session.rollback()
             except BaseException:
-                await session.rollback()
+                import asyncio
+
+                try:
+                    in_tx = getattr(session, "in_transaction", None)
+                    if not callable(in_tx) or in_tx():
+                        await asyncio.shield(session.rollback())
+                except BaseException:
+                    pass
                 raise
     except BaseException:
         if has_yielded or settings.APP_ENV not in ("test", "development"):
@@ -207,9 +222,9 @@ def _resolve_service_dependency(module_name: str, provider_name: str) -> Callabl
 # =============================================================================
 #
 # These two services meet here. The memory service needs the local embedder, and
-# the compaction service needs the Jev client, the Fast LLM client, and a run
-# step recorder. The module providers stay unchanged. This module supplies the
-# process-wide dependencies that the module constructors leave open.
+# the compaction service needs the Fast LLM client and a run step recorder.
+# The module providers stay unchanged. This module supplies the process-wide
+# dependencies that the module constructors leave open.
 
 def get_memory_service(
     session: AsyncSession = Depends(get_db_session),
@@ -234,19 +249,13 @@ def get_compaction_service(
     session: AsyncSession = Depends(get_db_session),
     settings: Settings = Depends(get_settings),
 ) -> Any:
-    """Build the compaction service with every tier client and a step recorder.
-
-    Tier 1 needs the Jev client. Tier 2 needs the Fast LLM client. The summary
-    trace needs the recorder. A missing client makes a real compaction fail when
-    units leave the context, so all three are wired here.
-    """
+    """Build the compaction service with the Fast LLM client and a step recorder."""
     from src.modules.compaction.service import CompactionService
     from src.modules.runs.service import RunsService
 
     return CompactionService(
         session=session,
         settings=settings,
-        jev_client=get_jev_client(settings=settings),
         fast_llm=get_llm_client(settings=settings),
         run_steps=RunsService(session=session, settings=settings),
     )
@@ -268,6 +277,7 @@ get_connectors_service = _resolve_service_dependency("connectors", "get_connecto
 get_settings_service = _resolve_service_dependency("settings", "get_settings_service")
 get_audit_service = _resolve_service_dependency("audit", "get_audit_service")
 get_jobs_service = _resolve_service_dependency("jobs", "get_jobs_service")
+get_projects_service = _resolve_service_dependency("projects", "get_projects_service")
 get_widgets_service = _resolve_service_dependency("widgets", "get_widgets_service")
 
 def get_key_vault_service(
@@ -653,16 +663,146 @@ class RunToolExecutor:
             base_path / "snapshots" / f"{run_id}.tar"
         )
         self._container_id: str | None = None
+        self._workspace_dir: Path | None = None
+        self._workspace_dir_resolved: bool = False
 
     @property
     def container_id(self) -> str | None:
         """Return the container id of this run, or None before the first call."""
         return self._container_id
 
+    @property
+    def workspace_dir(self) -> Path | None:
+        """Return the resolved host workspace directory for this run, if any."""
+        return self._workspace_dir
+
+    async def _resolve_workspace_dir(self) -> Path | None:
+        """Resolve the host workspace directory backing /workspace for this run."""
+        if self._workspace_dir_resolved:
+            return self._workspace_dir
+        self._workspace_dir_resolved = True
+        if self.session is None:
+            return None
+        try:
+            from sqlalchemy import select
+            from src.modules.projects.state import resolve_session_workspace_dir
+            from src.schemas.projects import ProjectModel
+            from src.schemas.runtime import MessageModel, RunModel
+
+            row = (
+                await self.session.execute(
+                    select(RunModel.workspace_ref, RunModel.project_id).where(
+                        RunModel.id == self.run_id
+                    )
+                )
+            ).first()
+            if row is not None:
+                ws_ref, project_id = row[0], row[1]
+                if isinstance(ws_ref, str) and ws_ref.strip():
+                    candidate = Path(ws_ref.strip())
+                    if candidate.is_dir():
+                        self._workspace_dir = candidate.resolve()
+                        return self._workspace_dir
+                if project_id is not None:
+                    proj_path = (
+                        await self.session.execute(
+                            select(ProjectModel.workspace_path).where(
+                                ProjectModel.id == project_id
+                            )
+                        )
+                    ).scalar_one_or_none()
+                    if isinstance(proj_path, str) and proj_path.strip():
+                        candidate = Path(proj_path.strip())
+                        candidate.mkdir(parents=True, exist_ok=True)
+                        self._workspace_dir = candidate.resolve()
+                        return self._workspace_dir
+
+            session_id = (
+                await self.session.execute(
+                    select(MessageModel.session_id)
+                    .where(
+                        MessageModel.run_id == self.run_id,
+                        MessageModel.session_id.is_not(None),
+                    )
+                    .limit(1)
+                )
+            ).scalar_one_or_none()
+            if session_id is not None:
+                candidate = resolve_session_workspace_dir(self.settings, session_id)
+                if candidate.is_dir():
+                    self._workspace_dir = candidate
+                    return self._workspace_dir
+        except Exception:  # noqa: BLE001
+            self._workspace_dir = None
+        return self._workspace_dir
+
+    async def _seed_workspace_into_container(self, container_id: str) -> None:
+        """Copy files from the host workspace directory into /workspace in the container."""
+        ws_dir = await self._resolve_workspace_dir()
+        if ws_dir is None or not ws_dir.is_dir():
+            return
+        write_fn: Any = getattr(self.sandbox, "write_file", None)
+        if not callable(write_fn):
+            return
+        root = ws_dir.resolve()
+        count = 0
+        for candidate in sorted(root.rglob("*")):
+            if candidate.is_symlink() or not candidate.is_file():
+                continue
+            try:
+                rel = candidate.resolve().relative_to(root)
+            except ValueError:
+                continue
+            if any(part.startswith(".") for part in rel.parts):
+                continue
+            try:
+                if candidate.stat().st_size > 50 * 1024 * 1024:
+                    continue
+                data = candidate.read_bytes()
+                await write_fn(container_id, rel.as_posix(), data)
+                count += 1
+                if count >= 100:
+                    break
+            except Exception:  # noqa: BLE001
+                continue
+
+    def _sync_snapshot_to_workspace_dir(self) -> None:
+        """Extract non-hidden workspace files from the run snapshot tar back into host workspace_dir."""
+        if self._workspace_dir is None or not self.snapshot_tar.is_file():
+            return
+        import tarfile
+
+        root = self._workspace_dir.resolve()
+        root.mkdir(parents=True, exist_ok=True)
+        try:
+            with tarfile.open(self.snapshot_tar, mode="r:*") as tf:
+                for member in tf.getmembers():
+                    if not member.isfile():
+                        continue
+                    rel_str = member.name.lstrip("./")
+                    if not rel_str or rel_str.startswith("/") or ".." in Path(rel_str).parts:
+                        continue
+                    rel_parts = Path(rel_str).parts
+                    if any(p.startswith(".") for p in rel_parts):
+                        continue
+                    # Skip temporary skills copies
+                    if rel_parts and rel_parts[0] == "skills":
+                        continue
+                    target = (root / rel_str).resolve()
+                    if root not in target.parents:
+                        continue
+                    extracted = tf.extractfile(member)
+                    if extracted is not None:
+                        target.parent.mkdir(parents=True, exist_ok=True)
+                        target.write_bytes(extracted.read())
+        except Exception:  # noqa: BLE001
+            pass
+
     async def start(self) -> str:
-        """Create the run container once and return its id."""
+        """Create the run container once, seed workspace files, and return its id."""
         if self._container_id is None:
             self._container_id = await self._create_container()
+            await self._seed_workspace_into_container(self._container_id)
             restore: Any = getattr(self.sandbox, "restore_workspace", None)
             if callable(restore) and self.snapshot_tar.is_file():
                 try:
@@ -689,6 +829,7 @@ class RunToolExecutor:
                 try:
                     self.snapshot_tar.parent.mkdir(parents=True, exist_ok=True)
                     await snapshot(container_id, str(self.snapshot_tar))
+                    self._sync_snapshot_to_workspace_dir()
                 except Exception:  # noqa: BLE001
                     pass
             stop: Any = getattr(self.sandbox, "stop_and_remove", None)
@@ -833,6 +974,7 @@ class RunToolExecutor:
             run_id=self.run_id,
             user_id=await self._owner_id_or_none(),
             session=self.session,
+            workspace_dir=await self._resolve_workspace_dir(),
         )
         result = await invoke_tool(name, dict(arguments), context)
         artifact_id: UUID | None = None
@@ -939,11 +1081,13 @@ def _build_artifact_preview(path: Path, max_chars: int = 500) -> str | None:
         raw = path.read_bytes()
     except OSError:
         return None
-    if ext in (".pdf", ".docx", ".xlsx"):
+    if ext in (".pdf", ".docx", ".xlsx", ".pptx", ".zip", ".tar", ".tgz"):
         try:
             from src.modules.runs.tools.files import (
+                _extract_archive_text,
                 _extract_docx_text,
                 _extract_pdf_text,
+                _extract_pptx_text,
                 _extract_xlsx_text,
             )
 
@@ -951,8 +1095,12 @@ def _build_artifact_preview(path: Path, max_chars: int = 500) -> str | None:
                 text = _extract_pdf_text(raw)
             elif ext == ".docx":
                 text = _extract_docx_text(raw)
-            else:
+            elif ext == ".xlsx":
                 text = _extract_xlsx_text(raw)
+            elif ext == ".pptx":
+                text = _extract_pptx_text(raw)
+            else:
+                text = _extract_archive_text(path.name, raw)
             return text[:max_chars] if text else None
         except Exception:  # noqa: BLE001
             return None
@@ -1117,6 +1265,7 @@ __all__ = [
     "get_settings_service",
     "get_audit_service",
     "get_jobs_service",
+    "get_projects_service",
     "get_widgets_service",
     "get_key_vault_service",
 

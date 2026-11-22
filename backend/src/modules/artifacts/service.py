@@ -213,10 +213,12 @@ class ArtifactsService:
 
         def read_text() -> str:
             suffix = file_path.suffix.lower()
-            if suffix in {".pdf", ".docx", ".xlsx"}:
+            if suffix in {".pdf", ".docx", ".xlsx", ".pptx", ".zip", ".tar", ".tgz"}:
                 from src.modules.runs.tools.files import (
+                    _extract_archive_text,
                     _extract_docx_text,
                     _extract_pdf_text,
+                    _extract_pptx_text,
                     _extract_xlsx_text,
                 )
 
@@ -225,7 +227,11 @@ class ArtifactsService:
                     return _extract_pdf_text(data)
                 if suffix == ".docx":
                     return _extract_docx_text(data)
-                return _extract_xlsx_text(data)
+                if suffix == ".xlsx":
+                    return _extract_xlsx_text(data)
+                if suffix == ".pptx":
+                    return _extract_pptx_text(data)
+                return _extract_archive_text(file_path.name, data)
             return file_path.read_text(encoding="utf-8", errors="replace")
 
         text = await asyncio.to_thread(read_text)

@@ -98,6 +98,20 @@ class ThreadModel(Base):
         index=True,
     )
     title: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    kind: Mapped[str] = mapped_column(
+        String(32),
+        nullable=False,
+        default="thread",
+        server_default="thread",
+        index=True,
+    )
+    rolling_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    compacted_through_message_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), nullable=True
+    )
+    compacted_through_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
@@ -138,6 +152,12 @@ class RunModel(Base):
     card_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("cards.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    project_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("projects.id", ondelete="SET NULL"),
         nullable=True,
         index=True,
     )

@@ -12,11 +12,17 @@ import type {
   MCPServerResponse,
   MCPToolResponse,
   PairingResponse,
+  Project,
+  ProjectCreateRequest,
+  ProjectDetail,
+  ProjectFile,
+  ProjectUpdateRequest,
   Run,
   RunCancelResponse,
   RunCreateRequest,
   RunMessageResponse,
   RunStep,
+  RunUploadResponse,
   SkillResponse,
   SyncTrigger,
   SystemLimits,
@@ -599,6 +605,17 @@ export const mockApi: VigilApi = {
     });
   },
 
+  uploadRunFiles(files: File[]): Promise<RunUploadResponse> {
+    return later({
+      files: files.map((file) => ({
+        name: file.name,
+        workspace_path: `/workspace/${file.name}`,
+        content_type: file.type || 'application/octet-stream',
+        size_bytes: file.size,
+      })),
+    });
+  },
+
   getRun(runId): Promise<Run> {
     const entry = runs.get(runId);
     if (!entry) return Promise.reject(new Error('Run not found'));
@@ -791,6 +808,24 @@ export const mockApi: VigilApi = {
     });
   },
 
+  getPrimarySession() {
+    let primary = sessions.find((s) => s.kind === 'ambient') ?? sessions[0];
+    if (!primary) {
+      primary = {
+        session_id: 's-primary',
+        user_id: 'u-1',
+        title: 'Primary Stream',
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        message_count: 0,
+        kind: 'ambient',
+      };
+      sessions.unshift(primary);
+      messages[primary.session_id] = [];
+    }
+    return later(primary);
+  },
+
   listSessions() {
     return later([...sessions]);
   },
@@ -803,14 +838,23 @@ export const mockApi: VigilApi = {
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
       message_count: 0,
+      kind: 'thread',
     };
     sessions.unshift(session);
     messages[session.session_id] = [];
     return later(session);
   },
 
-  listMessages(sessionId) {
-    return later(messages[sessionId] ?? []);
+  listMessages(sessionId, opts) {
+    const all = messages[sessionId] ?? [];
+    const limit = opts?.limit ?? 100;
+    const beforeId = opts?.beforeId;
+    let slice = all;
+    if (beforeId) {
+      const idx = all.findIndex((m) => m.id === beforeId);
+      if (idx >= 0) slice = all.slice(0, idx);
+    }
+    return later(slice.slice(-limit));
   },
 
   sendMessage(sessionId, content) {
@@ -1086,7 +1130,83 @@ export const mockApi: VigilApi = {
     mockMemoryChunks = mockMemoryChunks.filter((c) => c.id !== chunkId);
     return later(undefined);
   },
+
+  listProjects() {
+    return later([...mockProjects]);
+  },
+
+  createProject(body: ProjectCreateRequest) {
+    const now = new Date().toISOString();
+    const slug =
+      body.name
+        .trim()
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/^-|-$/g, '') || 'project';
+    const created: Project = {
+      id: `proj-${Date.now()}`,
+      user_id: 'u-1',
+      name: body.name.trim(),
+      slug,
+      description: body.description ?? null,
+      workspace_path: `/var/vigil/workspaces/projects/u-1/${slug}`,
+      instructions: body.instructions ?? null,
+      created_at: now,
+      updated_at: now,
+    };
+    mockProjects = [created, ...mockProjects];
+    return later(created);
+  },
+
+  getProject(projectId: string) {
+    const found = mockProjects.find((p) => p.id === projectId);
+    if (!found) {
+      return Promise.reject(new Error(`Project ${projectId} not found`));
+    }
+    const detail: ProjectDetail = {
+      ...found,
+      files: [],
+    };
+    return later(detail);
+  },
+
+  updateProject(projectId: string, body: ProjectUpdateRequest) {
+    let updated: Project | null = null;
+    mockProjects = mockProjects.map((p) => {
+      if (p.id !== projectId) return p;
+      updated = {
+        ...p,
+        name: body.name !== undefined && body.name !== null ? body.name : p.name,
+        description: body.description !== undefined ? body.description : p.description,
+        instructions: body.instructions !== undefined ? body.instructions : p.instructions,
+        updated_at: new Date().toISOString(),
+      };
+      return updated;
+    });
+    if (!updated) {
+      return Promise.reject(new Error(`Project ${projectId} not found`));
+    }
+    return later(updated);
+  },
+
+  uploadProjectFiles(_projectId: string, files: File[]): Promise<ProjectFile[]> {
+    const now = new Date().toISOString();
+    return later(
+      files.map((file) => ({
+        path: file.name,
+        size_bytes: file.size,
+        updated_at: now,
+      })),
+    );
+  },
+
+  deleteProject(projectId: string) {
+    mockProjects = mockProjects.filter((p) => p.id !== projectId);
+    return later(undefined);
+  },
 };
+
+let mockProjects: Project[] = [];
 
 function mockProvider(key: string): string {
   return key.trim().toUpperCase() === 'GROQ_API_KEY' ? 'groq' : 'unknown';

@@ -200,10 +200,66 @@ function buildTimeline(steps: RunStepEvent[]): TimelineItem[] {
       continue;
     }
 
-    if (step.event_type === 'approval_required' || step.event_type === 'compaction') {
+    if (step.event_type === 'approval_required') {
+      const rawPayload = (step.payload ?? {}) as Record<string, unknown>;
+      let enrichedStep = step;
+      if (!rawPayload.tool_name || !rawPayload.arguments) {
+        const callId =
+          typeof rawPayload.tool_call_id === 'string' ? rawPayload.tool_call_id : null;
+        let matchedTool: Extract<TimelineItem, { kind: 'tool' }> | undefined;
+        if (callId !== null) {
+          const idx = toolIndexById.get(callId);
+          const candidate = idx !== undefined ? items[idx] : undefined;
+          if (candidate && candidate.kind === 'tool') {
+            matchedTool = candidate;
+          }
+        }
+        if (!matchedTool) {
+          for (let j = items.length - 1; j >= 0; j -= 1) {
+            const candidate = items[j];
+            if (
+              candidate &&
+              candidate.kind === 'tool' &&
+              (candidate.toolName === 'ask_user' ||
+                candidate.partition === 'external' ||
+                !candidate.resultStep)
+            ) {
+              matchedTool = candidate;
+              break;
+            }
+          }
+        }
+        if (matchedTool) {
+          enrichedStep = {
+            ...step,
+            payload: {
+              ...rawPayload,
+              tool_name: rawPayload.tool_name ?? matchedTool.toolName,
+              tool_call_id: rawPayload.tool_call_id ?? matchedTool.id,
+              arguments:
+                typeof rawPayload.arguments === 'object' &&
+                rawPayload.arguments !== null &&
+                Object.keys(rawPayload.arguments as Record<string, unknown>).length > 0
+                  ? rawPayload.arguments
+                  : matchedTool.arguments,
+            },
+          };
+        }
+      }
       items.push({
-        kind: step.event_type,
-        id: `${step.event_type}-${step.step_number}-${i}`,
+        kind: 'approval_required',
+        id: `approval_required-${step.step_number}-${i}`,
+        stepNumber: step.step_number,
+        step: enrichedStep,
+        createdAt: step.created_at,
+      });
+      continue;
+    }
+
+    if (step.event_type === 'compaction') {
+      items.push({
+        kind: 'compaction',
+        id: `compaction-${step.step_number}-${i}`,
         stepNumber: step.step_number,
         step,
         createdAt: step.created_at,

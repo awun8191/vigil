@@ -119,22 +119,13 @@ def build_history(turns: int = 9) -> list[HistoryUnit]:
     return units
 
 
-@pytest.mark.parametrize(
-    "probabilities",
-    [
-        {"needed": 0.0, "user_fact": 0.0, "bulk": 0.0},
-        {"needed": 0.01, "user_fact": 0.02, "bulk": 0.99},
-    ],
-)
 @pytest.mark.asyncio
-async def test_tier0_never_drops(probabilities: dict[str, float]) -> None:
-    """A hostile Tier 1 cannot remove a single Tier 0 unit."""
+async def test_tier0_never_drops() -> None:
+    """Deterministic compaction cannot remove a single Tier 0 unit and makes zero Jev calls."""
     units = build_history()
-    jev = ScriptedJev(probabilities)
     service = CompactionService(
         session=None,
         settings=Settings(),
-        jev_client=jev,
         token_model="gpt-4o-mini",
     )
 
@@ -161,19 +152,17 @@ async def test_tier0_never_drops(probabilities: dict[str, float]) -> None:
             assert item.verdict is Verdict.RETAIN
             assert item.content == item.unit.content
 
-    # The lock must not weaken Tier 1 on the unlocked units.
     assert plan.units_dropped + plan.units_stubbed > 0
-    assert jev.batch_sizes, "Tier 1 must be asked before any unit leaves the context"
+    assert plan.tier1.jev_calls == 0
 
 
 @pytest.mark.asyncio
 async def test_tier0_keeps_locked_content_verbatim() -> None:
-    """A locked unit keeps its full text even when p(bulk) is 0.99."""
+    """A locked unit keeps its full text verbatim."""
     units = build_history()
     service = CompactionService(
         session=None,
         settings=Settings(),
-        jev_client=ScriptedJev({"needed": 0.05, "user_fact": 0.05, "bulk": 0.99}),
         token_model="gpt-4o-mini",
     )
 

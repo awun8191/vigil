@@ -1,10 +1,11 @@
-import { AppWindow, ArrowUpRight, CalendarDays, Eye, Gauge, Hash, LayoutDashboard, Mail, PinOff, Plus, X } from 'lucide-react';
+import { AppWindow, ArrowUpRight, CalendarDays, Eye, Gauge, Hash, LayoutDashboard, Mail, MessageSquarePlus, PinOff, Plus, X } from 'lucide-react';
 import { motion, useReducedMotion } from 'framer-motion';
 import type { ComponentType } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useConnectors, useLimits } from '@/queries/settings';
 import { usePinnedWidgets } from '@/components/chat/ArtifactCard';
 import { useDeleteWidget, useWidgets, useWidgetsStream } from '@/queries/widgets';
+import { buildThemedMicroAppSrcDoc } from '@/components/widgets/microAppTheme';
 import { WidgetView } from '@/components/widgets/registry';
 
 type IconType = ComponentType<{ size?: number; strokeWidth?: number; className?: string }>;
@@ -102,21 +103,48 @@ export function WidgetsRail() {
             panels.map((panel) => (
               <div
                 key={panel.id}
-                className="relative overflow-hidden rounded-[var(--r-inner)] border border-[var(--border)] bg-[color-mix(in_srgb,var(--surface-solid)_94%,transparent)] p-3"
+                className="overflow-hidden rounded-[var(--r-inner)] border border-[var(--border)] bg-[color-mix(in_srgb,var(--surface-solid)_94%,transparent)] p-3"
               >
-                <button
-                  type="button"
-                  onClick={() =>
-                    deleteWidget.mutate({ widgetId: panel.id, scope: `widget-delete:${panel.id}` })
+                <WidgetView
+                  widget={panel}
+                  trailing={
+                    <>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          navigate(
+                            `/agent/chat?prompt=${encodeURIComponent(`About my "${panel.title}" panel: `)}`,
+                          )
+                        }
+                        aria-label={`Ask Vigil about ${panel.title}`}
+                        title="Ask Vigil about this panel"
+                        className="cursor-pointer rounded-full p-1 text-[var(--text-muted)] transition-colors hover:bg-[color-mix(in_srgb,var(--text)_8%,transparent)] hover:text-[var(--accent)]"
+                      >
+                        <MessageSquarePlus size={13} strokeWidth={1.75} />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          deleteWidget.mutate({ widgetId: panel.id, scope: `widget-delete:${panel.id}` })
+                        }
+                        disabled={deleteWidget.isPending}
+                        aria-label={`Remove ${panel.title}`}
+                        title="Remove panel"
+                        className="cursor-pointer rounded-full p-1 text-[var(--text-muted)] transition-colors hover:bg-[color-mix(in_srgb,var(--text)_8%,transparent)] hover:text-[var(--text)] disabled:cursor-default disabled:opacity-50"
+                      >
+                        <X size={13} strokeWidth={1.75} />
+                      </button>
+                    </>
                   }
-                  disabled={deleteWidget.isPending}
-                  aria-label={`Remove ${panel.title}`}
-                  title="Remove panel"
-                  className="absolute right-2 top-2 cursor-pointer rounded-full p-1 text-[var(--text-muted)] transition-colors hover:bg-[color-mix(in_srgb,var(--text)_8%,transparent)] hover:text-[var(--text)] disabled:cursor-default disabled:opacity-50"
-                >
-                  <X size={13} strokeWidth={1.75} />
-                </button>
-                <WidgetView widget={panel} />
+                  onAskVigil={(prompt) =>
+                    navigate(
+                      `/agent/chat?prompt=${encodeURIComponent(
+                        prompt || `About my "${panel.title}" panel: `,
+                      )}`,
+                    )
+                  }
+                  onRefreshPanel={() => void panelsQuery.refetch()}
+                />
               </div>
             ))
           )}
@@ -157,9 +185,9 @@ export function WidgetsRail() {
                 {widget.format === 'html' ? (
                   <iframe
                     sandbox="allow-scripts"
-                    srcDoc={widget.content}
+                    srcDoc={buildThemedMicroAppSrcDoc(widget.content)}
                     title={widget.name}
-                    className="h-44 w-full rounded-[var(--r-inner)] border border-[var(--border)] bg-white"
+                    className="h-44 w-full rounded-[var(--r-inner)] border border-[var(--border)] bg-transparent"
                   />
                 ) : (
                   <pre className="max-h-36 overflow-auto rounded-[var(--r-inner)] bg-[color-mix(in_srgb,var(--surface-solid)_80%,transparent)] p-2 font-mono text-[11px] text-[var(--text-muted)]">

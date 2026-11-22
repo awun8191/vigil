@@ -120,30 +120,47 @@ async def stream_run_events(
     started_at = loop.time()
     last_write_at = started_at
 
-    while True:
-        steps = await store.get_steps_since(run_id, cursor)
-        written = 0
-        for step in steps:
-            if step.step_number <= cursor:
-                continue
-            cursor = step.step_number
-            written += 1
-            yield format_sse_event(step)
-            last_write_at = loop.time()
+    async def _release_read_tx() -> None:
+        session = getattr(store, "session", None) or getattr(
+            getattr(store, "journal", None), "session", None
+        )
+        in_tx = getattr(session, "in_transaction", None)
+        rollback = getattr(session, "rollback", None)
+        if callable(rollback) and (not callable(in_tx) or in_tx()):
+            try:
+                await asyncio.shield(rollback())
+            except BaseException:
+                pass
 
-        # A finished run closes the stream only after a read that returned no
-        # new row, so a last step written just before the status change is
-        # still delivered.
-        run = await store.get_run_by_id(run_id)
-        if written == 0 and run is not None and run.status in TERMINAL_RUN_STATUSES:
-            return
+    try:
+        while True:
+            steps = await store.get_steps_since(run_id, cursor)
+            written = 0
+            for step in steps:
+                if step.step_number <= cursor:
+                    continue
+                cursor = step.step_number
+                written += 1
+                yield format_sse_event(step)
+                last_write_at = loop.time()
 
-        now = loop.time()
-        if max_duration_seconds is not None:
-            if (now - started_at) >= max_duration_seconds:
+            # A finished run closes the stream only after a read that returned no
+            # new row, so a last step written just before the status change is
+            # still delivered.
+            run = await store.get_run_by_id(run_id)
+            await _release_read_tx()
+            if written == 0 and run is not None and run.status in TERMINAL_RUN_STATUSES:
                 return
-        if (now - last_write_at) >= keepalive_interval:
-            yield KEEPALIVE_COMMENT
-            last_write_at = now
 
-        await asyncio.sleep(poll_interval)
+            now = loop.time()
+            if max_duration_seconds is not None:
+                if (now - started_at) >= max_duration_seconds:
+                    return
+            if (now - last_write_at) >= keepalive_interval:
+                yield KEEPALIVE_COMMENT
+                last_write_at = now
+
+            await asyncio.sleep(poll_interval)
+    except asyncio.CancelledError:
+        await _release_read_tx()
+        return

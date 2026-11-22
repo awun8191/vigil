@@ -35,6 +35,7 @@ class RunDTO:
     token_usage: dict[str, int]
     cost_usd: float
     cost_micros: int = 0
+    project_id: UUID | None = None
 
 
 @dataclass(frozen=True)
@@ -45,6 +46,7 @@ class RunCreateDTO:
     parent_run_id: UUID | None = None
     depth: int = 0
     status: str = "queued"
+    project_id: UUID | None = None
 
 
 @dataclass(frozen=True)

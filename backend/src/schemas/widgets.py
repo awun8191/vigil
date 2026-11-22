@@ -65,7 +65,7 @@ class WidgetModel(Base):
 
     __table_args__ = (
         CheckConstraint(
-            "widget_type in ('metric_card', 'data_table', 'task_list', 'status_feed')",
+            "widget_type in ('a2ui_surface')",
             name="ck_widgets_widget_type",
         ),
         CheckConstraint(

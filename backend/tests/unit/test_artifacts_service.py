@@ -292,3 +292,51 @@ async def test_stream_resolves_media_type_by_extension(tmp_path: Path) -> None:
         _, actual_name, media_type, _ = await service.get_artifact_stream(saved.id)
         assert actual_name == filename
         assert media_type == expected_mime
+
+
+@pytest.mark.asyncio
+async def test_download_and_stream_missing_file_do_not_set_mismatched_content_length(
+    tmp_path: Path,
+) -> None:
+    """Missing-file artifacts must not emit Content-Length > 0 with an empty body."""
+    from datetime import datetime, timezone
+    from fastapi import FastAPI
+    import httpx
+    from src.dependencies import get_artifacts_service, get_current_device
+    from src.modules.artifacts.router import build_artifacts_router
+    from src.modules.auth.repository import DeviceDTO
+
+    settings = _settings()
+    service = ArtifactsService(session=None, settings=settings)
+    saved = await service.save_artifact(
+        ArtifactCreateDTO(
+            run_id=uuid4(),
+            kind="file",
+            path=str(tmp_path / "missing.html"),
+            size_bytes=3400,
+            preview=None,
+        )
+    )
+
+    now = datetime.now(timezone.utc)
+    app = FastAPI()
+    app.include_router(build_artifacts_router(settings), prefix="/api/v1")
+    app.dependency_overrides[get_artifacts_service] = lambda: service
+    app.dependency_overrides[get_current_device] = lambda: DeviceDTO(
+        id=uuid4(),
+        user_id=uuid4(),
+        name="test",
+        token_hash="x",
+        push_token=None,
+        last_seen_at=now,
+        revoked_at=None,
+        created_at=now,
+    )
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        for suffix in ("download", "stream"):
+            res = await client.get(f"/api/v1/artifacts/{saved.id}/{suffix}")
+            assert res.status_code == 200
+            assert res.content == b""
+            assert "content-length" not in res.headers

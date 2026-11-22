@@ -1012,3 +1012,114 @@ async def test_stub_mcp_host_fails_closed() -> None:
     assert result.tool_call_id == "call-stub-1"
     assert "unavailable" in str(result.output)
     assert "mock" not in str(result.output)
+
+
+async def test_read_document_extracts_pptx_slides(tmp_path: Path) -> None:
+    """read_document extracts slide text and speaker notes from a .pptx file."""
+    import io
+    import zipfile
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr(
+            "ppt/slides/slide1.xml",
+            (
+                '<?xml version="1.0" encoding="UTF-8"?>'
+                '<p:sld xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" '
+                'xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main">'
+                "<a:p><a:r><a:t>Q4 Strategy Deck</a:t></a:r></a:p>"
+                "<a:p><a:r><a:t>Revenue grew 42%</a:t></a:r></a:p>"
+                "</p:sld>"
+            ),
+        )
+        zf.writestr(
+            "ppt/notesSlides/notesSlide1.xml",
+            (
+                '<?xml version="1.0" encoding="UTF-8"?>'
+                '<p:notes xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" '
+                'xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main">'
+                "<a:p><a:r><a:t>Emphasize enterprise retention</a:t></a:r></a:p>"
+                "</p:notes>"
+            ),
+        )
+
+    runner = FakeRunner({"deck.pptx": buf.getvalue()})
+    context = make_context(runner, tmp_path / "deliveries")
+
+    res = await call("read_document", {"path": "deck.pptx"}, context)
+    assert res.ok is True
+    assert "[slide 1]" in str(res.content)
+    assert "Q4 Strategy Deck" in str(res.content)
+    assert "Revenue grew 42%" in str(res.content)
+    assert "Emphasize enterprise retention" in str(res.content)
+
+
+async def test_read_document_extracts_zip_archive_and_csv_and_json(tmp_path: Path) -> None:
+    """read_document inspects zip archives, CSV summaries, and JSON structure."""
+    import io
+    import zipfile
+
+    zbuf = io.BytesIO()
+    with zipfile.ZipFile(zbuf, "w") as zf:
+        zf.writestr("readme.md", "# Bundle\nHello inside zip")
+        zf.writestr("config.json", '{"env": "prod", "port": 8080}')
+
+    runner = FakeRunner(
+        {
+            "bundle.zip": zbuf.getvalue(),
+            "metrics.csv": "service,latency_ms\napi,14\nworker,32\n",
+            "state.json": '{"status": "ready", "items": [1, 2, 3]}',
+        }
+    )
+    context = make_context(runner, tmp_path / "deliveries")
+
+    zip_res = await call("read_document", {"path": "bundle.zip"}, context)
+    assert zip_res.ok is True
+    assert "[archive: bundle.zip | 2 files]" in str(zip_res.content)
+    assert "readme.md" in str(zip_res.content)
+    assert "Hello inside zip" in str(zip_res.content)
+
+    csv_res = await call("read_document", {"path": "metrics.csv"}, context)
+    assert csv_res.ok is True
+    assert "[csv: metrics.csv | 2 rows x 2 columns" in str(csv_res.content)
+    assert "api\t14" in str(csv_res.content)
+
+    json_res = await call("read_document", {"path": "state.json"}, context)
+    assert json_res.ok is True
+    assert "[json: state.json | object with 2 keys: status, items]" in str(json_res.content)
+
+
+async def test_read_auto_extracts_binary_pdf_and_supports_host_workspace_fallback(
+    tmp_path: Path,
+) -> None:
+    """read auto-extracts binary PDFs and falls back to ToolContext.workspace_dir when needed."""
+    import io
+    from pypdf import PdfWriter
+
+    writer = PdfWriter()
+    writer.add_blank_page(width=200, height=200)
+    buf = io.BytesIO()
+    writer.write(buf)
+
+    ws_dir = tmp_path / "ws"
+    ws_dir.mkdir(parents=True)
+    (ws_dir / "uploaded.pdf").write_bytes(buf.getvalue())
+    (ws_dir / "notes.txt").write_text("From host workspace", encoding="utf-8")
+
+    # Runner has no files in memory, simulating a file staged on host workspace_dir
+    runner = FakeRunner()
+    context = ToolContext(
+        runner=runner,
+        container_id="run-1",
+        delivery_dir=tmp_path / "deliveries",
+        workspace_dir=ws_dir,
+    )
+
+    pdf_res = await call("read", {"path": "/workspace/uploaded.pdf"}, context)
+    assert pdf_res.ok is True
+    assert "[p1]" in str(pdf_res.content)
+
+    # Host workspace path prefix is normalized to /workspace/notes.txt
+    txt_res = await call("read", {"path": str(ws_dir / "notes.txt")}, context)
+    assert txt_res.ok is True
+    assert txt_res.content == "From host workspace"
